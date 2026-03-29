@@ -1,0 +1,45 @@
+# Alire
+alire/
+config/
+
+# Build artifacts
+obj/
+lib/
+bin/
+
+# GNAT project files
+*.ali
+*.o
+
+# IDE
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# StrictDoc output
+output/
+
+# Coverage
+coverage/
+*.gcov
+*.gcda
+*.gcno
+
+# Development files
+.als.json
+.apm/
+.claude/
+existing/
+CLAUDE.md
+
+# Project-specific
+/obj/
+/lib/
+/alire/
+/config/
+/reference-frameworks/
+/output/

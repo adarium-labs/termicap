@@ -1,0 +1,18 @@
+name = "termicap"
+description = ""
+version = "0.1.0-dev"
+
+authors = ["Heziode"]
+maintainers = ["Heziode <heziode@protonmail.com>"]
+maintainers-logins = ["heziode"]
+licenses = "Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = []
+
+[[depends-on]]
+anystrings = "~0.1.0"
+functional = "^4.0.0"
+sparklib = "^15.1.0"
+
+[[pins]]
+anystrings = { path = "/Volumes/Data/programmation/Ada/anystring" }
