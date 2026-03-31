@@ -1,4 +1,4 @@
-name = "termicap"
+name = "env_snapshot_example"
 description = ""
 version = "0.1.0-dev"
 
@@ -10,6 +10,7 @@ website = ""
 tags = []
 
 [[depends-on]]
-functional = "^4.0.0"
-sparklib = "^15.1.0"
+termicap = "*"
 
+[[pins]]
+termicap = { path = "../.." }

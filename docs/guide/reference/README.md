@@ -7,8 +7,11 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Detection API](api-detection.md)**
   Core detection functions (Detect, Is_Terminal, Color_Level, Size)
 
+- **[Termicap.Environment](termicap-environment.md)**
+  Environment snapshot type, query/builder API, SPARK contracts, and the `Capture` child package
+
 - **[Environment API](api-environment.md)**
-  Environment variable parsing and query
+  Environment variable parsing and query (legacy placeholder)
 
 - **[Standards API](api-standards.md)**
   NO_COLOR / FORCE_COLOR compliance functions

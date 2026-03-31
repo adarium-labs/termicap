@@ -1,28 +1,22 @@
-with "config/termicap_config.gpr";
-project Termicap is
+with "config/termicap_tests_config.gpr";
+with "termicap.gpr";
+with "aunit.gpr";
 
-   for Library_Name use "Termicap";
-   for Library_Version use Project'Library_Name & ".so." & Termicap_Config.Crate_Version;
+project Termicap_Tests is
 
    for Source_Dirs use ("src/", "config/");
-   for Object_Dir use "obj/" & Termicap_Config.Build_Profile;
    for Create_Missing_Dirs use "True";
-   for Library_Dir use "lib";
+   for Exec_Dir use "bin";
+   for Main use ("termicap_tests.adb");
 
-   type Library_Type_Type is ("relocatable", "static", "static-pic");
-   Library_Type : Library_Type_Type :=
-     external ("TERMICAP_LIBRARY_TYPE", external ("LIBRARY_TYPE", "static"));
-   for Library_Kind use Library_Type;
-
-      --  Coverage mode: "disabled" (default) or "enabled"
+   --  Coverage mode: "disabled" (default) or "enabled"
    type Coverage_Mode_Type is ("disabled", "enabled");
    Coverage_Mode : Coverage_Mode_Type := external ("TERMICAP_COVERAGE", "disabled");
-
 
    --  Object directory varies based on coverage mode
    case Coverage_Mode is
       when "disabled" =>
-         for Object_Dir use "obj";
+         for Object_Dir use "obj/" & Termicap_Tests_Config.Build_Profile;
       when "enabled" =>
          for Object_Dir use "obj/coverage";
    end case;
@@ -33,13 +27,22 @@ project Termicap is
    package Compiler is
       case Coverage_Mode is
          when "disabled" =>
-            for Default_Switches ("Ada") use Termicap_Config.Ada_Compiler_Switches &
-              ("-gnatyM120", "-gnat2022");
+            for Default_Switches ("Ada") use Termicap_Tests_Config.Ada_Compiler_Switches &
+               ("-gnatyM120", "-gnaty-u", "-gnat2022");
          when "enabled" =>
-            for Default_Switches ("Ada") use Termicap_Config.Ada_Compiler_Switches &
-              ("-gnatyM120", "-gnat2022") & Coverage_Switches;
+            for Default_Switches ("Ada") use Termicap_Tests_Config.Ada_Compiler_Switches &
+               ("-gnatyM120", "-gnaty-u", "-gnat2022") & Coverage_Switches;
       end case;
    end Compiler;
+
+   package Linker is
+      case Coverage_Mode is
+         when "disabled" =>
+            null;
+         when "enabled" =>
+            for Default_Switches ("Ada") use ("--coverage");
+      end case;
+   end Linker;
 
    package Binder is
       for Switches ("Ada") use ("-Es"); --  Symbolic traceback
@@ -54,4 +57,4 @@ project Termicap is
       for Charset ("Ada") use "utf-8";
    end Format;
 
-end Termicap;
+end Termicap_Tests;

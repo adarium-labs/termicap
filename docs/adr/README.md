@@ -29,4 +29,5 @@ Each ADR has a status:
 
 | ID | Title | Status |
 |----|-------|--------|
-| — | No ADRs yet | — |
+| [0001](0001-environment-snapshot-storage-strategy.md) | Use sparklib Unbounded_Hashed_Maps for environment snapshot storage | proposed |
+| [0002](0002-multi-candidate-matching-spark-boundary.md) | Place multi-candidate matching outside the SPARK boundary | proposed |

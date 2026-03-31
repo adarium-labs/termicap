@@ -30,3 +30,75 @@ ELEMENTS:
   RELATIONS:
   - TYPE: Parent
 
+[REQUIREMENT]
+UID: FUNC-ENV-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Environment Snapshot Type
+STATEMENT: >>>
+The library shall provide a type Environment that represents a snapshot of environment variable bindings, queryable without side effects. Once captured, the snapshot shall remain immutable, allowing all subsequent queries to operate as pure functions with no dependence on the live process environment.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-ENV-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Environment Variable Existence Check
+STATEMENT: >>>
+The library shall provide a function to check whether an environment variable is present in an Environment snapshot, returning Boolean. The function shall return True if the variable is set in the snapshot, even when its value is the empty string. This distinction is required for correct NO_COLOR compliance, where the mere presence of the variable — regardless of its value — is sufficient to disable color output.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-ENV-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Environment Variable Value Retrieval
+STATEMENT: >>>
+The library shall provide a function to retrieve the value of an environment variable from an Environment snapshot, returning a String. If the variable is not present in the snapshot, the function shall return an empty string. The returned value shall be the raw, unmodified string stored in the snapshot.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-ENV-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Capture Current Process Environment
+STATEMENT: >>>
+The library shall provide a procedure to capture the current process environment into an Environment snapshot. This procedure is the sole operation that performs OS interaction (Ada FFI boundary). All subsequent queries shall operate on the captured snapshot without further OS calls.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-ENV-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Programmatic Environment Construction for Testing
+STATEMENT: >>>
+The library shall provide a way to construct an Environment snapshot from programmatic data, without performing any OS calls. This enables unit testing of all downstream detection logic (color level, NO_COLOR, FORCE_COLOR, CI detection, Unicode, terminal identification) with fully controlled, reproducible inputs.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-ENV-006
+STATUS: Approved
+PRIORITY: Should
+TITLE: Case-Insensitive Value Comparison
+STATEMENT: >>>
+The library shall provide case-insensitive string comparison utilities for comparing environment variable values against known String literals. This is required because terminal identifiers use inconsistent casing across environments and implementations (e.g., COLORTERM may be set to "truecolor", "TrueColor", or "24bit").
+<<<
+
+[REQUIREMENT]
+UID: FUNC-ENV-007
+STATUS: Approved
+PRIORITY: Should
+TITLE: SPARK Silver Provability for Query Functions
+STATEMENT: >>>
+The environment variable query functions — existence check and value retrieval — shall be SPARK-provable at Silver level. When these functions operate on an Environment snapshot passed as a parameter, their SPARK contracts shall specify Global => null, confirming they introduce no hidden state dependencies and produce no side effects beyond their return value.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-ENV-008
+STATUS: Approved
+PRIORITY: Could
+TITLE: Multi-Candidate Value Matching
+STATEMENT: >>>
+The library shall provide a function to check whether an environment variable's value in an Environment snapshot matches any entry in a given set of candidate String values. This supports the common detection pattern of comparing TERM or TERM_PROGRAM against a list of known terminal type identifiers in a single, readable operation.
+<<<
+

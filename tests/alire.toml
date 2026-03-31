@@ -1,15 +1,17 @@
-name = "termicap"
+name = "termicap_tests"
 description = ""
 version = "0.1.0-dev"
 
 authors = ["Heziode"]
 maintainers = ["Heziode <heziode@protonmail.com>"]
 maintainers-logins = ["heziode"]
-licenses = "Apache-2.0 WITH LLVM-exception"
+licenses = "MIT OR Apache-2.0 WITH LLVM-exception"
 website = ""
 tags = []
 
 [[depends-on]]
-functional = "^4.0.0"
-sparklib = "^15.1.0"
+aunit = "^26.0.0"
+termicap = "*"
 
+[[pins]]
+termicap = { path = ".." }

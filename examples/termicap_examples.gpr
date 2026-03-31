@@ -1,0 +1,3 @@
+aggregate project Termicap_Examples is
+   for Project_Files use ("env_snapshot/env_snapshot_example.gpr");
+end Termicap_Examples;
