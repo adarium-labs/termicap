@@ -133,8 +133,89 @@ Termicap.Environment                [SPARK Silver, Global => null]
 - All comparisons are case-insensitive via `Equal_Case_Insensitive`.
 - With Ada 2022 aggregate syntax, call sites are concise: `["iTerm.app", "WezTerm", "vscode"]`.
 
+## Scenario 5: TTY Detection Flow
+
+Executed at detection time to determine whether standard I/O streams are connected to an interactive terminal.
+
+```
+Caller (application / detection init)
+  │
+  │  Is_TTY (Stdout)
+  ▼
+Termicap.TTY                          [spec: SPARK, body: SPARK_Mode => Off]
+  │
+  │  FD_MAP (Stdout) => 1
+  │  C_Isatty (1)                     -- pragma Import (C, ..., "isatty")
+  │
+  │  Return value:
+  │    1  => True  (stream is a terminal)
+  │    _  => False (pipe, file, invalid fd, or any error)
+  │
+  └──► Boolean result returned to caller
+```
+
+**Key properties:**
+
+- `isatty()` is a read-only query — it never modifies terminal state.
+- Any non-1 return value maps to `False`, including errors (FUNC-TTY-004).
+- No exceptions can propagate from `pragma Import (C, ...)`.
+
+## Scenario 6: Bulk TTY Query Flow
+
+Convenience wrapper that queries all three streams in a single call.
+
+```
+Caller
+  │
+  │  Status : TTY_Status := Query_All;
+  ▼
+Termicap.TTY
+  │
+  │  Status.Stdin  := Is_TTY (Stdin)    -- C_Isatty (0)
+  │  Status.Stdout := Is_TTY (Stdout)   -- C_Isatty (1)
+  │  Status.Stderr := Is_TTY (Stderr)   -- C_Isatty (2)
+  │
+  └──► TTY_Status record with three Boolean fields
+```
+
+**Key properties:**
+
+- Three `isatty()` calls, one per stream.
+- Results are independent — stdout may be piped while stderr remains a terminal.
+
+## Scenario 7: TTY Status in Downstream Detection
+
+Downstream SPARK-provable detection functions receive TTY status as a plain `Boolean` parameter, keeping the FFI call outside the SPARK verification perimeter.
+
+```
+Application Init (Ada-only region)
+  │
+  │  Is_Interactive : constant Boolean := Is_TTY (Stdout);
+  │  Capture_Current (Env);
+  │
+  ▼
+Detection Logic                       [SPARK Silver, Global => null]
+  │
+  │  function Detect_Color_Level
+  │    (Env            : Environment;
+  │     Is_Interactive : Boolean) return Color_Level
+  │
+  │  1. if not Is_Interactive and not Force_Color then return None
+  │  2. Check env vars: NO_COLOR, FORCE_COLOR, COLORTERM, TERM ...
+  │
+  └──► Color_Level result
+```
+
+**Key properties:**
+
+- `Is_TTY` call happens once in an Ada-only region.
+- The `Boolean` result flows into SPARK functions as a parameter.
+- `Global => null` contracts are preserved on detection functions.
+- This is the canonical integration pattern for `Termicap.TTY` with `Termicap.Environment`.
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
 - **Tech Spec F1** (`docs/tech-specs/f1-environment-variable-abstraction.md`): Design rationale, especially Sections C (Type Design) and D (SPARK Strategy)
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008
+- **Tech Spec F2** (`docs/tech-specs/f2-tty-detection.md`): TTY detection design rationale
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006

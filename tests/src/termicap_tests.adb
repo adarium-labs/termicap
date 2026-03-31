@@ -11,6 +11,7 @@ with AUnit.Test_Suites;
 
 with Test_Environment;
 with Test_Environment_Capture;
+with Test_TTY;
 
 procedure Termicap_Tests is
 
@@ -21,6 +22,7 @@ procedure Termicap_Tests is
    begin
       AUnit.Test_Suites.Add_Test (Result, new Test_Environment.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Environment_Capture.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_TTY.Test_Case);
       return Result;
    end All_Tests;
 

@@ -102,3 +102,57 @@ STATEMENT: >>>
 The library shall provide a function to check whether an environment variable's value in an Environment snapshot matches any entry in a given set of candidate String values. This supports the common detection pattern of comparing TERM or TERM_PROGRAM against a list of known terminal type identifiers in a single, readable operation.
 <<<
 
+[REQUIREMENT]
+UID: FUNC-TTY-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Stream Kind Enumeration
+STATEMENT: >>>
+The library shall provide a Stream_Kind enumeration type with values Stdin, Stdout, and Stderr to identify the three standard I/O streams.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TTY-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Per-Stream TTY Detection Function
+STATEMENT: >>>
+The library shall provide a function Is_TTY that takes a Stream_Kind parameter and returns Boolean indicating whether the specified stream is connected to an interactive terminal. The function shall perform per-stream detection, as stdout may be piped while stderr remains connected to a terminal.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TTY-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: POSIX isatty() System Call Binding
+STATEMENT: >>>
+On POSIX systems (Linux, macOS, FreeBSD), TTY detection shall use the C library function isatty() with the file descriptor corresponding to the specified stream (stdin=0, stdout=1, stderr=2).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TTY-004
+STATUS: Approved
+PRIORITY: Should
+TITLE: Safe and Non-Destructive TTY Query
+STATEMENT: >>>
+The Is_TTY function shall be safe to call at any time and shall not modify terminal state. It shall return False rather than raising an exception if the stream handle is invalid or unavailable.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TTY-005
+STATUS: Approved
+PRIORITY: Should
+TITLE: SPARK Boundary for TTY Detection
+STATEMENT: >>>
+The TTY detection API (Stream_Kind type and Is_TTY function signature) shall be defined in a SPARK-annotated package spec. The implementation body shall use SPARK_Mode => Off for the platform-specific FFI call to isatty().
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TTY-006
+STATUS: Approved
+PRIORITY: Could
+TITLE: Bulk TTY Status Query for All Streams
+STATEMENT: >>>
+The library shall provide a convenience function that returns the TTY status for all three streams at once, reducing the number of FFI calls when multiple stream statuses are needed.
+<<<
+
