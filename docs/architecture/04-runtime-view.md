@@ -300,10 +300,132 @@ begin
 end;
 ```
 
+## Scenario 9: Terminal Dimensions Detection — TTY Path (ioctl)
+
+Executed when stdout is connected to an interactive terminal. This is the primary path that delivers accurate live dimensions including optional pixel sizes.
+
+```
+Application Init (Ada-only region)
+  │
+  │  Env    : Environment;
+  │  Is_TTY : Boolean;
+  │
+  │  Capture_Current (Env);                        -- Scenario 1 (SPARK_Mode => Off)
+  │  Is_TTY := Termicap.TTY.Is_TTY (Stdout);       -- Scenario 5 (SPARK_Mode => Off)
+  │
+  ▼
+Termicap.Dimensions.Get_Size (Env, Is_TTY => True)  [spec: SPARK, body: SPARK_Mode => Off]
+  │
+  │  Is_TTY = True → attempt ioctl path:
+  │
+  │  C_Get_Winsize (Fd => 1, Cols, Rows, X_Pixel, Y_Pixel)
+  │    │                                           [pragma Import (C, ..., "termicap_get_winsize")]
+  │    ▼
+  │  termicap_get_winsize (fd=1)                   [src/c/termicap_ioctl.c]
+  │    │  ioctl (1, TIOCGWINSZ, &ws)
+  │    │  if result < 0: return -1
+  │    │  *cols   = ws.ws_col
+  │    │  *rows   = ws.ws_row
+  │    │  *xpixel = ws.ws_xpixel
+  │    │  *ypixel = ws.ws_ypixel
+  │    └──► return 0
+  │
+  │  Status = 0 and C_Cols > 0 and C_Rows > 0?
+  │    Yes →
+  │      return (Columns      => Positive (C_Cols),
+  │              Rows         => Positive (C_Rows),
+  │              Pixel_Width  => Natural (C_X_Pixel),
+  │              Pixel_Height => Natural (C_Y_Pixel))
+  │
+  └──► Terminal_Size with live dimensions and pixel info
+```
+
+**Key properties:**
+
+- `termicap_get_winsize` is a fixed-signature C wrapper required because `ioctl(2)` is variadic and cannot be bound directly from Ada via `pragma Import` (ADR-0006).
+- The C wrapper returns `-1` on any error; Ada maps a non-zero status or zero dimensions to "ioctl failed", falling through to Scenario 10.
+- `Pixel_Width` and `Pixel_Height` may themselves be zero even on a successful ioctl call — some terminal emulators do not populate `ws_xpixel`/`ws_ypixel`.
+
+## Scenario 10: Terminal Dimensions Detection — Environment Variable Fallback
+
+Executed when `Is_TTY = False` (piped/redirected output) or when the ioctl call fails.
+
+```
+Termicap.Dimensions.Get_Size (Env, Is_TTY)   [body: SPARK_Mode => Off]
+  │
+  │  Result := (Rows => 24, Columns => 80, Pixel_Width => 0, Pixel_Height => 0)
+  │            -- DEFAULT_ROWS, DEFAULT_COLUMNS, 0, 0
+  │
+  │  [ioctl skipped or failed]
+  │
+  │  Step 2: Parse COLUMNS env var (FUNC-DIM-003)
+  │    Contains (Env, "COLUMNS")?
+  │      Yes → Try_Parse_Positive (Value (Env, "COLUMNS"))
+  │              > 0 → Result.Columns := Parsed
+  │              = 0 → Result.Columns stays at DEFAULT_COLUMNS (80)
+  │      No  → Result.Columns stays at DEFAULT_COLUMNS (80)
+  │
+  │  Step 3: Parse LINES env var (FUNC-DIM-003)
+  │    Contains (Env, "LINES")?
+  │      Yes → Try_Parse_Positive (Value (Env, "LINES"))
+  │              > 0 → Result.Rows := Parsed
+  │              = 0 → Result.Rows stays at DEFAULT_ROWS (24)
+  │      No  → Result.Rows stays at DEFAULT_ROWS (24)
+  │
+  │  [Pixel_Width and Pixel_Height remain 0 — env vars carry no pixel info]
+  │
+  └──► Terminal_Size (columns and rows from env or defaults; pixels always 0)
+```
+
+**Key properties:**
+
+- Each axis (columns and rows) falls back independently. A valid `COLUMNS` can coexist with a missing/invalid `LINES`, giving `(Columns => env_value, Rows => 24)`.
+- `Try_Parse_Positive` rejects the empty string, non-digit characters, overflow, and the literal `"0"` — all map to a `Natural` result of `0`, causing the axis to retain its default.
+- When `Is_TTY = False`, `Pixel_Width` and `Pixel_Height` are always `0` — there is no environment variable convention for pixel sizes.
+- This path is fully testable with no OS interaction using `EMPTY_ENVIRONMENT` + `Insert`.
+
+## Scenario 11: Terminal Dimensions Testability Pattern
+
+Unit tests exercise the environment-variable and default paths without any OS calls or TTY state.
+
+```
+Test body
+  │
+  │  Env : Environment := EMPTY_ENVIRONMENT;
+  │
+  │  --  Default fallback (no env vars set, Is_TTY = False)
+  │  Size := Get_Size (Env, Is_TTY => False);
+  │  pragma Assert (Size.Columns = 80);
+  │  pragma Assert (Size.Rows    = 24);
+  │
+  │  --  COLUMNS env var override
+  │  Insert (Env, "COLUMNS", "132");
+  │  Size := Get_Size (Env, Is_TTY => False);
+  │  pragma Assert (Size.Columns = 132);
+  │  pragma Assert (Size.Rows    = 24);   -- LINES not set → default
+  │
+  │  --  Invalid COLUMNS value → ignored, falls back to default
+  │  Insert (Env, "COLUMNS", "not_a_number");
+  │  Size := Get_Size (Env, Is_TTY => False);
+  │  pragma Assert (Size.Columns = 80);
+  │
+  └──► All results deterministic; no TTY, no ioctl, no OS state
+```
+
+**Key properties:**
+
+- `Termicap.Environment.Capture` and `Termicap.TTY` are never called in unit tests.
+- The ioctl path is exercised only via integration tests or the interactive demo (`examples/dimensions_demo/`).
+- Tests are fully parallelizable and reproduce identically across machines, including CI environments without a TTY.
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
 - **Tech Spec F1** (`docs/tech-specs/f1-environment-variable-abstraction.md`): Design rationale, especially Sections C (Type Design) and D (SPARK Strategy)
 - **Tech Spec F2** (`docs/tech-specs/f2-tty-detection.md`): TTY detection design rationale
 - **Tech Spec F3** (`docs/tech-specs/f3-color-level-detection.md`): Color level detection design rationale
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015
+- **Tech Spec F4** (`docs/tech-specs/terminal-dimensions.md`): Terminal dimensions detection design rationale
+- **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008

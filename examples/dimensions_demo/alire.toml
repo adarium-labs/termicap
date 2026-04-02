@@ -1,0 +1,18 @@
+name = "dimensions_demo"
+description = ""
+version = "0.1.0-dev"
+
+authors = ["Your Name"]
+maintainers = ["Your Name <heziode@protonmail.com>"]
+maintainers-logins = ["Heziode"]
+licenses = "Apache-2.0 WITH LLVM-exception"
+website = ""
+tags = []
+
+executables = ["dimensions_demo"]
+
+[[depends-on]]
+termicap = "*"
+
+[[pins]]
+termicap = { path = "../.." }

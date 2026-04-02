@@ -9,10 +9,11 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Environment          [SPARK Silver] — environment snapshot type, query/builder API
 │   └── Termicap.Environment.Capture  [SPARK_Mode => Off] — sole OS FFI boundary
 ├── Termicap.TTY                  [spec: SPARK, body: SPARK_Mode => Off] — TTY detection
-└── Termicap.Color                [SPARK Silver] — color level detection (11-step cascade)
+├── Termicap.Color                [SPARK Silver] — color level detection (11-step cascade)
+└── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
 ```
 
-`Termicap.Color` is the first detection package. It depends on `Termicap.Environment` and does **not** depend on `Termicap.TTY` — TTY status is passed as a plain `Boolean` parameter. The root package remains a namespace-only package.
+`Termicap.Color` and `Termicap.Dimensions` are detection packages that depend on `Termicap.Environment` and receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. The root package remains a namespace-only package.
 
 ## Level 2: Package Descriptions
 
@@ -159,6 +160,80 @@ pragma Import (C, C_Isatty, "isatty");
 
 ---
 
+### `Termicap.Dimensions`
+
+**Responsibility:** Detects terminal dimensions (columns, rows, and optional pixel size) from an immutable environment snapshot and a TTY status flag. Implements a three-step fallback chain: ioctl(TIOCGWINSZ) on the stdout file descriptor when a TTY is present, then COLUMNS/LINES environment variables, then the industry-standard 80×24 default.
+
+The spec is SPARK-annotated with `Global => null` on `Get_Size`. The body has `SPARK_Mode => Off` because it binds to the C wrapper `termicap_get_winsize` via `pragma Import` and uses access types (out-parameters to C) that SPARK cannot verify.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-dimensions.ads`, `src/termicap-dimensions.adb`, `src/c/termicap_ioctl.c` |
+| SPARK_Mode | On (spec), Off (body) |
+| Dependencies | `Termicap.Environment`, `Interfaces.C` (Ada standard library) |
+
+#### Key Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `DEFAULT_COLUMNS` | 80 | Industry-standard default terminal width (FUNC-DIM-004) |
+| `DEFAULT_ROWS` | 24 | Industry-standard default terminal height (FUNC-DIM-004) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Terminal_Size` | Record with four fields: `Columns : Positive`, `Rows : Positive`, `Pixel_Width : Natural`, `Pixel_Height : Natural`. `Rows` and `Columns` are always ≥ 1. `Pixel_Width` and `Pixel_Height` are 0 when the terminal does not report pixel dimensions. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Get_Size` | Function | `Global => null` | FUNC-DIM-002, FUNC-DIM-003, FUNC-DIM-004, FUNC-DIM-005 |
+
+#### Internal: `C_Get_Winsize`
+
+The C binding declared via `pragma Import`, pointing to the thin wrapper in `src/c/termicap_ioctl.c`:
+
+```ada
+function C_Get_Winsize
+   (Fd      : Interfaces.C.int;
+    Cols    : access Interfaces.C.unsigned_short;
+    Rows    : access Interfaces.C.unsigned_short;
+    X_Pixel : access Interfaces.C.unsigned_short;
+    Y_Pixel : access Interfaces.C.unsigned_short)
+   return Interfaces.C.int;
+pragma Import (C, C_Get_Winsize, "termicap_get_winsize");
+```
+
+`STDOUT_FD : constant Interfaces.C.int := 1` is the file descriptor passed on TTY paths.
+
+#### Internal: `termicap_ioctl.c`
+
+A thin C wrapper is required because `ioctl(2)` is a variadic function (`int ioctl(int, unsigned long, ...)`) that Ada cannot bind directly via `pragma Import`. The wrapper provides the fixed signature `termicap_get_winsize` that unpacks a `struct winsize` returned by `TIOCGWINSZ` into four out-parameters. It returns `0` on success and `-1` on error, with error meaning the calling Ada code falls through to the environment variable fallback.
+
+#### Internal: `Try_Parse_Positive`
+
+A private helper function in the body that converts a `String` to a `Natural`, returning `0` on any parse error (non-digit characters, overflow, or the value `"0"` itself, which is not a valid `Positive`). Used when reading `COLUMNS` and `LINES` from the environment snapshot.
+
+#### Fallback Chain
+
+`Get_Size` implements a per-axis fallback (FUNC-DIM-002, FUNC-DIM-003, FUNC-DIM-004):
+
+| Priority | Source | Condition |
+|----------|--------|-----------|
+| 1 | `ioctl(TIOCGWINSZ)` on fd 1 | `Is_TTY = True` and C call returns 0 and both dims > 0 |
+| 2 | `COLUMNS` / `LINES` env vars | ioctl skipped or failed; each axis falls back independently |
+| 3 | `DEFAULT_COLUMNS` / `DEFAULT_ROWS` | Env var absent or not a valid Positive |
+
+Pixel dimensions (`Pixel_Width`, `Pixel_Height`) are populated only from the ioctl path; they remain `0` on all other paths.
+
+#### Relationship to Other Packages
+
+`Termicap.Dimensions` depends on `Termicap.Environment` (for `Contains` and `Value`) and does not depend on `Termicap.TTY` directly. TTY status enters as a plain `Boolean` parameter, keeping the `isatty()` FFI call outside the SPARK verification perimeter — the same pattern used by `Termicap.Color`.
+
+---
+
 ### `Termicap.Color`
 
 **Responsibility:** Determines the color output capability of a terminal from an immutable environment snapshot and a TTY status flag. Performs no OS calls and reads no global state.
@@ -227,6 +302,13 @@ The detection algorithm is a single pure function implementing an 11-step priori
 │   │  Global => null — 11-step cascade           │  │
 │   └─────────────────────────────────────────────┘  │
 │                                                     │
+│   Termicap.Dimensions (spec only)                   │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Terminal_Size type                         │  │
+│   │  Get_Size (Env, Is_TTY : Boolean)           │  │
+│   │  Global => null — 3-step fallback chain     │  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
 │   Termicap.TTY (spec only)                          │
 │   ┌─────────────────────────────────────────────┐  │
 │   │  Stream_Kind, TTY_Status types              │  │
@@ -250,10 +332,19 @@ The detection algorithm is a single pure function implementing an 11-step priori
 │   │  Is_TTY, Query_All implementations          │  │
 │   │  (POSIX isatty() — not provable)            │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Dimensions (body)                        │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  C_Get_Winsize via pragma Import (C, ...)   │  │
+│   │  termicap_get_winsize (src/c/termicap_      │  │
+│   │    ioctl.c) wraps ioctl(TIOCGWINSZ)         │  │
+│   │  Try_Parse_Positive helper                  │  │
+│   │  Get_Size implementation                    │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current` and the `Termicap.TTY` body are the only points where OS calls occur. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color` — stay within the provable zone.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, and the `Termicap.Dimensions` body are the only points where OS calls occur. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color` and the `Get_Size` spec contract — stay within the provable zone.
 
 ## Related Documents
 
@@ -263,4 +354,6 @@ The SPARK boundary is deliberately narrow: `Capture_Current` and the `Termicap.T
 - **Tech Spec F1** (`docs/tech-specs/f1-environment-variable-abstraction.md`): Full design rationale for `Termicap.Environment`
 - **Tech Spec F2** (`docs/tech-specs/f2-tty-detection.md`): TTY detection design rationale
 - **Tech Spec F3** (`docs/tech-specs/f3-color-level-detection.md`): Color level detection design rationale
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015
+- **Tech Spec F4** (`docs/tech-specs/terminal-dimensions.md`): Terminal dimensions detection design rationale
+- **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008

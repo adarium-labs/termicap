@@ -10,6 +10,9 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Termicap.Color](termicap-color.md)**
   Color level detection — `Color_Level` type, `Detect_Color_Level` function, 11-step cascade, environment variable reference
 
+- **[Termicap.Dimensions](termicap-dimensions.md)**
+  Terminal dimensions detection — `Terminal_Size` type, `Get_Size` function, ioctl/env-var/default fallback chain
+
 - **[Termicap.Environment](termicap-environment.md)**
   Environment snapshot type, query/builder API, SPARK contracts, and the `Capture` child package
 

@@ -1,0 +1,162 @@
+[DOCUMENT]
+TITLE: Terminal Dimensions Detection
+UID: REQ-DIM
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[REQUIREMENT]
+UID: FUNC-DIM-001
+STATUS: Implemented
+PRIORITY: Must
+TITLE: Terminal_Size Record Type
+STATEMENT: >>>
+The library shall provide a Terminal_Size record type with the following fields:
+
+  Rows         : Positive  -- number of character rows (vertical)
+  Columns      : Positive  -- number of character columns (horizontal)
+  Pixel_Width  : Natural   -- terminal width in pixels (may be 0)
+  Pixel_Height : Natural   -- terminal height in pixels (may be 0)
+
+The Rows and Columns fields shall be typed Positive to express the invariant that a usable terminal always has at least one row and one column. The Pixel_Width and Pixel_Height fields shall be typed Natural because many terminals do not report pixel dimensions; a value of 0 indicates that pixel information is unavailable.
+<<<
+COMMENT: >>>
+Positive (i.e., Integer range 1 .. Integer'Last) is the correct subtype for character dimensions: a zero-column or zero-row terminal is not a meaningful state. Natural is appropriate for pixel dimensions because ioctl(TIOCGWINSZ) reports 0 in ws_xpixel and ws_ypixel on terminals that do not support pixel reporting (e.g., most virtual consoles and SSH sessions).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DIM-002
+STATUS: Implemented
+PRIORITY: Must
+TITLE: Primary Detection via ioctl(TIOCGWINSZ)
+STATEMENT: >>>
+The library shall detect terminal dimensions primarily by invoking the POSIX ioctl system call with the TIOCGWINSZ request on an appropriate file descriptor. The call shall populate the four fields of the POSIX winsize struct (ws_col, ws_row, ws_xpixel, ws_ypixel) and map them to the Terminal_Size record. This method shall be attempted before all other detection methods and shall be considered successful when ioctl returns a non-negative value and the resulting ws_col and ws_row are both greater than zero.
+<<<
+COMMENT: >>>
+ioctl(TIOCGWINSZ) is the POSIX-standard and most reliable mechanism for terminal size detection. It reflects the kernel's current knowledge of the terminal geometry, which is updated on each SIGWINCH signal. It is therefore preferred over environment variables, which may be stale (set by the shell at session start and not updated on resize).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DIM-003
+STATUS: Implemented
+PRIORITY: Must
+TITLE: Environment Variable Fallback
+STATEMENT: >>>
+When the primary ioctl detection method fails or returns zero dimensions, the library shall fall back to reading the COLUMNS and LINES environment variables from the supplied Environment snapshot. The COLUMNS variable shall be parsed as the number of character columns and the LINES variable shall be parsed as the number of character rows. Each variable shall be parsed independently: if only one is present and valid, its value shall be used for that dimension while the other dimension falls through to the default. A parsed value shall be considered valid if it represents a positive integer within the range of Positive.
+<<<
+COMMENT: >>>
+COLUMNS and LINES are set by POSIX-compatible shells (bash, zsh, ksh) at session start and updated on SIGWINCH in interactive sessions. They are a reliable secondary source in environments where ioctl is unavailable (e.g., when the process has no controlling terminal but is running in a known-size context). Because they may be stale after a window resize without a new shell signal, they rank below ioctl. Parsing is performed on the immutable Environment snapshot, making this step a pure function with no OS interaction.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DIM-004
+STATUS: Implemented
+PRIORITY: Must
+TITLE: Default Fallback to 80x24
+STATEMENT: >>>
+When all other detection methods fail to produce valid positive dimensions for a given axis, the library shall return the following industry-standard defaults:
+
+  Columns      => 80
+  Rows         => 24
+  Pixel_Width  => 0
+  Pixel_Height => 0
+
+The defaults shall apply per axis independently: if COLUMNS is detected as a valid positive integer but LINES is not, the default for Rows (24) shall be used while the detected value for Columns is preserved.
+<<<
+COMMENT: >>>
+80x24 is the conventional VT100/xterm default terminal size and the de facto fallback used by virtually all terminal capability libraries (termenv, supports-color, blessed, etc.). Pixel dimensions default to 0 because there is no meaningful pixel fallback in the absence of actual measurement. Applying defaults per-axis rather than wholesale allows partial environment variable information to be used.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DIM-005
+STATUS: Implemented
+PRIORITY: Must
+TITLE: Pure Query Function Signature
+STATEMENT: >>>
+The library shall provide a function Get_Size with the following signature (or equivalent):
+
+  function Get_Size
+     (Env    : Termicap.Environment.Environment;
+      Is_TTY : Boolean) return Terminal_Size
+
+The function shall accept an immutable Environment snapshot and a Boolean indicating whether the target file descriptor is connected to a TTY. It shall perform no OS calls and read no global state when operating on the environment variable fallback path. The SPARK contract shall specify Global => null. When Is_TTY is False and ioctl is not applicable, the function shall proceed directly to the environment variable fallback, then the default fallback, without attempting any OS call.
+<<<
+COMMENT: >>>
+Accepting an Environment snapshot rather than performing a live getenv() lookup makes the pure fallback path fully testable without spawning a real terminal process. This mirrors the design of Detect_Color_Level (FUNC-CLR-002), which takes the same Environment parameter. The Is_TTY flag gates the ioctl attempt: there is no point querying ioctl on a non-TTY file descriptor because TIOCGWINSZ is only meaningful for terminal file descriptors and will fail or return garbage otherwise.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DIM-006
+STATUS: Implemented
+PRIORITY: Must
+TITLE: C Wrapper for ioctl(TIOCGWINSZ)
+STATEMENT: >>>
+Because ioctl is a variadic C function, Ada cannot import it directly with pragma Import. The library shall provide a thin C wrapper function with a fixed, non-variadic signature that invokes ioctl(fd, TIOCGWINSZ, &ws) and returns the four winsize fields through out-parameters or a small C struct. The wrapper shall:
+
+  1. Accept an integer file descriptor.
+  2. Call ioctl with the TIOCGWINSZ constant and a stack-allocated winsize struct.
+  3. On success (return value >= 0), populate output parameters for ws_col, ws_row,
+     ws_xpixel, and ws_ypixel.
+  4. Return an integer status: 0 on success, -1 on failure (propagating errno).
+
+The wrapper source shall reside in the library's C support directory and shall be compiled as part of the Alire build.
+<<<
+COMMENT: >>>
+The variadic nature of ioctl (it is declared as int ioctl(int fd, unsigned long request, ...) on Linux) prevents direct Ada import because the Ada calling convention requires a fixed parameter list. A thin C shim is the standard solution used by virtually all Ada/SPARK projects that need TIOCGWINSZ access (see also the approach used by GNATColl.Terminal). The wrapper is intentionally minimal — it contains no logic beyond the ioctl call itself — so that all decision-making remains in the Ada layer where it is SPARK-verifiable.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DIM-007
+STATUS: Implemented
+PRIORITY: Must
+TITLE: SPARK Boundary for Dimensions Detection
+STATEMENT: >>>
+The terminal dimensions API shall be structured to maintain a clear SPARK boundary:
+
+  - The Terminal_Size record type and the Get_Size function signature shall be defined in a package spec compiled with SPARK_Mode => On (or inheriting SPARK_Mode from the enclosing package).
+  - The pure environment-variable fallback logic within Get_Size shall be SPARK-provable at Silver level, with Global => null.
+  - The ioctl invocation path shall be isolated in the package body or a child package compiled with SPARK_Mode => Off, as it performs a foreign function call that SPARK cannot reason about.
+  - The C wrapper imported via pragma Import shall appear exclusively in the SPARK_Mode => Off region.
+
+This boundary ensures that the testable, environment-variable-based logic receives full SPARK verification while the unavoidable FFI surface remains as small as possible.
+<<<
+COMMENT: >>>
+This mirrors the boundary established for TTY detection (FUNC-TTY-005): the spec is SPARK-annotated, the body turns SPARK_Mode off only for the FFI call. Minimising the SPARK_Mode => Off region is a Silver-target discipline: ideally only the single pragma Import declaration and its direct wrapper call fall outside SPARK verification.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DIM-008
+STATUS: Implemented
+PRIORITY: Should
+TITLE: Pixel Dimensions Support
+STATEMENT: >>>
+The library shall populate the Pixel_Width and Pixel_Height fields of Terminal_Size from the ws_xpixel and ws_ypixel fields of the POSIX winsize struct returned by ioctl(TIOCGWINSZ). When ioctl succeeds but ws_xpixel or ws_ypixel is zero, the corresponding field shall be set to 0 without treating this as a detection failure. Pixel dimensions shall not influence the success or failure evaluation of the primary ioctl detection method; only ws_col and ws_row being greater than zero determine whether ioctl succeeded.
+<<<
+COMMENT: >>>
+Pixel dimensions (ws_xpixel, ws_ypixel) are returned by some terminal emulators (e.g., xterm, kitty, iTerm2) to support applications that render graphics or perform precise layout (e.g., Sixel graphics, the Kitty graphics protocol, image previews in terminal file managers). Many terminals — including most virtual consoles (VT) and SSH sessions — return 0 for these fields even when character dimensions are available. Treating a zero pixel dimension as a non-fatal condition prevents unnecessary fallback to environment variables when character dimensions were successfully detected.
+<<<
