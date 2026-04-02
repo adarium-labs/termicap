@@ -300,7 +300,71 @@ begin
 end;
 ```
 
-## Scenario 9: Terminal Dimensions Detection — TTY Path (ioctl)
+## Scenario 9: Unicode Level Detection Flow
+
+Full end-to-end scenario showing how a client calls `Detect_Unicode_Level`. Unlike color and dimensions detection, no TTY status is needed — the environment snapshot alone is sufficient.
+
+```
+Application Init (Ada-only region)
+  │
+  │  Env : Environment;
+  │
+  │  Capture_Current (Env);             -- Scenario 1 (SPARK_Mode => Off)
+  │
+  ▼
+Termicap.Unicode.Detect_Unicode_Level (Env)   [SPARK Silver, Global => null]
+  │
+  │  Step 1: Locale detection (FUNC-UNI-003)
+  │    LC_ALL present and contains "UTF-8" (case-insensitive)?
+  │      Yes → Level := Extended
+  │    LC_CTYPE present and contains "UTF-8"?
+  │      Yes → Level := Extended
+  │    LANG present and contains "UTF-8"?
+  │      Yes → Level := Extended
+  │
+  │  Step 2: TERM=linux exclusion (FUNC-UNI-004)
+  │    Equal_Case_Insensitive (Value (Env, "TERM"), "linux")?
+  │      Yes → return None   (Linux kernel console has no Unicode rendering)
+  │
+  │  Step 3: CI environment awareness (FUNC-UNI-006)
+  │    GITHUB_ACTIONS / GITEA_ACTIONS / CIRCLECI present?
+  │      Yes → Level := Unicode_Level'Max (Level, Basic)
+  │
+  │  Step 4: Windows terminal heuristics (FUNC-UNI-005)
+  │    WT_SESSION present → Level := Unicode_Level'Max (Level, Extended)
+  │    TERM_PROGRAM = "vscode" → Level := Unicode_Level'Max (Level, Extended)
+  │    TERMINAL_EMULATOR contains "JetBrains" → Level := Unicode_Level'Max (Level, Extended)
+  │
+  │  Step 5: Default
+  │    return Level   (None if no heuristic matched)
+  │
+  └──► Unicode_Level result (None / Basic / Extended)
+```
+
+**Key properties:**
+
+- `Detect_Unicode_Level` takes only `Env` — no `Is_TTY` parameter. Unicode capability is a property of the terminal emulator and locale, not of stream connectivity (FUNC-UNI-002). This makes it the only detection function callable without first invoking `Is_TTY`.
+- Both the spec and the body carry `SPARK_Mode => On`, making `Termicap.Unicode` the only detection package that is fully SPARK Silver provable end-to-end (FUNC-UNI-007).
+- The `TERM=linux` exclusion (step 2) takes priority over locale detection: a UTF-8 locale set by a wrapper script does not grant Unicode capability to the raw Linux kernel console.
+- Integration test pattern (no OS, no TTY):
+
+```ada
+declare
+   Env   : Environment := EMPTY_ENVIRONMENT;
+   Level : Unicode_Level;
+begin
+   Insert (Env, "LANG", "en_US.UTF-8");
+   Level := Detect_Unicode_Level (Env);
+   pragma Assert (Level = Extended);
+
+   --  TERM=linux overrides the UTF-8 locale
+   Insert (Env, "TERM", "linux");
+   Level := Detect_Unicode_Level (Env);
+   pragma Assert (Level = None);
+end;
+```
+
+## Scenario 10: Terminal Dimensions Detection — TTY Path (ioctl)
 
 Executed when stdout is connected to an interactive terminal. This is the primary path that delivers accurate live dimensions including optional pixel sizes.
 
@@ -343,10 +407,10 @@ Termicap.Dimensions.Get_Size (Env, Is_TTY => True)  [spec: SPARK, body: SPARK_Mo
 **Key properties:**
 
 - `termicap_get_winsize` is a fixed-signature C wrapper required because `ioctl(2)` is variadic and cannot be bound directly from Ada via `pragma Import` (ADR-0006).
-- The C wrapper returns `-1` on any error; Ada maps a non-zero status or zero dimensions to "ioctl failed", falling through to Scenario 10.
+- The C wrapper returns `-1` on any error; Ada maps a non-zero status or zero dimensions to "ioctl failed", falling through to Scenario 11.
 - `Pixel_Width` and `Pixel_Height` may themselves be zero even on a successful ioctl call — some terminal emulators do not populate `ws_xpixel`/`ws_ypixel`.
 
-## Scenario 10: Terminal Dimensions Detection — Environment Variable Fallback
+## Scenario 11: Terminal Dimensions Detection — Environment Variable Fallback
 
 Executed when `Is_TTY = False` (piped/redirected output) or when the ioctl call fails.
 
@@ -384,7 +448,7 @@ Termicap.Dimensions.Get_Size (Env, Is_TTY)   [body: SPARK_Mode => Off]
 - When `Is_TTY = False`, `Pixel_Width` and `Pixel_Height` are always `0` — there is no environment variable convention for pixel sizes.
 - This path is fully testable with no OS interaction using `EMPTY_ENVIRONMENT` + `Insert`.
 
-## Scenario 11: Terminal Dimensions Testability Pattern
+## Scenario 12: Terminal Dimensions Testability Pattern
 
 Unit tests exercise the environment-variable and default paths without any OS calls or TTY state.
 
@@ -427,5 +491,7 @@ Test body
 - **Tech Spec F2** (`docs/tech-specs/f2-tty-detection.md`): TTY detection design rationale
 - **Tech Spec F3** (`docs/tech-specs/f3-color-level-detection.md`): Color level detection design rationale
 - **Tech Spec F4** (`docs/tech-specs/terminal-dimensions.md`): Terminal dimensions detection design rationale
+- **Tech Spec F5** (`docs/tech-specs/unicode-support.md`): Unicode support level detection design rationale
 - **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008
+- **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008

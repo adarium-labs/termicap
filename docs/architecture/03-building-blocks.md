@@ -10,10 +10,11 @@ Termicap                          (root namespace — no types or subprograms)
 │   └── Termicap.Environment.Capture  [SPARK_Mode => Off] — sole OS FFI boundary
 ├── Termicap.TTY                  [spec: SPARK, body: SPARK_Mode => Off] — TTY detection
 ├── Termicap.Color                [SPARK Silver] — color level detection (11-step cascade)
-└── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
+├── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
+└── Termicap.Unicode              [SPARK Silver] — Unicode support level detection (5-step cascade)
 ```
 
-`Termicap.Color` and `Termicap.Dimensions` are detection packages that depend on `Termicap.Environment` and receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. The root package remains a namespace-only package.
+`Termicap.Color`, `Termicap.Dimensions`, and `Termicap.Unicode` are detection packages that depend on `Termicap.Environment`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` requires no TTY parameter at all, as Unicode capability is a property of the terminal emulator and locale configuration rather than stream connectivity. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. The root package remains a namespace-only package.
 
 ## Level 2: Package Descriptions
 
@@ -282,6 +283,48 @@ The detection algorithm is a single pure function implementing an 11-step priori
 
 ---
 
+### `Termicap.Unicode`
+
+**Responsibility:** Determines the Unicode rendering capability of a terminal from an immutable environment snapshot. Performs no OS calls and reads no global state.
+
+The detection algorithm is a single pure function implementing a 5-step priority cascade. All logic consists of enum comparisons and string matching via the `Termicap.Environment` API; there is no FFI. The package is fully SPARK Silver provable — uniquely among detection packages, both the spec **and** the body carry `SPARK_Mode => On`.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-unicode.ads`, `src/termicap-unicode.adb` |
+| SPARK_Mode | On (spec and body) |
+| Dependencies | `Termicap.Environment` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Unicode_Level` | Ordered three-value enumeration: `None < Basic < Extended`. Supports `Unicode_Level'Max` for floor operations throughout the cascade. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Detect_Unicode_Level` | Function | `Global => null` | FUNC-UNI-002, FUNC-UNI-007, FUNC-UNI-008 |
+
+#### Detection Cascade
+
+`Detect_Unicode_Level` implements a 5-step priority cascade (FUNC-UNI-008):
+
+| Step | Check | Effect |
+|------|-------|--------|
+| 1 | Locale variables (`LC_ALL`, `LC_CTYPE`, `LANG`) | Value contains `"UTF-8"` (case-insensitive) → Extended |
+| 2 | `TERM=linux` | Linux kernel console exclusion → None (overrides locale) |
+| 3 | CI environment (`GITHUB_ACTIONS`, `GITEA_ACTIONS`, `CIRCLECI`) | Known Unicode-capable CI → Basic |
+| 4 | Windows terminal heuristics (`WT_SESSION`, `TERM_PROGRAM=vscode`, `TERMINAL_EMULATOR`) | Windows Terminal / vscode / JetBrains → Extended |
+| 5 | Default | Return `None` |
+
+#### Relationship to Other Packages
+
+`Termicap.Unicode` depends on `Termicap.Environment` (for `Contains`, `Value`, and `Equal_Case_Insensitive`) and has **no dependency** on `Termicap.TTY`. Unlike `Termicap.Color` and `Termicap.Dimensions`, it requires no TTY status parameter — Unicode capability is a property of the terminal emulator and locale configuration, independent of whether the output stream is connected to a TTY. This makes `Termicap.Unicode` the only detection function callable without first invoking `Is_TTY`.
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -300,6 +343,15 @@ The detection algorithm is a single pure function implementing an 11-step priori
 │   │  Color_Level type                           │  │
 │   │  Detect_Color_Level (Env, Is_TTY : Boolean) │  │
 │   │  Global => null — 11-step cascade           │  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Unicode (spec + body)                    │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Unicode_Level type                         │  │
+│   │  Detect_Unicode_Level (Env)                 │  │
+│   │  Global => null — 5-step cascade            │  │
+│   │  (no Is_TTY parameter — unique among        │  │
+│   │   detection packages)                       │  │
 │   └─────────────────────────────────────────────┘  │
 │                                                     │
 │   Termicap.Dimensions (spec only)                   │
@@ -344,7 +396,7 @@ The detection algorithm is a single pure function implementing an 11-step priori
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, and the `Termicap.Dimensions` body are the only points where OS calls occur. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color` and the `Get_Size` spec contract — stay within the provable zone.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, and the `Termicap.Dimensions` body are the only points where OS calls occur. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the `Get_Size` spec contract — stay within the provable zone. `Termicap.Unicode` is the only detection package where both spec and body carry `SPARK_Mode => On`; it requires no TTY status at all.
 
 ## Related Documents
 
@@ -355,5 +407,7 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY`
 - **Tech Spec F2** (`docs/tech-specs/f2-tty-detection.md`): TTY detection design rationale
 - **Tech Spec F3** (`docs/tech-specs/f3-color-level-detection.md`): Color level detection design rationale
 - **Tech Spec F4** (`docs/tech-specs/terminal-dimensions.md`): Terminal dimensions detection design rationale
+- **Tech Spec F5** (`docs/tech-specs/unicode-support.md`): Unicode support level detection design rationale
 - **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008
+- **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008

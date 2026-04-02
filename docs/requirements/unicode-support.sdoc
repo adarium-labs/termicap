@@ -1,0 +1,179 @@
+[DOCUMENT]
+TITLE: Unicode Support Detection
+UID: REQ-UNI
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[REQUIREMENT]
+UID: FUNC-UNI-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unicode_Level Enumeration Type
+STATEMENT: >>>
+The library shall provide a Unicode_Level enumeration type with the following ordered values representing the Unicode rendering capability of a terminal:
+
+  None      -- terminal cannot render Unicode; ASCII-only output
+  Basic     -- Basic Multilingual Plane (BMP, U+0000..U+FFFF) supported;
+               covers most scripts, symbols, box-drawing, checkmarks
+  Extended  -- full Unicode support including supplementary planes
+               (U+10000..U+10FFFF); emoji, mathematical symbols, etc.
+
+The values shall be ordered such that None < Basic < Extended, allowing comparisons and min/max expressions to establish capability floors and ceilings. For v1 of the library the detection algorithm returns None or Basic; Extended is reserved for future wcwidth() probing (see FUNC-UNI-007 note).
+<<<
+COMMENT: >>>
+A three-level enum is preferred over a Boolean to preserve design space for a future wcwidth()-based probing path (notcurses pattern) that could distinguish BMP from supplementary-plane support. Callers that only care about yes/no can compare against None. The enum also mirrors the structure of Color_Level (FUNC-CLR-001), keeping the API shape consistent across capability dimensions.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-UNI-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unicode Support Detection Function Signature
+STATEMENT: >>>
+The library shall provide a pure function Detect_Unicode_Level that accepts an Environment snapshot and returns a Unicode_Level value. The function shall perform no OS calls, read no global state, and produce no side effects beyond its return value. All detection logic shall operate exclusively on the supplied Environment snapshot. The function shall be callable from any context after an Environment snapshot has been captured.
+
+A representative signature is:
+
+  function Detect_Unicode_Level
+     (Env : Termicap.Environment.Environment) return Unicode_Level
+
+The function shall be defined in a SPARK-annotated package and shall carry the SPARK contract Global => null.
+<<<
+COMMENT: >>>
+Unlike color level detection (FUNC-CLR-002), Unicode detection does not require an Is_TTY parameter because Unicode capability is a property of the terminal emulator and the locale configuration, not of whether the output stream is currently connected to a TTY. A tool writing to a pipe may still need to know whether the environment supports Unicode in order to choose between symbol sets for later display.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-UNI-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Locale-Based Detection via LC_ALL, LC_CTYPE, LANG
+STATEMENT: >>>
+The detection function shall perform locale-based detection as the primary method. It shall inspect the following environment variables from the supplied snapshot in the order listed, using the value of the first non-empty variable found:
+
+  1. LC_ALL
+  2. LC_CTYPE
+  3. LANG
+
+If the selected value contains the substring "UTF-8" (comparison is case-insensitive; non-alphanumeric characters between "UTF" and "8" shall be ignored, e.g., "utf8", "UTF-8", and "utf_8" all match), the function shall return at least Basic. If none of the three variables is set or non-empty, locale-based detection yields no result and the function proceeds to the environment heuristic (FUNC-UNI-004 through FUNC-UNI-006).
+<<<
+COMMENT: >>>
+Locale inspection is the most portable and authoritative method on POSIX systems. The LC_ALL > LC_CTYPE > LANG priority order follows the POSIX specification for locale category resolution. Typical values encountered in practice: "en_US.UTF-8", "C.UTF-8", "zh_CN.utf8". The case-insensitive, non-alphanumeric-tolerant match ensures all common variants are recognised without an explicit enumeration of every known locale string. This approach is used by tcell and notcurses and is considered the primary signal in the Termicap combined algorithm.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-UNI-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: TERM=linux Exclusion
+STATEMENT: >>>
+When the TERM environment variable in the supplied snapshot equals "linux" (comparison case-insensitive), the detection function shall return None, unless a positive Unicode level has already been established by locale inspection (FUNC-UNI-003) or a Windows-specific heuristic (FUNC-UNI-005). The "linux" TERM value identifies the Linux kernel virtual console (VT), which uses the codepage-based Linux console font system and has limited and inconsistent Unicode rendering compared to a full terminal emulator.
+<<<
+COMMENT: >>>
+The Linux kernel console (accessed via Ctrl+Alt+F1 through F6 on a Linux machine) uses the Linux console font and keyboard mapping subsystem rather than a terminal emulator. Even though the kernel console has some Unicode support in modern kernels (it can display characters in the current console font), it does not support the full BMP, cannot render emoji, and has historically been unreliable for box-drawing characters outside Latin-1. The is-unicode-supported library uses TERM="linux" as its primary exclusion criterion on non-Windows platforms. In Termicap the locale check takes priority: a system with LANG=en_US.UTF-8 and TERM=linux has a UTF-8 locale despite the console limitation, so locale wins.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-UNI-005
+STATUS: Approved
+PRIORITY: Should
+TITLE: Windows Terminal Heuristics
+STATEMENT: >>>
+When the platform is identified as Windows (i.e., when the OS_TYPE environment variable in the snapshot equals "Windows_NT", case-insensitive), the detection function shall apply the following heuristics in order, returning Basic on the first match:
+
+  1. WT_SESSION is present (any value)       -- Windows Terminal (conhost replacement)
+  2. TERM_PROGRAM equals "vscode"            -- VS Code integrated terminal
+  3. TERM is present and equals one of:
+       "xterm-256color", "alacritty",
+       "rxvt-unicode", "rxvt-unicode-256color"
+  4. TERMINAL_EMULATOR equals
+     "JetBrains-JediTerm"                   -- IntelliJ/PyCharm terminal
+
+If none of the above conditions matches on a Windows platform, and locale inspection did not establish a positive level, the function shall return None.
+<<<
+COMMENT: >>>
+On Windows, the legacy conhost.exe console host does not support full Unicode rendering via standard ANSI escape sequences. The heuristics listed above identify terminal emulators known to support Unicode on Windows. WT_SESSION is set by Windows Terminal (the modern replacement for conhost). TERM_PROGRAM=vscode is set by the VS Code terminal. JetBrains-JediTerm is the terminal emulator embedded in all JetBrains IDEs. These heuristics follow the is-unicode-supported library's documented Windows detection algorithm. Platform detection itself uses OS_TYPE rather than a compile-time switch, keeping the detection function a pure function of its environment snapshot.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-UNI-006
+STATUS: Approved
+PRIORITY: Should
+TITLE: CI Environment Unicode Awareness
+STATEMENT: >>>
+The detection function shall recognise known continuous integration environments as Unicode-capable and shall return at least Basic when any of the following variables is present in the supplied snapshot:
+
+  GITHUB_ACTIONS (any value)
+  GITEA_ACTIONS  (any value)
+  CIRCLECI       (any value)
+
+CI detection shall be applied after locale inspection and after the TERM=linux exclusion check. When a CI variable is detected, it establishes a minimum floor of Basic that cannot be reduced by the TERM=linux rule or by an absent locale variable.
+<<<
+COMMENT: >>>
+Modern CI environments (GitHub Actions, Gitea Actions, CircleCI) provision runners with UTF-8 locales and terminal emulators that support Unicode. Treating them as Unicode-capable by default prevents CI output from degrading to ASCII-only symbols when the job's locale has not been explicitly configured. Only CI environments with documented Unicode support are included; generic CI=true is deliberately excluded because it covers too broad a range of environments (including legacy systems) to be a reliable positive signal for Unicode.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-UNI-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Provability for Detection Function
+STATEMENT: >>>
+The Detect_Unicode_Level function shall be SPARK-provable at Silver level. Its SPARK contract shall specify Global => null, confirming it reads no global variables and produces no side effects beyond its return value. All intermediate results shall use bounded, enumeration-typed expressions to avoid range violations. The function body shall be free of dynamic allocation and unbounded loops, ensuring the SPARK prover can discharge all proof obligations without manual lemmas.
+
+The package spec containing the Unicode_Level type and Detect_Unicode_Level function shall be compiled with SPARK_Mode => On. No FFI calls shall appear in the detection function; the function shall operate exclusively on the Environment snapshot passed as a parameter.
+<<<
+COMMENT: >>>
+Unicode detection has no inherent requirement for OS calls: it operates entirely on environment variable strings already captured in the snapshot. This makes it fully SPARK-verifiable at Silver level without any SPARK_Mode => Off boundary, in contrast to TTY detection (FUNC-TTY-005) and dimensions detection (FUNC-DIM-007). The wcwidth() probing path (Method 3 in the reference algorithm) is explicitly out of scope for v1 because it requires an FFI call; it would be implemented in a separate package body with SPARK_Mode => Off if adopted in a future version.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-UNI-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detection Priority Order
+STATEMENT: >>>
+The Detect_Unicode_Level function shall evaluate environment signals in the following strict priority order, from highest to lowest:
+
+  1. Locale inspection    -- LC_ALL > LC_CTYPE > LANG containing "UTF-8"
+                            (case-insensitive); positive result returns Basic
+  2. CI heuristics        -- GITHUB_ACTIONS, GITEA_ACTIONS, CIRCLECI present;
+                            establishes a floor of Basic
+  3. TERM=linux exclusion -- after locale/CI checks; if TERM is "linux" and no
+                            positive level established, returns None
+  4. Windows heuristics   -- WT_SESSION, TERM_PROGRAM=vscode, specific TERM
+                            values, TERMINAL_EMULATOR=JetBrains-JediTerm;
+                            returns Basic on first match
+  5. Default              -- return None
+
+A floor established by a higher-priority rule cannot be lowered by a lower-priority rule. Specifically: a UTF-8 locale (step 1) or a CI environment (step 2) returning Basic cannot be reduced to None by TERM=linux (step 3).
+<<<
+COMMENT: >>>
+The combined algorithm places locale inspection first because it is the most portable and authoritative signal on POSIX systems. CI heuristics are placed second (above TERM=linux) so that CI pipelines with UTF-8 locales or without explicit TERM=linux are not incorrectly penalised. The TERM=linux exclusion applies only when no positive evidence has been found. Windows heuristics are last because they are positive signals that override the default None in an environment where locale variables may not be set. This ordering follows the Termicap architecture decision to use locale as primary and env heuristic as secondary/fallback, as specified in the global synthesis (section 2.10).
+<<<
