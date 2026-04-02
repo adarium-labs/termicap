@@ -213,9 +213,97 @@ Detection Logic                       [SPARK Silver, Global => null]
 - `Global => null` contracts are preserved on detection functions.
 - This is the canonical integration pattern for `Termicap.TTY` with `Termicap.Environment`.
 
+## Scenario 8: Color Level Detection Flow
+
+Full end-to-end scenario showing how a client calls `Detect_Color_Level`. The environment snapshot and TTY status are obtained separately (Scenarios 1 and 5) and then passed into the pure SPARK function.
+
+```
+Application Init (Ada-only region)
+  │
+  │  Env    : Environment;
+  │  Is_TTY : Boolean;
+  │
+  │  Capture_Current (Env);             -- Scenario 1 (SPARK_Mode => Off)
+  │  Is_TTY := Termicap.TTY.Is_TTY (Stdout);  -- Scenario 5 (SPARK_Mode => Off)
+  │
+  ▼
+Termicap.Color.Detect_Color_Level (Env, Is_TTY)   [SPARK Silver, Global => null]
+  │
+  │  Step 1: Contains (Env, "FORCE_COLOR")?
+  │    Yes → Classify value → set Floor, Force_Set := True (or return None)
+  │    No  → continue
+  │
+  │  Step 2: not Force_Set → Parse_Clicolor_Force (Env)
+  │    CLICOLOR_FORCE present and ≠ "0" → Floor := Basic_16, Force_Set := True
+  │
+  │  Step 3: not Force_Set and Contains (Env, "NO_COLOR") → return None
+  │
+  │  Step 4: Equal_Case_Insensitive (Value (Env, "TERM"), "dumb")
+  │    True → return Floor   (None unless steps 1–2 set it)
+  │
+  │  Step 5: Detect_CI_Color (Env)
+  │    GITHUB_ACTIONS="true" / GITEA_ACTIONS / CIRCLECI → Heuristic := True_Color
+  │    TRAVIS / APPVEYOR / GITLAB_CI / BUILDKITE / DRONE → Heuristic := Basic_16
+  │    CI present (generic) → Heuristic := Basic_16
+  │
+  │  Step 6: not Is_TTY and Floor = None and Heuristic = None → return None
+  │
+  │  Step 7: Detect_Colorterm (Env)
+  │    COLORTERM = "truecolor"/"24bit":
+  │      if TERM starts with "screen" and TERM_PROGRAM ≠ "tmux"
+  │        → cap at Extended_256 (multiplexer cannot pass TrueColor)
+  │      else → True_Color
+  │    COLORTERM present (other value) → Basic_16
+  │    → Heuristic := Color_Level'Max (Heuristic, result)
+  │
+  │  Step 8: Detect_Term_Program (Env)
+  │    TERM_PROGRAM = "iTerm.app":
+  │      TERM_PROGRAM_VERSION starts with '3' or higher → True_Color
+  │      otherwise → Extended_256
+  │    TERM_PROGRAM = "Apple_Terminal" / "vscode" → Extended_256
+  │    → Heuristic := Color_Level'Max (Heuristic, result)
+  │
+  │  Step 9: Detect_Term_Pattern (Env)
+  │    TERM ends with "-256color" or "-256" → Extended_256
+  │    TERM contains xterm/screen/vt100/vt220/rxvt/color/ansi/cygwin/linux → Basic_16
+  │    → Heuristic := Color_Level'Max (Heuristic, result)
+  │
+  │  Step 10: Has_Clicolor (Env)
+  │    CLICOLOR present and ≠ "0" → Heuristic := Color_Level'Max (Heuristic, Basic_16)
+  │
+  │  Step 11: return Color_Level'Max (Floor, Heuristic)
+  │
+  └──► Color_Level result (None / Basic_16 / Extended_256 / True_Color)
+```
+
+**Key properties:**
+
+- `Detect_Color_Level` is a pure function: no OS calls, no global state. GNATprove verifies `Global => null` on the spec.
+- The `Floor` variable accumulates force overrides (steps 1–2). The `Heuristic` variable accumulates evidence-based detections (steps 5, 7–10). The final result is `Color_Level'Max (Floor, Heuristic)`, ensuring a force override can never be undercut by a heuristic.
+- All `Contains` and `Value` calls delegate to `Termicap.Environment` (Scenarios 2 and the query flow), which are themselves `Global => null`.
+- The multiplexer cap (step 7) requires both a `TERM` prefix check (`screen`) and a `TERM_PROGRAM` value check (`tmux`), demonstrating multi-variable coordination within a single pure function.
+- Integration test pattern (no OS, no TTY):
+
+```ada
+declare
+   Env : Environment := EMPTY_ENVIRONMENT;
+   Level : Color_Level;
+begin
+   Insert (Env, "COLORTERM", "truecolor");
+   Level := Detect_Color_Level (Env, Is_TTY => True);
+   pragma Assert (Level = True_Color);
+
+   --  NO_COLOR overrides even truecolor claim
+   Insert (Env, "NO_COLOR", "");
+   Level := Detect_Color_Level (Env, Is_TTY => True);
+   pragma Assert (Level = None);
+end;
+```
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
 - **Tech Spec F1** (`docs/tech-specs/f1-environment-variable-abstraction.md`): Design rationale, especially Sections C (Type Design) and D (SPARK Strategy)
 - **Tech Spec F2** (`docs/tech-specs/f2-tty-detection.md`): TTY detection design rationale
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006
+- **Tech Spec F3** (`docs/tech-specs/f3-color-level-detection.md`): Color level detection design rationale
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015

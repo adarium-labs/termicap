@@ -9,10 +9,10 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Environment          [SPARK Silver] — environment snapshot type, query/builder API
 │   └── Termicap.Environment.Capture  [SPARK_Mode => Off] — sole OS FFI boundary
 ├── Termicap.TTY                  [spec: SPARK, body: SPARK_Mode => Off] — TTY detection
-└── (future: Termicap.Detection, Termicap.Standards, Termicap.Platform …)
+└── Termicap.Color                [SPARK Silver] — color level detection (11-step cascade)
 ```
 
-All downstream detection packages (`Termicap.Detection`, `Termicap.Standards`, etc.) will depend on `Termicap.Environment` and `Termicap.TTY` as foundational building blocks. The root package remains a namespace-only package.
+`Termicap.Color` is the first detection package. It depends on `Termicap.Environment` and does **not** depend on `Termicap.TTY` — TTY status is passed as a plain `Boolean` parameter. The root package remains a namespace-only package.
 
 ## Level 2: Package Descriptions
 
@@ -155,7 +155,55 @@ pragma Import (C, C_Isatty, "isatty");
 
 #### Relationship to Other Packages
 
-`Termicap.TTY` has **no dependency** on `Termicap.Environment`. They are independent foundational building blocks. Downstream detection packages will call `Is_TTY` once from an Ada-only region and pass the result as a plain `Boolean` parameter into SPARK-provable detection functions.
+`Termicap.TTY` has **no dependency** on `Termicap.Environment`. They are independent foundational building blocks. Downstream detection packages call `Is_TTY` once from an Ada-only region and pass the result as a plain `Boolean` parameter into SPARK-provable detection functions.
+
+---
+
+### `Termicap.Color`
+
+**Responsibility:** Determines the color output capability of a terminal from an immutable environment snapshot and a TTY status flag. Performs no OS calls and reads no global state.
+
+The detection algorithm is a single pure function implementing an 11-step priority cascade. All logic consists of enum comparisons and string matching via the `Termicap.Environment` API; there is no FFI. The package is fully SPARK Silver provable.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-color.ads`, `src/termicap-color.adb` |
+| SPARK_Mode | On (spec and body) |
+| Dependencies | `Termicap.Environment` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Color_Level` | Ordered four-value enumeration: `None < Basic_16 < Extended_256 < True_Color`. Supports `Color_Level'Max` for floor operations throughout the cascade. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Detect_Color_Level` | Function | `Global => null` | FUNC-CLR-002, FUNC-CLR-014, FUNC-CLR-015 |
+
+#### Detection Cascade
+
+`Detect_Color_Level` implements an 11-step priority cascade (FUNC-CLR-015):
+
+| Step | Check | Effect |
+|------|-------|--------|
+| 1 | `FORCE_COLOR` | Sets a floor level (0/false → return None immediately; 1/true/empty → Basic_16; 2 → Extended_256; 3 → True_Color) |
+| 2 | `CLICOLOR_FORCE` (if step 1 inactive) | Sets floor to Basic_16 unless value is `"0"` |
+| 3 | `NO_COLOR` (if no force override) | Return None immediately |
+| 4 | `TERM=dumb` | Return floor (None unless steps 1–2 set it) |
+| 5 | CI environment | Accumulate heuristic: GITHUB_ACTIONS/GITEA_ACTIONS/CIRCLECI → True_Color; TRAVIS/APPVEYOR/GITLAB_CI/BUILDKITE/DRONE/CI → Basic_16 |
+| 6 | TTY gate | If not a TTY and no force or CI heuristic, return None |
+| 7 | `COLORTERM` | Accumulate heuristic: `truecolor`/`24bit` → True_Color (capped at Extended_256 under `screen` multiplexer); any other value → Basic_16 |
+| 8 | `TERM_PROGRAM` | Accumulate heuristic: iTerm.app v3+ → True_Color; iTerm.app <v3/Apple_Terminal/vscode → Extended_256 |
+| 9 | `TERM` patterns | Accumulate heuristic: `-256color`/`-256` suffix → Extended_256; xterm/screen/vt100/vt220/rxvt/color/ansi/cygwin/linux substring → Basic_16 |
+| 10 | `CLICOLOR` (non-zero) | Raise heuristic floor to Basic_16 |
+| 11 | Default | Return `Color_Level'Max (Floor, Heuristic)` |
+
+#### Relationship to Other Packages
+
+`Termicap.Color` depends on `Termicap.Environment` (for `Contains`, `Value`, and `Equal_Case_Insensitive`) and has **no dependency** on `Termicap.TTY`. TTY status enters as a plain `Boolean` parameter, keeping the POSIX FFI call outside the SPARK verification perimeter.
 
 ---
 
@@ -170,6 +218,13 @@ pragma Import (C, C_Isatty, "isatty");
 │   │  Contains, Value, Insert,                   │  │
 │   │  Equal_Case_Insensitive, Value_Matches       │  │
 │   │  Global => null on all subprograms           │  │
+│   └─────────────────────────────────────────────┘  │
+│                          ▲                          │
+│   Termicap.Color (spec + body)                      │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Color_Level type                           │  │
+│   │  Detect_Color_Level (Env, Is_TTY : Boolean) │  │
+│   │  Global => null — 11-step cascade           │  │
 │   └─────────────────────────────────────────────┘  │
 │                                                     │
 │   Termicap.TTY (spec only)                          │
@@ -198,13 +253,14 @@ pragma Import (C, C_Isatty, "isatty");
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current` and the `Termicap.TTY` body are the only points where OS calls occur. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations stay within the provable zone.
+The SPARK boundary is deliberately narrow: `Capture_Current` and the `Termicap.TTY` body are the only points where OS calls occur. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color` — stay within the provable zone.
 
 ## Related Documents
 
 - **ADR-0001** (`docs/adr/0001-environment-snapshot-storage-strategy.md`): Container choice rationale for `Env_Maps`
 - **ADR-0002** (`docs/adr/0002-multi-candidate-matching-spark-boundary.md`): `Value_Matches` / `String_Vector` design decision
 - **ADR-0003** (`docs/adr/0003-tty-detection-package-structure.md`): TTY package structure and `TTY_Status` type decision
-- **Tech Spec F1** (`docs/tech-specs/f1-environment-variable-abstraction.md`): Full design rationale
+- **Tech Spec F1** (`docs/tech-specs/f1-environment-variable-abstraction.md`): Full design rationale for `Termicap.Environment`
 - **Tech Spec F2** (`docs/tech-specs/f2-tty-detection.md`): TTY detection design rationale
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006
+- **Tech Spec F3** (`docs/tech-specs/f3-color-level-detection.md`): Color level detection design rationale
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015

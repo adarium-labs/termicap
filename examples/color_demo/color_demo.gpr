@@ -1,13 +1,13 @@
 with "termicap.gpr";
 
-project TTY_Demo is
+project Color_Demo is
    for Source_Dirs use ("src/");
    for Object_Dir use "obj";
    for Exec_Dir use "bin";
-   for Main use ("tty_example.adb");
+   for Main use ("color_demo.adb");
    for Create_Missing_Dirs use "True";
 
    package Compiler is
       for Default_Switches ("Ada") use ("-gnat2022", "-gnatyM120");
    end Compiler;
-end TTY_Demo;
+end Color_Demo;

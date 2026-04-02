@@ -156,3 +156,212 @@ STATEMENT: >>>
 The library shall provide a convenience function that returns the TTY status for all three streams at once, reducing the number of FFI calls when multiple stream statuses are needed.
 <<<
 
+[REQUIREMENT]
+UID: FUNC-CLR-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Color_Level Enumeration Type
+STATEMENT: >>>
+The library shall provide a Color_Level enumeration type with exactly four ordered values representing the supported color capabilities of a terminal:
+
+  None          -- no color output; plain text only
+  Basic_16      -- 8 standard + 8 bright ANSI colors via SGR codes (e.g., ESC[31m)
+  Extended_256  -- 256-color palette via SGR 38;5;N sequences
+  True_Color    -- 16,777,216 colors via SGR 38;2;R;G;B sequences
+
+The values shall be ordered such that None < Basic_16 < Extended_256 < True_Color, allowing comparisons and max/min operations to express capability floors and ceilings.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Color Level Detection Function Signature
+STATEMENT: >>>
+The library shall provide a pure function Detect_Color_Level that accepts an Environment snapshot and a Boolean indicating whether the target stream is connected to a TTY, and returns a Color_Level value. The function shall perform no OS calls, read no global state, and produce no side effects beyond its return value. All detection logic shall operate exclusively on the supplied parameters.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: NO_COLOR Compliance
+STATEMENT: >>>
+When the NO_COLOR environment variable is present in the Environment snapshot — regardless of its value, including the empty string — the detection function shall return Color_Level None, unless a FORCE_COLOR override establishes a non-zero floor (see FUNC-CLR-004). The mere presence of NO_COLOR is sufficient to suppress color output, in conformance with the no-color.org specification.
+<<<
+COMMENT: >>>
+The no-color.org specification states: "When set, callers should not add ANSI color escape codes to output." The key criterion is presence, not value. Many libraries incorrectly require a non-empty value; Termicap follows the authoritative spec. NO_COLOR is checked after FORCE_COLOR and CLICOLOR_FORCE are evaluated, so those overrides can still defeat it when explicitly set.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: FORCE_COLOR Override
+STATEMENT: >>>
+When the FORCE_COLOR environment variable is present in the Environment snapshot, the detection function shall parse its value and apply the result as a minimum color level floor that cannot be reduced by any other heuristic. The mapping shall be:
+
+  "3"             -> True_Color
+  "2"             -> Extended_256
+  "1"             -> Basic_16
+  "0" or "false"  -> None (disables color, disables floor)
+  "true"          -> Basic_16
+  "" (empty)      -> Basic_16
+
+Any other non-empty value not listed above shall be treated as Basic_16. When FORCE_COLOR establishes a non-zero floor, it overrides NO_COLOR, TERM=dumb, and the TTY gate.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-005
+STATUS: Approved
+PRIORITY: Should
+TITLE: CLICOLOR_FORCE Support
+STATEMENT: >>>
+When the CLICOLOR_FORCE environment variable is present in the Environment snapshot and its value is not "0", the detection function shall apply a minimum floor of Basic_16. This floor is superseded by any higher floor established by FORCE_COLOR, and is checked before NO_COLOR and the TTY gate, allowing it to enable color in piped contexts.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: TERM=dumb Handling
+STATEMENT: >>>
+When the TERM environment variable in the Environment snapshot equals "dumb" (case-insensitive), the detection function shall return Color_Level None, unless a non-zero floor has been established by FORCE_COLOR or CLICOLOR_FORCE. Dumb terminals do not support ANSI escape sequences; the TERM=dumb value is an explicit declaration of this limitation.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: TTY Gate
+STATEMENT: >>>
+When the stream is not connected to a TTY (the is_tty parameter is False) and no force override has established a non-zero minimum floor, the detection function shall return Color_Level None. Programs writing to pipes or files shall not emit ANSI escape sequences unless explicitly overridden by FORCE_COLOR or CLICOLOR_FORCE.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: COLORTERM Detection
+STATEMENT: >>>
+The detection function shall inspect the COLORTERM environment variable in the Environment snapshot and apply the following rules (comparisons case-insensitive):
+
+  "truecolor" or "24bit" -> True_Color, subject to multiplexer cap (see FUNC-CLR-013)
+  any other non-empty value -> at least Basic_16
+
+COLORTERM is set by terminal emulators to advertise their color capability and is considered a reliable indicator when present.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: TERM-Based Color Detection
+STATEMENT: >>>
+The detection function shall inspect the TERM environment variable in the Environment snapshot and apply the following pattern-matching rules:
+
+  TERM ends with "-256color" or "-256"             -> at least Extended_256
+  TERM matches any of: xterm, screen, vt100, vt220,
+    rxvt, color, ansi, cygwin, linux (substring or
+    exact match, case-insensitive)                 -> at least Basic_16
+
+These patterns cover the most common POSIX terminal type identifiers. TERM-based detection provides a reliable fallback when COLORTERM is absent.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-010
+STATUS: Approved
+PRIORITY: Should
+TITLE: TERM_PROGRAM Detection
+STATEMENT: >>>
+The detection function shall inspect the TERM_PROGRAM environment variable in the Environment snapshot and apply the following terminal-program-level mappings:
+
+  "iTerm.app" with TERM_PROGRAM_VERSION >= "3"  -> True_Color
+  "iTerm.app" with version < "3" or absent      -> Extended_256
+  "Apple_Terminal"                               -> Extended_256
+  "vscode"                                       -> Extended_256
+
+TERM_PROGRAM is set by macOS terminal emulators and VS Code to identify the host application, providing a more specific capability signal than TERM alone.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-011
+STATUS: Approved
+PRIORITY: Should
+TITLE: CI Environment Detection
+STATEMENT: >>>
+The detection function shall recognize known continuous integration environments by inspecting the Environment snapshot, and shall apply a color level appropriate for that environment. CI environments often support color output despite not having a TTY. Detection shall apply before the TTY gate. The following mappings shall apply:
+
+  GITHUB_ACTIONS="true" or GITEA_ACTIONS present  -> True_Color
+  CIRCLECI present                                  -> True_Color
+  TRAVIS present                                    -> Basic_16
+  APPVEYOR present                                  -> Basic_16
+  GITLAB_CI present                                 -> Basic_16
+  BUILDKITE present                                 -> Basic_16
+  DRONE present                                     -> Basic_16
+  CI present (generic fallback)                     -> Basic_16 (minimum)
+
+CI detection shall only apply when the CI-specific variable is present; the generic CI variable alone yields Basic_16 only when no more specific variable matches.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-012
+STATUS: Approved
+PRIORITY: Could
+TITLE: CLICOLOR Support
+STATEMENT: >>>
+The detection function shall inspect the CLICOLOR environment variable in the Environment snapshot. When CLICOLOR is present and its value is not "0", the function shall apply a minimum floor of Basic_16 for the final default-detection phase. CLICOLOR is a weaker signal than CLICOLOR_FORCE and is applied after the TTY gate: it enables color when present on a TTY, but does not force color in piped contexts.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-013
+STATUS: Approved
+PRIORITY: Should
+TITLE: Multiplexer Awareness
+STATEMENT: >>>
+The detection function shall apply terminal multiplexer constraints when inferring color level from COLORTERM or TERM_PROGRAM:
+
+  When TERM starts with "screen" and TERM_PROGRAM is not "tmux", the maximum
+  reportable level shall be Extended_256, even if COLORTERM is "truecolor" or
+  "24bit". The screen multiplexer cannot pass TrueColor sequences through to
+  the host terminal.
+
+  When TERM_PROGRAM is "tmux", the multiplexer cap does not apply; tmux can
+  be configured to pass TrueColor sequences, and a COLORTERM=truecolor
+  declaration shall yield True_Color.
+
+Force overrides (FORCE_COLOR, CLICOLOR_FORCE) are not subject to the multiplexer cap.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Provability for Detection Function
+STATEMENT: >>>
+The Detect_Color_Level function shall be SPARK-provable at Silver level. Its SPARK contract shall specify Global => null, confirming it reads no global variables and produces no side effects beyond its return value. All intermediate results shall use bounded, enumeration-typed expressions to avoid range violations. The function body shall be free of dynamic allocation and unbounded loops, ensuring the SPARK prover can discharge all proof obligations without manual lemmas.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CLR-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detection Priority Order
+STATEMENT: >>>
+The Detect_Color_Level function shall evaluate environment signals in the following strict priority order, from highest to lowest:
+
+  1. FORCE_COLOR          -- explicit numeric or boolean floor override
+  2. CLICOLOR_FORCE       -- forces at least Basic_16, superseded by FORCE_COLOR
+  3. NO_COLOR             -- presence forces None (unless overridden by step 1-2)
+  4. TERM=dumb            -- forces None (unless overridden by step 1-2)
+  5. CI environment vars  -- enable color in known CI environments before TTY gate
+  6. TTY gate             -- non-TTY with no floor returns None
+  7. COLORTERM            -- strong emulator-level declaration
+  8. TERM_PROGRAM         -- application-level terminal identification
+  9. TERM suffix/pattern  -- terminal type string heuristics
+  10. CLICOLOR            -- weak opt-in, TTY only
+  11. Default             -- return None
+
+Later stages in the cascade may only raise the color level to the maximum established by earlier positive signals; no stage may lower a level that was set by a higher-priority rule, with the sole exception that NO_COLOR (step 3) and the TTY gate (step 6) force None when no floor has been established by steps 1-2.
+<<<
+
