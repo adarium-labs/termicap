@@ -8,8 +8,9 @@ Static structure of the Termicap library — packages, SPARK boundary layers, an
 Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Environment          [SPARK Silver] — environment snapshot type, query/builder API
 │   └── Termicap.Environment.Capture  [SPARK_Mode => Off] — sole OS FFI boundary
-├── Termicap.TTY                  [spec: SPARK, body: SPARK_Mode => Off] — TTY detection
-├── Termicap.Color                [SPARK Silver] — color level detection (11-step cascade)
+├── Termicap.Override             [spec: SPARK, body: mixed] — process-wide color override, Override_Mode type, Parse_Color_Flag, Scoped_Override
+├── Termicap.TTY                  [spec: SPARK, body: SPARK_Mode => Off] — TTY detection (depends on Termicap.Override)
+├── Termicap.Color                [spec: SPARK, body: SPARK Silver] — color level detection (11-step cascade, depends on Termicap.Override)
 ├── Termicap.Downsampling         [SPARK Gold]   — color downsampling conversions (TrueColor/256-color to lower levels)
 ├── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
 ├── Termicap.Sigwinch             [SPARK_Mode => Off] — SIGWINCH resize notification, self-pipe, protected object
@@ -17,7 +18,7 @@ Termicap                          (root namespace — no types or subprograms)
 └── Termicap.Terminal_Id          [spec: SPARK, body: SPARK_Mode => Off] — terminal identity detection (8-step cascade)
 ```
 
-`Termicap.Color`, `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` are detection packages that depend on `Termicap.Environment`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, or any OS interface. The root package remains a namespace-only package.
+`Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. The root package remains a namespace-only package.
 
 ## Level 2: Package Descriptions
 
@@ -114,6 +115,66 @@ This package has `SPARK_Mode => Off` because `Ada.Environment_Variables` perform
 |-----------|------|-------------|-------------|
 | `Capture_Current` | Procedure | Reads the live process environment and populates an `Environment` snapshot via `Ada.Environment_Variables.Iterate`. | FUNC-ENV-004 |
 
+### `Termicap.Override`
+
+**Responsibility:** Provides a process-wide color output override that short-circuits automatic terminal detection. Applications set an `Override_Mode` value (e.g., in response to a `--color` flag) and all subsequent calls to `Detect_Color_Level` and `Is_TTY` return immediately without executing their detection logic.
+
+The package spec and all pure functions carry `SPARK_Mode => On`. The protected object that stores the override state and the `Scoped_Override` `Initialize`/`Finalize` procedures are compiled with `SPARK_Mode => Off` because Ada protected types and `Ada.Finalization` are outside the SPARK 2014 language subset. An `Abstract_State` annotation (`Override_State`, `External => (Async_Readers, Async_Writers)`) allows SPARK-annotated callers to reference the state in their own `Global` aspects without the prover needing to reason about tasking.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-override.ads`, `src/termicap-override.adb` |
+| SPARK_Mode | On (spec and pure functions); Off (protected object, `Set_Override`/`Get_Override` bodies, `Initialize`/`Finalize`) |
+| Dependencies | `Ada.Finalization` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Override_Mode` | Five-literal flat enumeration: `Auto`, `Force_None`, `Force_Basic`, `Force_256`, `Force_True_Color`. `Auto` means no override is active; the four `Force_*` literals map directly onto `Color_Level` values and bypass all detection logic. |
+| `Scoped_Override` | Discriminated `Limited_Controlled` type. Discriminant `Mode : Override_Mode` specifies the override to install. On declaration (`Initialize`), captures the current mode and installs `Mode`. On scope exit (`Finalize`), restores the previously captured mode. `Limited_Controlled` (not `Controlled`) prevents copying, which would cause a double-restore. |
+
+#### Override_Mode — Five-Literal Enumeration
+
+| Literal | Color_Level Equivalent | Typical CLI Flag |
+|---------|----------------------|------------------|
+| `Auto` | *(no override — normal detection)* | `--color=auto` |
+| `Force_None` | `None` | `--color=never` |
+| `Force_Basic` | `Basic_16` | `--color=true`, `--color=1` |
+| `Force_256` | `Extended_256` | `--color=256`, `--color=2` |
+| `Force_True_Color` | `True_Color` | `--color=always`, `--color=truecolor` |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Set_Override` | Procedure | `Global => (In_Out => Override_State)` | FUNC-OVR-002 |
+| `Get_Override` | Function | `Global => (Input => Override_State)` | FUNC-OVR-003 |
+| `Reset_Override` | Procedure | `Global => (In_Out => Override_State)`, `Post => Get_Override = Auto` | FUNC-OVR-011 |
+| `Parse_Color_Flag` | Function | `Global => null` | FUNC-OVR-013 |
+
+#### `Parse_Color_Flag` — CLI Alias Table
+
+| Input strings (case-insensitive) | Result |
+|----------------------------------|--------|
+| `"never"`, `"false"`, `"off"`, `"0"` | `Force_None` |
+| `"true"`, `"1"`, `"16"` | `Force_Basic` |
+| `"2"`, `"256"` | `Force_256` |
+| `"always"`, `"truecolor"`, `"16m"`, `"3"` | `Force_True_Color` |
+| `"auto"` or any unrecognised string | `Auto` |
+
+#### Thread Safety
+
+`Set_Override`, `Get_Override`, and `Reset_Override` delegate to an Ada protected object in the package body. All three are safe to call from multiple Ada tasks concurrently. The `Abstract_State` annotation marks the state as `Async_Readers` and `Async_Writers` so GNATprove does not reject SPARK callers that reference `Override_State` in their `Global` aspects.
+
+`Scoped_Override` is **not** safe for nested guards across tasks. Two tasks creating overlapping `Scoped_Override` objects will interleave their save/restore sequences. The recommended use is single-task scope guards (e.g., CLI flag setup at process startup).
+
+#### Relationship to Other Packages
+
+`Termicap.Override` has **no dependency** on any other Termicap package. It is a leaf in the dependency graph. `Termicap.Color` and `Termicap.TTY` each depend on `Termicap.Override` and reference `Override_State` in the `Global` aspects of their main detection functions.
+
+---
+
 ### `Termicap.TTY`
 
 **Responsibility:** Detects whether standard I/O streams (stdin, stdout, stderr) are connected to an interactive terminal using the POSIX `isatty()` system call.
@@ -137,7 +198,7 @@ The package spec is SPARK-annotated for type safety and contract documentation. 
 
 | Subprogram | Kind | Description | Requirement |
 |-----------|------|-------------|-------------|
-| `Is_TTY` | Function | Returns `True` if the specified stream is connected to an interactive terminal. Returns `False` on error, never raises. | FUNC-TTY-002, FUNC-TTY-003, FUNC-TTY-004 |
+| `Is_TTY` | Function | Returns `True` if the specified stream is connected to an interactive terminal (or if the override forces color on). Returns `False` on error or when the override forces color off. Never raises. `Global => (Input => Termicap.Override.Override_State)` | FUNC-TTY-002, FUNC-TTY-003, FUNC-TTY-004 |
 | `Query_All` | Function | Returns `TTY_Status` with the TTY state of all three streams. | FUNC-TTY-006 |
 
 #### Internal: `FD_MAP`
@@ -160,7 +221,7 @@ pragma Import (C, C_Isatty, "isatty");
 
 #### Relationship to Other Packages
 
-`Termicap.TTY` has **no dependency** on `Termicap.Environment`. They are independent foundational building blocks. Downstream detection packages call `Is_TTY` once from an Ada-only region and pass the result as a plain `Boolean` parameter into SPARK-provable detection functions.
+`Termicap.TTY` has **no dependency** on `Termicap.Environment`. It depends on `Termicap.Override` to perform the override short-circuit check at the top of `Is_TTY`. Downstream detection packages call `Is_TTY` once from an Ada-only region and pass the result as a plain `Boolean` parameter into SPARK-provable detection functions.
 
 ---
 
@@ -285,15 +346,15 @@ On non-Unix platforms (including Windows), `Install` and `Uninstall` are no-ops,
 
 ### `Termicap.Color`
 
-**Responsibility:** Determines the color output capability of a terminal from an immutable environment snapshot and a TTY status flag. Performs no OS calls and reads no global state.
+**Responsibility:** Determines the color output capability of a terminal from an immutable environment snapshot and a TTY status flag. Performs no OS calls. Reads the process-wide `Termicap.Override.Override_State` as the first step, returning immediately when an override is active.
 
-The detection algorithm is a single pure function implementing an 11-step priority cascade. All logic consists of enum comparisons and string matching via the `Termicap.Environment` API; there is no FFI. The package is fully SPARK Silver provable.
+The detection algorithm is a single function implementing an 11-step priority cascade preceded by an override check (step 0). All logic consists of enum comparisons and string matching via the `Termicap.Environment` API; there is no FFI. The package is SPARK Silver provable; the `Global` aspect on `Detect_Color_Level` references `Override_State` rather than `null` because the function reads the protected state.
 
 | Property | Value |
 |----------|-------|
 | Files | `src/termicap-color.ads`, `src/termicap-color.adb` |
 | SPARK_Mode | On (spec and body) |
-| Dependencies | `Termicap.Environment` |
+| Dependencies | `Termicap.Environment`, `Termicap.Override` |
 
 #### Key Types
 
@@ -305,14 +366,15 @@ The detection algorithm is a single pure function implementing an 11-step priori
 
 | Subprogram | Kind | SPARK Contract | Requirements |
 |-----------|------|---------------|--------------|
-| `Detect_Color_Level` | Function | `Global => null` | FUNC-CLR-002, FUNC-CLR-014, FUNC-CLR-015 |
+| `Detect_Color_Level` | Function | `Global => (Input => Termicap.Override.Override_State)` | FUNC-CLR-002, FUNC-CLR-014, FUNC-CLR-015 |
 
 #### Detection Cascade
 
-`Detect_Color_Level` implements an 11-step priority cascade (FUNC-CLR-015):
+`Detect_Color_Level` implements a step-0 override check followed by an 11-step environment-variable cascade (FUNC-CLR-015):
 
 | Step | Check | Effect |
 |------|-------|--------|
+| 0 | `Termicap.Override.Get_Override` | If override ≠ `Auto`, return the mapped `Color_Level` immediately; skip all remaining steps. |
 | 1 | `FORCE_COLOR` | Sets a floor level (0/false → return None immediately; 1/true/empty → Basic_16; 2 → Extended_256; 3 → True_Color) |
 | 2 | `CLICOLOR_FORCE` (if step 1 inactive) | Sets floor to Basic_16 unless value is `"0"` |
 | 3 | `NO_COLOR` (if no force override) | Return None immediately |
@@ -327,7 +389,7 @@ The detection algorithm is a single pure function implementing an 11-step priori
 
 #### Relationship to Other Packages
 
-`Termicap.Color` depends on `Termicap.Environment` (for `Contains`, `Value`, and `Equal_Case_Insensitive`) and has **no dependency** on `Termicap.TTY`. TTY status enters as a plain `Boolean` parameter, keeping the POSIX FFI call outside the SPARK verification perimeter.
+`Termicap.Color` depends on `Termicap.Environment` (for `Contains`, `Value`, and `Equal_Case_Insensitive`) and on `Termicap.Override` (for the step-0 override short-circuit). It has **no dependency** on `Termicap.TTY`. TTY status enters as a plain `Boolean` parameter, keeping the POSIX FFI call outside the SPARK verification perimeter.
 
 ---
 
@@ -473,13 +535,34 @@ All functions are pure integer arithmetic over bounded subtypes. The entire pack
 │   │  Equal_Case_Insensitive, Value_Matches       │  │
 │   │  Global => null on all subprograms           │  │
 │   └─────────────────────────────────────────────┘  │
-│                          ▲                          │
-│   Termicap.Color (spec + body)                      │
+│                                                     │
+│   Termicap.Override (spec + pure functions)         │
 │   ┌─────────────────────────────────────────────┐  │
-│   │  Color_Level type                           │  │
-│   │  Detect_Color_Level (Env, Is_TTY : Boolean) │  │
-│   │  Global => null — 11-step cascade           │  │
+│   │  Override_Mode type (five literals)         │  │
+│   │  Set_Override / Get_Override /              │  │
+│   │    Reset_Override (delegate to protected    │  │
+│   │    object — bodies are SPARK_Mode => Off)   │  │
+│   │  Parse_Color_Flag — Global => null (Gold)   │  │
+│   │  Abstract_State: Override_State (External)  │  │
 │   └─────────────────────────────────────────────┘  │
+│                          ▲  ▲                       │
+│                          │  └──────────────────┐   │
+│   Termicap.Color (spec + body)                  │   │
+│   ┌─────────────────────────────────────────┐   │   │
+│   │  Color_Level type                       │   │   │
+│   │  Detect_Color_Level (Env, Is_TTY)       │   │   │
+│   │  Global => (Input => Override_State)    │   │   │
+│   │  Step 0: override check; steps 1–11:   │   │   │
+│   │    env-var cascade                      │   │   │
+│   └─────────────────────────────────────────┘   │   │
+│                                                  │   │
+│   Termicap.TTY (spec only)                       │   │
+│   ┌─────────────────────────────────────────┐   │   │
+│   │  Stream_Kind, TTY_Status types          │   │   │
+│   │  Is_TTY, Query_All signatures           │   │   │
+│   │  Global => (Input => Override_State)    │   │   │
+│   └─────────────────────────────────────────┘   │   │
+│                                           └──────┘   │
 │   Termicap.Downsampling (spec + body) [Gold]        │
 │   ┌─────────────────────────────────────────────┐  │
 │   │  Color_Component, RGB,                      │  │
@@ -514,12 +597,6 @@ All functions are pure integer arithmetic over bounded subtypes. The entire pack
 │   │  Global => null — 8-step cascade            │  │
 │   │  (no Is_TTY parameter)                      │  │
 │   └─────────────────────────────────────────────┘  │
-│                                                     │
-│   Termicap.TTY (spec only)                          │
-│   ┌─────────────────────────────────────────────┐  │
-│   │  Stream_Kind, TTY_Status types              │  │
-│   │  Is_TTY, Query_All signatures               │  │
-│   └─────────────────────────────────────────────┘  │
 └────────────────────────────┬────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────┐
@@ -530,6 +607,16 @@ All functions are pure integer arithmetic over bounded subtypes. The entire pack
 │   │  Capture_Current                            │  │
 │   │  Ada.Environment_Variables.Iterate          │  │
 │   │  (OS syscall — not provable by GNATprove)   │  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Override (body — non-spec sections)      │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Protected object State: holds current      │  │
+│   │    Override_Mode; reader-writer semantics   │  │
+│   │  Set_Override / Get_Override bodies         │  │
+│   │  Scoped_Override.Initialize / Finalize      │  │
+│   │  (Ada protected + Ada.Finalization —        │  │
+│   │    outside SPARK 2014 subset)               │  │
 │   └─────────────────────────────────────────────┘  │
 │                                                     │
 │   Termicap.TTY (body)                               │
@@ -570,7 +657,7 @@ All functions are pure integer arithmetic over bounded subtypes. The entire pack
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, and the entirety of `Termicap.Sigwinch` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the spec contracts on `Get_Size` and `Detect_Terminal_Identity` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` is the only package where both spec and body are wholly outside the SPARK zone: its protected object, interrupt handler, and C FFI cannot be expressed in SPARK 2014.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, and the entirety of `Termicap.Sigwinch` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the spec contracts on `Get_Size` and `Detect_Terminal_Identity` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` is the only package where both spec and body are wholly outside the SPARK zone: its protected object, interrupt handler, and C FFI cannot be expressed in SPARK 2014.
 
 ## Related Documents
 
@@ -588,4 +675,6 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY`
 - **Tech Spec F6** (`docs/tech-specs/terminal-identification.md`): Terminal identification detection design rationale
 - **Tech Spec F7** (`docs/tech-specs/color-downsampling.md`): Color downsampling design rationale, algorithm survey, and type design decisions (ADR-0009)
 - **Tech Spec F8** (`docs/tech-specs/sigwinch.md`): SIGWINCH resize notification design rationale, self-pipe pattern, and C trampoline decision
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011
+- **Tech Spec F9** (`docs/tech-specs/override.md`): Global override feature design rationale, SPARK strategy, and framework survey
+- **ADR-0010** (`docs/adr/0010-override-mode-flat-enum.md`): Rationale for the five-literal flat enumeration over alternative override representations
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014

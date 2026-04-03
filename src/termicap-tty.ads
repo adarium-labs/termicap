@@ -25,6 +25,8 @@
 --    - @relation(FUNC-TTY-005): SPARK boundary
 --    - @relation(FUNC-TTY-006): Bulk TTY status query
 
+with Termicap.Override;
+
 package Termicap.TTY
   with SPARK_Mode
 is
@@ -57,7 +59,8 @@ is
    --  @relation(FUNC-TTY-002): Per-stream TTY detection
    --  @relation(FUNC-TTY-003): Uses POSIX isatty() internally
    --  @relation(FUNC-TTY-004): Returns False on error, never raises
-   function Is_TTY (Stream : Stream_Kind) return Boolean;
+   function Is_TTY (Stream : Stream_Kind) return Boolean
+   with Global => (Input => Termicap.Override.Override_State);
 
    ---------------------------------------------------------------------------
    --  Bulk Query (FUNC-TTY-006)

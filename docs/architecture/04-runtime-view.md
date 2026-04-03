@@ -135,7 +135,7 @@ Termicap.Environment                [SPARK Silver, Global => null]
 
 ## Scenario 5: TTY Detection Flow
 
-Executed at detection time to determine whether standard I/O streams are connected to an interactive terminal.
+Executed at detection time to determine whether standard I/O streams are connected to an interactive terminal. `Is_TTY` first checks the process-wide override before consulting the OS.
 
 ```
 Caller (application / detection init)
@@ -143,6 +143,11 @@ Caller (application / detection init)
   │  Is_TTY (Stdout)
   ▼
 Termicap.TTY                          [spec: SPARK, body: SPARK_Mode => Off]
+  │
+  │  Step 0: Get_Override              -- read Termicap.Override.Override_State
+  │    Force_Basic | Force_256 | Force_True_Color → return True  (force TTY on)
+  │    Force_None                               → return False (force TTY off)
+  │    Auto                                     → fall through to isatty()
   │
   │  FD_MAP (Stdout) => 1
   │  C_Isatty (1)                     -- pragma Import (C, ..., "isatty")
@@ -156,6 +161,7 @@ Termicap.TTY                          [spec: SPARK, body: SPARK_Mode => Off]
 
 **Key properties:**
 
+- When `Override_Mode /= Auto`, the entire `isatty()` call is skipped; the result is determined entirely by the override.
 - `isatty()` is a read-only query — it never modifies terminal state.
 - Any non-1 return value maps to `False`, including errors (FUNC-TTY-004).
 - No exceptions can propagate from `pragma Import (C, ...)`.
@@ -185,21 +191,22 @@ Termicap.TTY
 
 ## Scenario 7: TTY Status in Downstream Detection
 
-Downstream SPARK-provable detection functions receive TTY status as a plain `Boolean` parameter, keeping the FFI call outside the SPARK verification perimeter.
+Downstream detection functions receive TTY status as a plain `Boolean` parameter, keeping the FFI call outside the SPARK verification perimeter. After the Override feature, both `Is_TTY` and `Detect_Color_Level` reference `Termicap.Override.Override_State` in their `Global` aspects.
 
 ```
 Application Init (Ada-only region)
   │
-  │  Is_Interactive : constant Boolean := Is_TTY (Stdout);
+  │  Is_Interactive : constant Boolean := Is_TTY (Stdout);  -- override-aware
   │  Capture_Current (Env);
   │
   ▼
-Detection Logic                       [SPARK Silver, Global => null]
+Detection Logic         [SPARK Silver, Global => (Input => Override_State)]
   │
   │  function Detect_Color_Level
   │    (Env            : Environment;
   │     Is_Interactive : Boolean) return Color_Level
   │
+  │  0. if Get_Override /= Auto then return mapped Color_Level immediately
   │  1. if not Is_Interactive and not Force_Color then return None
   │  2. Check env vars: NO_COLOR, FORCE_COLOR, COLORTERM, TERM ...
   │
@@ -208,10 +215,10 @@ Detection Logic                       [SPARK Silver, Global => null]
 
 **Key properties:**
 
-- `Is_TTY` call happens once in an Ada-only region.
+- `Is_TTY` call happens once in an Ada-only region. When the override is active, `Is_TTY` returns immediately without calling `isatty()`.
 - The `Boolean` result flows into SPARK functions as a parameter.
-- `Global => null` contracts are preserved on detection functions.
-- This is the canonical integration pattern for `Termicap.TTY` with `Termicap.Environment`.
+- `Global => (Input => Termicap.Override.Override_State)` contracts are in effect on both `Is_TTY` and `Detect_Color_Level`. SPARK callers must include `Override_State` in their own `Global` aspects.
+- This is the canonical integration pattern for `Termicap.TTY` with `Termicap.Environment` and `Termicap.Override`.
 
 ## Scenario 8: Color Level Detection Flow
 
@@ -227,7 +234,12 @@ Application Init (Ada-only region)
   │  Is_TTY := Termicap.TTY.Is_TTY (Stdout);  -- Scenario 5 (SPARK_Mode => Off)
   │
   ▼
-Termicap.Color.Detect_Color_Level (Env, Is_TTY)   [SPARK Silver, Global => null]
+Termicap.Color.Detect_Color_Level (Env, Is_TTY)
+  │                     [SPARK Silver, Global => (Input => Override_State)]
+  │
+  │  Step 0: Get_Override (reads Override_State)
+  │    /= Auto → return mapped Color_Level immediately; all other steps skipped
+  │    = Auto  → continue
   │
   │  Step 1: Contains (Env, "FORCE_COLOR")?
   │    Yes → Classify value → set Floor, Force_Set := True (or return None)
@@ -278,7 +290,7 @@ Termicap.Color.Detect_Color_Level (Env, Is_TTY)   [SPARK Silver, Global => null]
 
 **Key properties:**
 
-- `Detect_Color_Level` is a pure function: no OS calls, no global state. GNATprove verifies `Global => null` on the spec.
+- `Detect_Color_Level` performs no OS calls and reads only `Override_State`. GNATprove verifies `Global => (Input => Termicap.Override.Override_State)` on the spec (SPARK Silver).
 - The `Floor` variable accumulates force overrides (steps 1–2). The `Heuristic` variable accumulates evidence-based detections (steps 5, 7–10). The final result is `Color_Level'Max (Floor, Heuristic)`, ensuring a force override can never be undercut by a heuristic.
 - All `Contains` and `Value` calls delegate to `Termicap.Environment` (Scenarios 2 and the query flow), which are themselves `Global => null`.
 - The multiplexer cap (step 7) requires both a `TERM` prefix check (`screen`) and a `TERM_PROGRAM` value check (`tmux`), demonstrating multi-variable coordination within a single pure function.
@@ -806,6 +818,128 @@ Termicap.Sigwinch                       [SPARK_Mode => Off]
 - On non-Unix platforms, `Install` and `Uninstall` are no-ops, `Get_Pipe_Read_FD` returns `-1`, `Has_Resize` returns `False`, and `Get_Cached_Size` returns the default size. No exceptions are raised (FUNC-SWC-008).
 - Integration test pattern (interactive demo only): because `Install` performs a real `sigaction` and `ioctl`, the SIGWINCH path is exercised by the interactive example (`examples/sigwinch_demo/`) rather than automated unit tests.
 
+## Scenario 16: Global Override — Programmatic and Scoped Flows
+
+These scenarios cover the four main uses of `Termicap.Override`: setting a process-wide override from a CLI flag, querying/resetting it, and using a scoped guard.
+
+### Phase A — Setting an Override from a CLI Flag
+
+```
+Application startup (Ada-only region)
+  │
+  │  Flag_Value : constant String := "--color=always";  -- from argv
+  │
+  │  Set_Override (Parse_Color_Flag ("always"))
+  ▼
+Termicap.Override.Parse_Color_Flag ("always")   [Global => null, SPARK Gold]
+  │
+  │  Case-insensitive comparison:
+  │    "always" → Force_True_Color
+  │
+  └──► Override_Mode := Force_True_Color
+
+Termicap.Override.Set_Override (Force_True_Color)
+  │                              [Global => (In_Out => Override_State)]
+  ▼
+Protected object (SPARK_Mode => Off body)
+  │
+  │  State := Force_True_Color
+  │
+  └──► Override_State now holds Force_True_Color
+```
+
+**Key properties:**
+
+- `Parse_Color_Flag` is a pure function (`Global => null`). It is total over all `String` inputs; any unrecognised string returns `Auto` so that `Set_Override (Parse_Color_Flag (unknown))` is equivalent to no override.
+- `Set_Override` writes to the protected object; the body is `SPARK_Mode => Off`. The call is thread-safe.
+- Initial state of the protected object is `Auto`. If `Set_Override` is never called, `Get_Override` returns `Auto` and all detection functions behave as if `Termicap.Override` were not present.
+
+### Phase B — Override Short-Circuit in Detection Functions
+
+After `Set_Override (Force_True_Color)` from Phase A:
+
+```
+Application
+  │
+  │  Level := Detect_Color_Level (Env, Is_TTY => False)
+  ▼
+Termicap.Color.Detect_Color_Level          [Global => (Input => Override_State)]
+  │
+  │  Step 0: Get_Override → Force_True_Color   (/= Auto)
+  │    → return True_Color immediately
+  │    (steps 1–11: env-var cascade is never reached)
+  │
+  └──► Color_Level = True_Color
+
+Application
+  │
+  │  TTY : Boolean := Is_TTY (Stdout)
+  ▼
+Termicap.TTY.Is_TTY (Stdout)               [Global => (Input => Override_State)]
+  │
+  │  Step 0: Get_Override → Force_True_Color   (any Force_* except Force_None)
+  │    → return True immediately
+  │    (isatty() C call is never reached)
+  │
+  └──► Boolean = True
+```
+
+**Key properties:**
+
+- The override check adds a single protected-function read before each detection call. When `Override_Mode = Auto`, control falls through to the existing detection logic unchanged.
+- `Force_None` maps to `Color_Level = None` in `Detect_Color_Level` and `False` in `Is_TTY`. `Force_Basic` / `Force_256` / `Force_True_Color` map to `True` in `Is_TTY` (any color level forces the TTY gate open).
+
+### Phase C — Reset and Restore
+
+```
+Application
+  │
+  │  Reset_Override
+  ▼
+Termicap.Override.Reset_Override           [Post => Get_Override = Auto]
+  │
+  │  Set_Override (Auto)
+  │  Protected object: State := Auto
+  │
+  └──► Override_State = Auto; normal detection resumes
+```
+
+### Phase D — Scoped Override (RAII Guard)
+
+```
+Application (single task recommended)
+  │
+  │  declare
+  │     Guard : Scoped_Override (Mode => Force_256);
+  │                              -- Initialize called on declaration
+  ▼
+Scoped_Override.Initialize (Self.Mode = Force_256)  [SPARK_Mode => Off]
+  │
+  │  Self.Saved := Get_Override   -- capture current mode (e.g. Auto)
+  │  Set_Override (Force_256)     -- install the new override
+  │
+  └──► Override_State = Force_256
+
+  │  [block body executes with Force_256 active]
+  │  Level := Detect_Color_Level (Env, Is_TTY => True);
+  │    → returns Extended_256 immediately (step 0 short-circuit)
+  │
+  │  end;  -- scope exit: Finalize called
+  ▼
+Scoped_Override.Finalize              [SPARK_Mode => Off]
+  │
+  │  Set_Override (Self.Saved)   -- restore previously captured mode (Auto)
+  │  [any exception suppressed — FUNC-OVR-008]
+  │
+  └──► Override_State = Auto; previous behavior restored
+```
+
+**Key properties:**
+
+- `Scoped_Override` is `Limited_Controlled` (not `Controlled`). It cannot be copied; this prevents two objects sharing the same `Saved` value from double-restoring on finalization (FUNC-OVR-008).
+- Finalization suppresses all exceptions via a `when others => null` handler. This is required by Ada rules: an exception propagated out of `Finalize` during stack unwinding causes `Program_Error` (FUNC-OVR-008).
+- Scoped guards nest correctly in a single task: each `Scoped_Override` saves the mode that was active at the time of its declaration, so overlapping guards restore in LIFO order. Across tasks, the save/restore sequences interleave — use process-wide `Set_Override` / `Reset_Override` when task-local override scoping is needed.
+
 ---
 
 ## Related Documents
@@ -819,7 +953,9 @@ Termicap.Sigwinch                       [SPARK_Mode => Off]
 - **Tech Spec F6** (`docs/tech-specs/terminal-identification.md`): Terminal identification detection design rationale
 - **Tech Spec F7** (`docs/tech-specs/color-downsampling.md`): Color downsampling design rationale, algorithm survey, and type design decisions (ADR-0009)
 - **Tech Spec F8** (`docs/tech-specs/sigwinch.md`): SIGWINCH resize notification design rationale, self-pipe pattern, and C trampoline decision
+- **Tech Spec F9** (`docs/tech-specs/override.md`): Global override feature design rationale, SPARK strategy, and framework survey
 - **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
 - **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
 - **ADR-0008** (`docs/adr/0008-terminal-id-string-representation-spark-boundary.md`): Rationale for `SPARK_Mode => Off` body and `Ada.Strings.Unbounded` use in `Termicap.Terminal_Id`
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011
+- **ADR-0010** (`docs/adr/0010-override-mode-flat-enum.md`): Rationale for the five-literal flat enumeration over alternative override representations
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014

@@ -37,7 +37,8 @@ is
    --  File descriptor mapping
    ---------------------------------------------------------------------------
 
-   FD_MAP : constant array (Stream_Kind) of Interfaces.C.int := [Stdin => 0, Stdout => 1, Stderr => 2];
+   FD_MAP : constant array (Stream_Kind) of Interfaces.C.int :=
+     [Stdin => 0, Stdout => 1, Stderr => 2];
 
    ---------------------------------------------------------------------------
    --  Is_TTY (FUNC-TTY-002, FUNC-TTY-003, FUNC-TTY-004)
@@ -45,6 +46,19 @@ is
 
    function Is_TTY (Stream : Stream_Kind) return Boolean is
    begin
+      --  @relation(FUNC-OVR-005)
+      case Termicap.Override.Get_Override is
+         when Termicap.Override.Force_Basic
+            | Termicap.Override.Force_256
+            | Termicap.Override.Force_True_Color =>
+            return True;
+
+         when Termicap.Override.Force_None       =>
+            return False;
+
+         when Termicap.Override.Auto             =>
+            null;
+      end case;
       return C_Isatty (FD_MAP (Stream)) = 1;
    end Is_TTY;
 
@@ -54,7 +68,10 @@ is
 
    function Query_All return TTY_Status is
    begin
-      return (Stdin => Is_TTY (Stdin), Stdout => Is_TTY (Stdout), Stderr => Is_TTY (Stderr));
+      return
+        (Stdin  => Is_TTY (Stdin),
+         Stdout => Is_TTY (Stdout),
+         Stderr => Is_TTY (Stderr));
    end Query_All;
 
 end Termicap.TTY;

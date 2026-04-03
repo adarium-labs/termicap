@@ -1,0 +1,328 @@
+[DOCUMENT]
+TITLE: Global Enable/Disable Override
+UID: REQ-OVR
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Global Enable/Disable Override
+
+[REQUIREMENT]
+UID: FUNC-OVR-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Override_Mode Enumeration Type
+STATEMENT: >>>
+The library shall define an enumeration type Override_Mode with exactly five literals:
+
+  Auto            -- normal detection logic applies (default)
+  Force_None      -- color output is unconditionally disabled (no color)
+  Force_Basic     -- color output is unconditionally forced at 16-color level
+  Force_256       -- color output is unconditionally forced at 256-color level
+  Force_True_Color -- color output is unconditionally forced at TrueColor level
+
+The type shall be declared in a SPARK-annotated package compiled with SPARK_Mode => On. No other values shall be representable in the type; Ada's closed enumeration model enforces this statically.
+<<<
+COMMENT: >>>
+A five-literal model separates two orthogonal concerns that a three-state (Force_On/Force_Off/Auto) model conflates: whether an override is active, and what level is forced. The model maps directly onto the conventional CLI flag values:
+
+  --color=never / --color=false / --color=0 / --no-color  → Force_None
+  --color=true  / --color=1    / --color=16               → Force_Basic
+  --color=2     / --color=256                             → Force_256
+  --color=always / --color=truecolor / --color=16m / --color=3 → Force_True_Color
+  --color=auto  / (flag absent)                           → Auto
+
+It also aligns with the FORCE_COLOR environment variable convention (1=Basic, 2=256, 3=TrueColor). Using an enumeration rather than a Boolean pair or integer sentinel makes intent explicit, eliminates illegal state combinations, and allows the SPARK prover to use exhaustive case analysis on the five literals without additional invariants. The Auto literal represents the absence of any override; applications that never call Set_Override behave identically to --color=auto.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Set_Override Procedure
+STATEMENT: >>>
+The library shall provide a procedure Set_Override that accepts a single parameter of type Override_Mode and sets the process-wide override state to the supplied value. After a successful call to Set_Override, any subsequent call to Get_Override (FUNC-OVR-003) shall return the value that was passed to Set_Override, until a later call to Set_Override changes it again.
+
+A representative signature is:
+
+  procedure Set_Override (Mode : Override_Mode);
+
+The initial value of the override state at program startup (before any call to Set_Override) shall be Auto.
+<<<
+COMMENT: >>>
+A global setter is the minimal interface needed by a CLI main program to install the user's --color flag value once, before any detection or rendering takes place. Specifying that the initial value is Auto means that applications that never call Set_Override behave identically to applications with --color=auto, which is the correct default. The library guarantees this default without relying on elaboration order or package-body initialisation of complex state.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Get_Override Function
+STATEMENT: >>>
+The library shall provide a function Get_Override that takes no parameters and returns the current process-wide Override_Mode value. The function shall return the value most recently supplied to Set_Override (FUNC-OVR-002), or Auto if Set_Override has never been called.
+
+A representative signature is:
+
+  function Get_Override return Override_Mode;
+
+The function shall be callable from any task without risk of data races. It shall not raise any exception under any circumstance.
+<<<
+COMMENT: >>>
+Get_Override is the read half of the global state pair. Detection functions (color level, TTY, etc.) call Get_Override as their first step to short-circuit their full detection logic when a forced override is active. Guaranteeing no exceptions allows callers to use Get_Override in contexts where exceptions would be propagated to critical paths (e.g., inside finalization code or signal-handler adjacency).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Override Interaction with Color Detection
+STATEMENT: >>>
+When the process-wide override is not Auto, the color detection function shall return the Color_Level value corresponding directly to the active override, as follows:
+
+  Force_None       → None
+  Force_Basic      → Basic_16
+  Force_256        → Extended_256
+  Force_True_Color → True_Color
+
+This mapping shall be applied regardless of environment variables, TTY status, or any other runtime signals.
+
+When the override is Auto, the color detection function shall perform its normal detection logic without modification.
+
+The override check shall be the first action performed by the color detection function, before any environment variable access or TTY query.
+<<<
+COMMENT: >>>
+Applying the override at the top of the detection function, before any other logic, ensures consistent behavior across all code paths: there is no possibility of a TTY check or NO_COLOR environment variable partially overriding an explicit forced level. The direct mapping from Override_Mode to Color_Level avoids any ambiguity: Force_Basic always means exactly 16-color, not "some minimum level"; Force_True_Color always means exactly TrueColor, not "the highest supported". Callers that need a lower level than what is forced can downsample via the color downsampling functions (FUNC-DSP-004 through FUNC-DSP-006). Force_None returning None is the correct representation of "no color" in the library's color level taxonomy (FUNC-CLR-001).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Override Interaction with TTY Detection
+STATEMENT: >>>
+When the process-wide override is Force_Basic, Force_256, or Force_True_Color, the TTY detection function shall return True, treating the stream as if it were a TTY, regardless of the underlying file descriptor.
+
+When the override is Force_None, the TTY detection function shall return False, treating the stream as a non-TTY regardless of the actual file descriptor type.
+
+When the override is Auto, the TTY detection function shall perform its normal isatty() check without modification.
+
+The override check shall be the first action performed by the TTY detection function.
+<<<
+COMMENT: >>>
+Forcing TTY status is necessary to make forced color levels coherent: a caller requesting --color=always or any specific forced level expects all terminal-gated output to be enabled, not only the color escape sequences. Without this requirement, a forced color level would be set by the color path while TTY-gated paths (e.g., Unicode symbol selection, progress bars) would still be suppressed when stdout is a pipe. The symmetry is: any override that enables color (Force_Basic / Force_256 / Force_True_Color) also forces TTY=True; the override that disables color (Force_None) forces TTY=False.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Thread Safety via Ada Protected Object
+STATEMENT: >>>
+The mutable state holding the current Override_Mode value shall be encapsulated within a single Ada protected object. The Set_Override procedure shall be implemented as a protected procedure and the Get_Override function shall be implemented as a protected function on that object, so that the Ada runtime serialises concurrent writes and permits concurrent reads automatically.
+
+No additional locking, semaphores, or atomic variables external to the protected object shall be required for correct concurrent use. The protected object shall have no entries and no tasks; it shall be a simple reader-writer protected object.
+<<<
+COMMENT: >>>
+Ada protected objects are the language-standard mechanism for shared mutable state in a tasking program. A protected function (read-only) allows multiple tasks to call Get_Override concurrently without mutual exclusion, while a protected procedure (exclusive) serialises calls to Set_Override. This matches the expected usage pattern: Set_Override is called once (or rarely) at startup by a single task, while Get_Override may be called concurrently by any number of worker tasks performing detection. Using a protected object rather than a raw global variable also makes the SPARK boundary explicit: the protected object is outside SPARK (tasking), while the detection logic that calls Get_Override can remain inside SPARK.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Scoped_Override Controlled Type
+STATEMENT: >>>
+The library shall provide a controlled type Scoped_Override that saves the current Override_Mode on initialization and restores it on finalization. The type shall be derived from Ada.Finalization.Limited_Controlled. Its Initialize procedure shall capture the current override mode by calling Get_Override, and its Finalize procedure shall restore it by calling Set_Override with the saved value.
+
+A representative usage pattern is:
+
+  declare
+     Guard : Scoped_Override (Mode => Force_Off);
+  begin
+     --  Override is Force_Off for the duration of this block.
+     ...
+  end;  --  Finalize restores the previous override mode.
+
+The constructor shall accept a Mode parameter of type Override_Mode, which it shall install by calling Set_Override before returning.
+<<<
+COMMENT: >>>
+The RAII (Resource Acquisition Is Initialization) scoped override is the safe mechanism for temporarily changing the override within a nested scope — for example, a subsystem test that must run with Force_Off even inside a larger Force_On context, or a rendering path that must temporarily suppress color regardless of the outer setting. Using Ada.Finalization.Limited_Controlled provides automatic cleanup even in the presence of exceptions: Finalize is called by the runtime when the scope is exited for any reason, including propagation of an exception. This is the Ada equivalent of the RAII patterns used in C++ and Rust (e.g., owo-colors' AtomicU8-based scoped override).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-008
+STATUS: Approved
+PRIORITY: Should
+TITLE: Scoped_Override Exception Safety
+STATEMENT: >>>
+The Finalize procedure of Scoped_Override (FUNC-OVR-007) shall not raise any exception. If the internal call to Set_Override were to propagate an exception (which is excluded by FUNC-OVR-002's contract, but is noted here for defence in depth), the exception shall be suppressed within Finalize to comply with the Ada rule that exceptions raised in finalization are silently ignored by the runtime during stack unwinding.
+
+The Scoped_Override type shall be Limited_Controlled (not Controlled), so that it cannot be copied. Copying a Scoped_Override would duplicate the saved state and cause double-restore on finalization, which would silently discard an intermediate Set_Override call.
+<<<
+COMMENT: >>>
+Ada 95 and later specify that an exception propagated out of a Finalize procedure during stack unwinding causes the program to raise Program_Error. Suppressing exceptions in Finalize is therefore the correct defensive practice. Making the type Limited_Controlled (non-copyable) is a safety measure: if the type were Controlled, an accidental assignment or pass-by-value would create two objects with the same saved mode, and both would call Set_Override on finalization, with the second call silently overwriting the effect of the first. Limited_Controlled eliminates this hazard at compile time.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: No FFI Dependency
+STATEMENT: >>>
+The entire Override API — the Override_Mode type, the protected object holding the current state, Set_Override, Get_Override, and Scoped_Override — shall be implemented entirely in Ada with no calls to C, POSIX, or any other foreign language interface. No Import pragma, No_Return pragma on FFI stubs, or Linker_Options pragma shall appear in the packages that implement this feature.
+
+The feature shall compile and execute correctly on all platforms supported by the GNAT toolchain without any platform-specific source variants or conditional compilation directives.
+<<<
+COMMENT: >>>
+Unlike TTY detection (which requires isatty()) or dimension detection (which requires ioctl(TIOCGWINSZ)), the global override is pure application-level state: an enumeration value in a protected object. There is no operating system concept that needs to be queried or mutated. Requiring zero FFI for this feature is therefore natural and should be stated explicitly so that future implementors do not introduce unnecessary platform dependencies. The cross-platform guarantee also follows directly from the zero-FFI requirement: Ada protected objects and Ada.Finalization are part of the Ada standard library and behave identically on all GNAT-supported targets.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Level for Override State Machine
+STATEMENT: >>>
+The package that defines Override_Mode and the pure query/setter logic (excluding the protected object body, which is outside the SPARK subset due to tasking semantics) shall be compiled with SPARK_Mode => On and shall be provable at SPARK Silver level.
+
+Specifically, the following shall be SPARK Silver-provable:
+
+  a. The Set_Override wrapper (if extracted from the protected body into a SPARK helper) carries a postcondition asserting that Get_Override returns the supplied mode.
+  b. Any function that branches on Override_Mode (e.g., in color or TTY detection) carries a contract that the SPARK prover can discharge using only the finite case analysis of the three-literal enumeration.
+  c. No runtime errors (constraint errors, program errors) are possible in any SPARK-annotated subprogram that reads or uses Override_Mode.
+
+The protected object body shall be marked SPARK_Mode => Off with a comment identifying it as the Ada tasking boundary. The SPARK-provable specification of the protected type shall carry the appropriate Volatile or Abstract_State annotation to model the global state for GNATprove.
+<<<
+COMMENT: >>>
+SPARK Silver requires absence of run-time errors and correct data flow, but does not require full functional correctness proofs (that is Gold). For the override feature, Silver is achievable because: (1) Override_Mode is a five-literal enumeration — no arithmetic, no range checks — and (2) the detection functions that consume it branch on a case statement that SPARK treats as exhaustive over the five literals. The protected object body must be SPARK_Mode => Off because Ada tasking constructs (protected types, entries) are outside the SPARK 2014 language subset at any level; this follows the same convention used throughout Termicap for Ada FFI and tasking boundaries (see FUNC-SWC-011, FUNC-DIM-007). Parse_Color_Flag (FUNC-OVR-013) is provable at Gold level as it is a pure string-to-enum mapping with no side effects.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-011
+STATUS: Approved
+PRIORITY: Should
+TITLE: Reset_Override Convenience Procedure
+STATEMENT: >>>
+The library shall provide a procedure Reset_Override that sets the process-wide override to Auto. The procedure shall be semantically equivalent to calling Set_Override (Auto) but provides a self-documenting name for the common operation of removing any override that was previously installed.
+
+A representative signature is:
+
+  procedure Reset_Override;
+
+The procedure shall be callable from any task without additional synchronisation.
+<<<
+COMMENT: >>>
+Applications that support both --color=always and --color=never flags may need to restore the default Auto state when processing multiple sub-commands or test cases within a single process. Providing Reset_Override makes this intent explicit in code, avoiding the need to pass Override_Mode'(Auto) as a literal. This is a thin convenience wrapper with no semantic content beyond Set_Override (Auto); it does not introduce any new state or complexity.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unit Testability Without a Live Terminal
+STATEMENT: >>>
+The Override API shall be testable entirely without a live TTY, without environment variable mutation, and without spawning child processes. The test suite shall include at minimum the following cases:
+
+  Set/Get round-trip:
+    - After Set_Override (Force_None),       Get_Override returns Force_None.
+    - After Set_Override (Force_Basic),      Get_Override returns Force_Basic.
+    - After Set_Override (Force_256),        Get_Override returns Force_256.
+    - After Set_Override (Force_True_Color), Get_Override returns Force_True_Color.
+    - After Set_Override (Auto),             Get_Override returns Auto.
+    - Initial state (no Set_Override call) returns Auto.
+
+  Color detection interaction:
+    - With override Force_None:       Detect_Color_Level returns None.
+    - With override Force_Basic:      Detect_Color_Level returns Basic_16.
+    - With override Force_256:        Detect_Color_Level returns Extended_256.
+    - With override Force_True_Color: Detect_Color_Level returns True_Color.
+    - After Reset_Override:           Detect_Color_Level performs normal detection.
+
+  TTY detection interaction:
+    - With override Force_Basic, Force_256, or Force_True_Color: Is_TTY returns True.
+    - With override Force_None:  Is_TTY returns False.
+    - With override Auto:        Is_TTY performs normal isatty() check.
+
+  Scoped_Override:
+    - Set_Override (Force_True_Color); declare Guard : Scoped_Override (Force_None);
+      check Get_Override = Force_None inside the block; after the block, check
+      Get_Override = Force_True_Color (restored).
+    - Verify that Force_True_Color is restored even when an exception is raised inside
+      the scoped block (exception is caught by the test harness).
+
+All tests shall be deterministic and repeatable without side effects on the process environment.
+<<<
+COMMENT: >>>
+Because the override feature is pure Ada state with no OS dependency, every behaviour is observable through the Get_Override function and the detection functions' return values. There is no need for a pseudo-TTY or environment variable injection in the test harness. The Scoped_Override exception-safety test is included as a requirement rather than an implementation note because it exercises the specific interaction between Ada.Finalization and exception propagation that is most likely to be accidentally broken by a refactoring.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Parse_Color_Flag Pure Function
+STATEMENT: >>>
+The library shall provide a pure function Parse_Color_Flag that accepts a String parameter representing the value of a --color flag (or equivalent) and returns the corresponding Override_Mode value. The function shall recognise at minimum the following input strings (case-insensitive):
+
+  "never"  | "false" | "off" | "0"               → Force_None
+  "true"   | "1"     | "16"                       → Force_Basic
+  "2"      | "256"                                → Force_256
+  "always" | "truecolor" | "16m" | "3"           → Force_True_Color
+  "auto"                                          → Auto
+
+An unrecognised value shall return Auto, allowing callers to treat unknown strings as "no override" rather than raising an exception.
+
+The function shall be declared with SPARK_Mode => On and the Pure aspect. It shall have no side effects and shall not access any global state.
+
+A representative signature is:
+
+  function Parse_Color_Flag (Value : String) return Override_Mode
+    with SPARK_Mode => On, Pure_Function;
+<<<
+COMMENT: >>>
+Parse_Color_Flag encapsulates the string-to-enum mapping that any application or CLI framework needs when processing --color flags. Centralising this mapping in Termicap avoids duplication and ensures that all callers agree on which strings correspond to which level. The function is pure (no side effects, no global reads) so it is provable at SPARK Gold level: the only logic is string comparison and a return value, with no arithmetic or pointer operations. Callers that want to install the result simply pass the return value to Set_Override. Applications that handle --color flags themselves (without a CLI framework) call Parse_Color_Flag directly; CLI frameworks such as Aclida.CLI can call it internally when processing their own --color option declaration. The bare --color (no value, implying Force_True_Color) and --no-color forms do not have a string value to parse; those are handled at the CLI layer before calling this function.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OVR-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: No Automatic Command-Line Parsing
+STATEMENT: >>>
+The library shall never access Ada.Command_Line, the process argument vector, or any operating-system interface that reads program arguments. The Override API shall be entirely passive with respect to the command line: it stores and retrieves Override_Mode values that the calling application supplies explicitly.
+
+Applications that want --color flag support shall be responsible for parsing Ada.Command_Line themselves and then calling Set_Override with the result of Parse_Color_Flag (FUNC-OVR-013). CLI frameworks such as Aclida.CLI may perform this step on behalf of the application.
+
+Applications that do not call Set_Override at all shall experience unmodified Auto detection behavior, with no interference from the Override API.
+<<<
+COMMENT: >>>
+A library that silently inspects Ada.Command_Line would consume arguments that the host application may intend for its own use, or may interpret --color as a Termicap flag when the application assigns a different meaning to it. Keeping the library entirely passive makes it safe to use in any application regardless of its argument-parsing approach. The design follows the principle of least surprise: Termicap only does what it is explicitly asked to do, and the override state starts at Auto (normal detection) until the application decides otherwise. This requirement exists to explicitly prohibit a "convenience" mode that would auto-apply FORCE_COLOR/NO_COLOR-style logic from Ada.Command_Line at library initialisation — those environment variables are already handled by the normal detection path (FUNC-CLR-005, FUNC-CLR-006) and do not require Set_Override to be called.
+<<<
+
+[/SECTION]

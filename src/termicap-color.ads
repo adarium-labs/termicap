@@ -37,9 +37,10 @@
 --    - @relation(FUNC-CLR-015): Detection priority order
 
 with Termicap.Environment;
+with Termicap.Override;
 
 package Termicap.Color
-   with SPARK_Mode
+  with SPARK_Mode
 is
 
    ---------------------------------------------------------------------------
@@ -64,8 +65,8 @@ is
    --  @relation(FUNC-CLR-014): SPARK Silver provability
    --  @relation(FUNC-CLR-015): Detection priority order
    function Detect_Color_Level
-      (Env    : Termicap.Environment.Environment;
-       Is_TTY : Boolean) return Color_Level
-      with Global => null;
+     (Env : Termicap.Environment.Environment; Is_TTY : Boolean)
+      return Color_Level
+   with Global => (Input => Termicap.Override.Override_State);
 
 end Termicap.Color;
