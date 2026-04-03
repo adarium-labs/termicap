@@ -586,6 +586,86 @@ begin
 end;
 ```
 
+
+## Scenario 14: Color Downsampling Flow
+
+Full end-to-end scenario showing how a caller converts a TrueColor RGB value to the color level actually supported by the terminal. Color detection (Scenario 8) and downsampling are independent steps; downsampling receives a `Color_Level` by value, not an environment snapshot.
+
+```
+Application Init (Ada-only region)
+  │
+  │  Env    : Environment;
+  │  Is_TTY : Boolean;
+  │
+  │  Capture_Current (Env);                      -- Scenario 1 (SPARK_Mode => Off)
+  │  Is_TTY := Termicap.TTY.Is_TTY (Stdout);     -- Scenario 5 (SPARK_Mode => Off)
+  │
+  ▼
+Termicap.Color.Detect_Color_Level (Env, Is_TTY)  [SPARK Silver, Global => null]
+  │
+  │  ... 11-step cascade (Scenario 8) ...
+  │
+  └► Level : Color_Level   -- e.g. Basic_16 (terminal supports only 16 colors)
+
+  │
+  │  Source_Color : RGB := (Red => 220, Green => 50, Blue => 47);
+  │
+  ▼
+Termicap.Downsampling.Downsample                 [SPARK Gold, Global => null]
+  (Color => Source_Color, Target => Level)
+  │
+  │  Target = Basic_16 → Downsample_True_To_16 (Source_Color)
+  │    │  Compute redmean weighted Euclidean distance to each of the 16
+  │    │  canonical ANSI palette entries.
+  │    │  Return the index of the nearest entry (tie → lower index).
+  │    └► Color_Index_16 result (e.g. 1 — red)
+  │
+  └► Downsampled_Color'(Level => Basic_16, Index_16 => 1)
+
+Caller dispatch on Downsampled_Color discriminant:
+
+  case Result.Level is
+     when None         => null;  --  emit no SGR escape code
+     when Basic_16     => Emit_SGR_16  (Result.Index_16);
+     when Extended_256 => Emit_SGR_256 (Result.Index_256);
+     when True_Color   => Emit_SGR_RGB (Result.RGB_Value.Red,
+                                        Result.RGB_Value.Green,
+                                        Result.RGB_Value.Blue);
+  end case;
+```
+
+**Key properties:**
+
+- `Downsample` and all primitive conversion functions are pure: `Global => null`, no OS calls, no global state. GNATprove verifies this at Gold level — both spec and body carry `SPARK_Mode => On`.
+- The `Downsampled_Color` discriminant is the terminal's `Color_Level`, so the caller's case statement is always exhaustive and statically checkable.
+- When `Level = True_Color`, `Downsample` returns an identity result (`RGB_Value = Source_Color`), verified by the idempotency postcondition (FUNC-DSP-009).
+- When `Level = None`, `Downsample` returns `(Level => None)` — no index or RGB value to extract (FUNC-DSP-007).
+- The monotonicity postcondition (FUNC-DSP-010) guarantees `Color_Level_Of (result) <= Color_Level'Min (True_Color, Target)`: the output level never exceeds the requested target.
+- `Color_Index_16` values may be downsampled further by passing them to the `Color_Index_256` overload of `Downsample`, since `Color_Index_16` is a subtype of `Color_Index_256` (FUNC-DSP-003).
+- Integration test pattern (no OS, no TTY, no environment snapshot):
+
+```ada
+declare
+   Red    : constant RGB := (Red => 220, Green => 50, Blue => 47);
+   Result : Downsampled_Color;
+begin
+   --  Terminal supports only 16 colors
+   Result := Downsample (Red, Target => Basic_16);
+   pragma Assert (Result.Level = Basic_16);
+
+   --  Terminal supports TrueColor -- identity case
+   Result := Downsample (Red, Target => True_Color);
+   pragma Assert (Result.Level = True_Color);
+   pragma Assert (Result.RGB_Value.Red   = Red.Red);
+   pragma Assert (Result.RGB_Value.Green = Red.Green);
+   pragma Assert (Result.RGB_Value.Blue  = Red.Blue);
+
+   --  No-color terminal -- strip-to-None
+   Result := Downsample (Red, Target => None);
+   pragma Assert (Result.Level = None);
+end;
+```
+
 ---
 
 ## Related Documents
@@ -597,7 +677,8 @@ end;
 - **Tech Spec F4** (`docs/tech-specs/terminal-dimensions.md`): Terminal dimensions detection design rationale
 - **Tech Spec F5** (`docs/tech-specs/unicode-support.md`): Unicode support level detection design rationale
 - **Tech Spec F6** (`docs/tech-specs/terminal-identification.md`): Terminal identification detection design rationale
+- **Tech Spec F7** (`docs/tech-specs/color-downsampling.md`): Color downsampling design rationale, algorithm survey, and type design decisions (ADR-0009)
 - **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
 - **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
 - **ADR-0008** (`docs/adr/0008-terminal-id-string-representation-spark-boundary.md`): Rationale for `SPARK_Mode => Off` body and `Ada.Strings.Unbounded` use in `Termicap.Terminal_Id`
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012

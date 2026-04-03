@@ -1,0 +1,405 @@
+[DOCUMENT]
+TITLE: Color Downsampling
+UID: REQ-DSP
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+  - TYPE: Refinement
+
+[REQUIREMENT]
+UID: FUNC-DSP-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: RGB Record Type
+STATEMENT: >>>
+The library shall provide a record type RGB whose three components Red, Green, and Blue are each of a subtype of Natural constrained to the range 0 .. 255. The type shall be defined in a SPARK-annotated package compiled with SPARK_Mode => On.
+
+A representative declaration is:
+
+  subtype Color_Component is Natural range 0 .. 255;
+
+  type RGB is record
+     Red   : Color_Component;
+     Green : Color_Component;
+     Blue  : Color_Component;
+  end record;
+
+All three components shall be independently readable and writable as ordinary record fields. No invariant shall constrain the relationship between components. The type shall be usable as a function parameter and return type without dynamic allocation.
+<<<
+COMMENT: >>>
+The RGB type is the fundamental value type for TrueColor input to all downsampling functions. Representing each channel as a bounded subtype (0 .. 255) rather than a raw Natural makes range violations detectable at compile time and provides SPARK with the type bounds needed to discharge overflow proof obligations in the cube-index and distance calculations without manual lemmas.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Color_Index_256 Subtype
+STATEMENT: >>>
+The library shall provide a subtype Color_Index_256 of Natural with the range 0 .. 255. This subtype represents a palette index in the xterm 256-color palette, where:
+
+  - Indices 0–15   correspond to the 16 standard ANSI colors.
+  - Indices 16–231 correspond to the 6×6×6 RGB color cube (216 entries).
+  - Indices 232–255 correspond to the 24-step grayscale ramp.
+
+A representative declaration is:
+
+  subtype Color_Index_256 is Natural range 0 .. 255;
+
+The subtype shall be used as the return type of any function that produces a 256-color palette index, making the constraint explicit and SPARK-provable.
+<<<
+COMMENT: >>>
+Using a named subtype rather than a bare Natural makes the intent of each index parameter self-documenting and allows the SPARK prover to confirm statically that computed cube indices and grayscale indices always fall within the legal 256-color palette range. The sub-range structure (0–15 / 16–231 / 232–255) is documented here as the normative partitioning used by the TrueColor-to-256 algorithm (FUNC-DSP-004).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Color_Index_16 Subtype
+STATEMENT: >>>
+The library shall provide a subtype Color_Index_16 of Natural with the range 0 .. 15. This subtype represents an index into the 16 standard ANSI colors (the first 16 entries of the xterm palette).
+
+A representative declaration is:
+
+  subtype Color_Index_16 is Color_Index_256 range 0 .. 15;
+
+The canonical mapping of indices to named ANSI colors shall be:
+
+  0  Black           8  Bright Black (Dark Gray)
+  1  Red             9  Bright Red
+  2  Green           10 Bright Green
+  3  Yellow          11 Bright Yellow
+  4  Blue            12 Bright Blue
+  5  Magenta         13 Bright Magenta
+  6  Cyan            14 Bright Cyan
+  7  White           15 Bright White
+
+The subtype shall be used as the return type of any function that produces a 16-color ANSI index.
+<<<
+COMMENT: >>>
+Deriving Color_Index_16 from Color_Index_256 rather than from Natural expresses the IS-A relationship: the 16 standard ANSI colors are exactly indices 0–15 of the xterm 256-color palette. This makes any Color_Index_16 value directly assignable to a Color_Index_256 variable without conversion, which simplifies the 256-to-16 pass-through (FUNC-DSP-006) and allows the SPARK prover to reason about both subtypes within the same type family. The range 0 .. 15 is enforced by Ada's subtype constraint; no Unchecked_Conversion is ever needed.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: TrueColor to 256-Color Conversion
+STATEMENT: >>>
+The library shall provide a pure function Downsample_True_To_256 that accepts an RGB value and returns a Color_Index_256. The function shall map the input RGB value to the nearest entry in the xterm 256-color palette using the following algorithm:
+
+  Step 1 — Grayscale check:
+    Compute the grayscale index candidate:
+      Gray_Idx := (Red - 8) / 10   (integer division, clamped to 0 .. 23)
+    The candidate is valid when all three components are sufficiently close to
+    the grayscale ramp value at that index:
+      Ramp(i) := 8 + 10 * i,  for i in 0 .. 23
+    If |Red - Ramp(Gray_Idx)| <= 4
+    and |Green - Ramp(Gray_Idx)| <= 4
+    and |Blue - Ramp(Gray_Idx)| <= 4,
+    return 232 + Gray_Idx.
+
+  Step 2 — Cube quantization:
+    Quantize each channel to the nearest of the 6 cube levels
+    {0, 95, 135, 175, 215, 255} (indices 0 .. 5):
+      Cube_Index(c) := nearest index i such that |c - Cube_Level(i)| is minimal.
+    Compute the palette index:
+      return 16 + 36 * Cube_Index(Red)
+                 + 6 * Cube_Index(Green)
+                 +     Cube_Index(Blue).
+
+The function shall carry the SPARK postcondition that the result is in the range 16 .. 255 when neither the grayscale branch nor any boundary condition forces the cube formula to the lower range.
+
+A representative signature is:
+
+  function Downsample_True_To_256 (Color : RGB) return Color_Index_256
+     with Global => null;
+<<<
+COMMENT: >>>
+The xterm 256-color palette partitions its upper 240 indices into a 6×6×6 cube (indices 16–231) and a 24-step grayscale ramp (indices 232–255). The grayscale check is performed first because pure-gray inputs (R=G=B or near-gray) are more faithfully represented on the ramp than on the cube, where the nearest cube point may introduce a visible hue shift. The cube level set {0, 95, 135, 175, 215, 255} is the normative xterm palette; these values are fixed constants, not implementation choices. Reference: termenv source (Go), section 3.3 of the global synthesis.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: TrueColor to 16-Color Conversion
+STATEMENT: >>>
+The library shall provide a pure function Downsample_True_To_16 that accepts an RGB value and returns a Color_Index_16. The function shall select the ANSI color index whose canonical RGB value has the smallest perceptual distance to the input, using the redmean approximation:
+
+  Distance(c1, c2) :=
+    let R_mean := (c1.Red + c2.Red) / 2 in
+    (2 + R_mean / 256) * (c1.Red - c2.Red)^2
+    + 4              * (c1.Green - c2.Green)^2
+    + (2 + (255 - R_mean) / 256) * (c1.Blue - c2.Blue)^2
+
+The function shall compare the input against the following canonical RGB values for the 16 ANSI colors (indices 0–15):
+
+  0  (  0,   0,   0)    Black
+  1  (170,   0,   0)    Red
+  2  (  0, 170,   0)    Green
+  3  (170, 170,   0)    Yellow
+  4  (  0,   0, 170)    Blue
+  5  (170,   0, 170)    Magenta
+  6  (  0, 170, 170)    Cyan
+  7  (170, 170, 170)    White
+  8  ( 85,  85,  85)    Bright Black
+  9  (255,  85,  85)    Bright Red
+  10 ( 85, 255,  85)    Bright Green
+  11 (255, 255,  85)    Bright Yellow
+  12 ( 85,  85, 255)    Bright Blue
+  13 (255,  85, 255)    Bright Magenta
+  14 ( 85, 255, 255)    Bright Cyan
+  15 (255, 255, 255)    Bright White
+
+The function shall return the index of the color with the minimum distance. When two or more colors yield equal distance, the function shall return the one with the smaller index.
+
+A representative signature is:
+
+  function Downsample_True_To_16 (Color : RGB) return Color_Index_16
+     with Global => null;
+<<<
+COMMENT: >>>
+The redmean approximation is chosen over simple Euclidean distance because it weights the red channel differently based on its absolute magnitude, producing perceptually closer matches for low-saturation colors and near-gray inputs without the computational cost of a full CIE Lab conversion. Reference: "Colour metric" (CompuPhase), cited in the global synthesis section 3.3 ("rich: redmean approximation for 16-color matching"). The canonical ANSI palette values listed here follow the xterm-256color defaults; terminal emulators may remap these colors via their own palette configuration, but the library targets the standard values.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: 256-Color to 16-Color Conversion
+STATEMENT: >>>
+The library shall provide a pure function Downsample_256_To_16 that accepts a Color_Index_256 and returns a Color_Index_16. The function shall resolve the input palette index to its canonical RGB value and then apply the same perceptual distance algorithm as Downsample_True_To_16 (FUNC-DSP-005).
+
+For indices 0–15, the input is already a 16-color index; the function shall return the input value directly as Color_Index_16. Because Color_Index_16 is a subtype of Color_Index_256 (FUNC-DSP-003), no conversion is required — Ada applies a range check that is statically provable for this branch.
+
+For indices 16–231 (cube entries), the function shall reconstruct the RGB value:
+  Index_In_Cube := Input - 16
+  Red_Idx   := Index_In_Cube / 36
+  Green_Idx := (Index_In_Cube / 6) mod 6
+  Blue_Idx  := Index_In_Cube mod 6
+  Cube_Level(i) := 0 when i = 0, else 55 + 40 * i
+  Color := (Cube_Level(Red_Idx), Cube_Level(Green_Idx), Cube_Level(Blue_Idx))
+
+For indices 232–255 (grayscale ramp), the function shall reconstruct the RGB value:
+  Gray := 8 + 10 * (Input - 232)
+  Color := (Gray, Gray, Gray)
+
+The reconstructed RGB value shall then be passed to Downsample_True_To_16 to obtain the nearest 16-color index.
+
+A representative signature is:
+
+  function Downsample_256_To_16 (Index : Color_Index_256) return Color_Index_16
+     with Global => null;
+<<<
+COMMENT: >>>
+The reconstruction formulas are the exact inverses of the xterm cube and grayscale encoding. Using the Cube_Level formula "0 when i=0, else 55+40*i" produces {0,95,135,175,215,255}, which matches the normative xterm palette. Once the RGB equivalent is reconstructed, delegating to Downsample_True_To_16 avoids duplicating the distance algorithm and ensures consistent nearest-color selection across both conversion paths. The direct pass-through for indices 0–15 avoids an unnecessary round-trip through reconstruction since those entries already have known 16-color identities.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Strip-to-None for Any Color Level
+STATEMENT: >>>
+The library shall define a sentinel value or discriminant that represents the absence of color — the result of stripping color from any input. When the target Color_Level is None, all downsampling operations shall produce this no-color result, discarding all color information from the source.
+
+The strip-to-None operation shall be defined for every source level:
+  - TrueColor (RGB) stripped to None produces no-color.
+  - Extended_256 (Color_Index_256) stripped to None produces no-color.
+  - Basic_16 (Color_Index_16) stripped to None produces no-color.
+
+The no-color result shall be representable as a distinct value in the downsampled color type (e.g., a discriminated variant, an optional type, or a dedicated enumeration literal). Callers shall be able to test whether a downsampled result is no-color without inspecting raw index values.
+
+The no-color strip operation shall carry the SPARK postcondition:
+  Post => (Result is no-color)
+for all inputs when the target level is None.
+<<<
+COMMENT: >>>
+Explicit modeling of the no-color case is necessary because stripping color is not the same as mapping to index 0 (Black). A caller rendering text with stripped color should emit no color escape sequence at all, whereas index 0 causes the terminal to render text in its configured "Black" color, which may not be the default foreground. Representing no-color as a distinct discriminant or optional value rather than a magic index eliminates this class of confusion.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: General Downsample Function
+STATEMENT: >>>
+The library shall provide a general dispatching function Downsample that accepts a source color representation and a target Color_Level, and returns a downsampled color result. The function shall dispatch to the appropriate specific conversion based on the combination of source level and target level.
+
+The dispatch table shall be:
+
+  Source: True_Color, Target: True_Color   -> identity (return source unchanged)
+  Source: True_Color, Target: Extended_256 -> Downsample_True_To_256 (FUNC-DSP-004)
+  Source: True_Color, Target: Basic_16     -> Downsample_True_To_16  (FUNC-DSP-005)
+  Source: True_Color, Target: None         -> strip to no-color       (FUNC-DSP-007)
+
+  Source: Extended_256, Target: Extended_256 -> identity (return source unchanged)
+  Source: Extended_256, Target: Basic_16     -> Downsample_256_To_16  (FUNC-DSP-006)
+  Source: Extended_256, Target: None         -> strip to no-color      (FUNC-DSP-007)
+
+  Source: Basic_16, Target: Basic_16 -> identity (return source unchanged)
+  Source: Basic_16, Target: None     -> strip to no-color              (FUNC-DSP-007)
+
+  Source: None, Target: any -> no-color (already stripped)
+
+The function shall carry the SPARK contract Global => null. The Ada specification stage shall determine the exact type representation (discriminated record, tagged type, or overloaded subprograms) for the source color parameter.
+
+A representative signature for an overloaded variant is:
+
+  function Downsample
+     (Color  : RGB;
+      Target : Color_Level) return Downsampled_Color
+     with Global => null;
+
+  function Downsample
+     (Index  : Color_Index_256;
+      Target : Color_Level) return Downsampled_Color
+     with Global => null;
+<<<
+RELATIONS:
+- TYPE: Refinement
+  VALUE: FUNC-CLR-001
+COMMENT: >>>
+The general Downsample function is the primary API surface for the feature; callers that have detected a Color_Level via Detect_Color_Level (FUNC-CLR-002) and hold a color value at some level need only call Downsample with the detected target level, without handling each conversion case themselves. The dispatch table makes every valid source/target combination explicit and ensures that upsampling (source level lower than target level) is handled as identity rather than silently producing a wrong result. The exact Ada type representation is deferred to the tech-spec stage because SPARK constraints on discriminated records may favor an overloaded approach over a single polymorphic function.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Idempotency: Downsampling to Same Level is Identity
+STATEMENT: >>>
+The Downsample function (FUNC-DSP-008) shall satisfy the following idempotency property: when the target Color_Level equals the source color's level, the function shall return a result that is equal to the source color with no modification.
+
+Specifically:
+  - Downsample(Color : RGB, Target => True_Color) = Color (unchanged RGB value)
+  - Downsample(Index : Color_Index_256, Target => Extended_256) = Index (unchanged index)
+  - Downsample(Index : Color_Index_16, Target => Basic_16) = Index (unchanged index)
+  - Downsample(no-color, Target => None) = no-color
+
+In addition, when the target level is higher than the source level (an upsampling request), the function shall also return the source unchanged. The library shall not perform upsampling (color synthesis or palette expansion).
+
+The SPARK postcondition for the TrueColor identity case shall be:
+
+  Post =>
+    (if Target = True_Color then
+       Downsample'Result.Red   = Color.Red   and then
+       Downsample'Result.Green = Color.Green and then
+       Downsample'Result.Blue  = Color.Blue)
+<<<
+COMMENT: >>>
+Idempotency is a key correctness property: rendering pipelines that call Downsample repeatedly (e.g., once per frame) must not degrade color quality on each pass. It also means that callers need not guard Downsample calls with a level-equality check; calling Downsample with the current level is always safe and cheap. The no-upsampling rule is explicit because color upsampling (e.g., inferring an RGB value from a 16-color index) is lossy and ambiguous — there is no canonical inverse of the distance-based nearest-neighbor mapping.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Monotonicity: Downsampling Never Increases Color Level
+STATEMENT: >>>
+For any source color at level L and any target Color_Level T, the effective color level of the result produced by Downsample shall satisfy:
+
+  level(result) <= min(L, T)
+
+That is, downsampling never produces a result whose color level exceeds either the source level or the target level. In particular:
+  - Converting a TrueColor input to Extended_256 yields a result expressible within the Extended_256 palette.
+  - Converting a TrueColor input to Basic_16 yields a result expressible within the Basic_16 palette.
+  - Converting an Extended_256 input to Basic_16 yields a result in Basic_16.
+  - Any conversion targeting None yields no-color.
+
+The library shall define a function Color_Level_Of that returns the Color_Level of any downsampled result, allowing callers and the SPARK prover to verify monotonicity. The SPARK postcondition shall assert:
+
+  Post => Color_Level_Of (Downsample'Result) <= Color_Level'Min (Source_Level, Target)
+<<<
+RELATIONS:
+- TYPE: Refinement
+  VALUE: FUNC-CLR-001
+COMMENT: >>>
+Monotonicity is the formal guarantee that Downsample is a degradation function, not a transformation function that could accidentally upscale. It underpins the correctness of at-output-boundary rendering (section 3.3 of the global synthesis): if a rendering pipeline serializes colors at a lower level, it must be able to assert that the serialized level does not exceed the terminal's detected capability. Color_Level_Of is a pure classification function on the result type, needed both by callers and by SPARK as a specification term in the postcondition.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Gold Provability
+STATEMENT: >>>
+All functions introduced by the Color Downsampling feature — Downsample_True_To_256, Downsample_True_To_16, Downsample_256_To_16, Downsample, and Color_Level_Of — shall be SPARK-provable at Gold level. The package containing these functions shall be compiled with SPARK_Mode => On throughout, with no SPARK_Mode => Off boundary.
+
+Each function shall carry the contract Global => null. No function body shall contain:
+  - Dynamic allocation (new expressions or access type dereferencing),
+  - Unbounded loops (all loops shall have a static or type-bounded iteration range),
+  - FFI calls or Ada.Unchecked_Conversion,
+  - Reads from or writes to global variables.
+
+The SPARK prover shall discharge all range-check proof obligations arising from the color index arithmetic (cube formula, grayscale ramp formula, distance computation) without manual lemmas, relying solely on the subtype bounds of Color_Component (0 .. 255), Color_Index_256 (0 .. 255), and Color_Index_16 (0 .. 15).
+<<<
+COMMENT: >>>
+Color downsampling is pure integer arithmetic over bounded subtypes — the canonical example of a module provable at SPARK Gold without FFI or dynamic allocation. This is noted explicitly in the global synthesis (section 4, Tier 2 table: "Gold — pure arithmetic"). Achieving Gold here is important because the downsampling functions will be called in rendering-critical paths where proof of absence of runtime errors (range errors, overflow) provides strong safety guarantees. The bounded-loop requirement eliminates the need for loop invariants in most cases: iterating over a fixed 16-element array or a fixed 6-element level table requires no loop invariant to prove termination or index safety.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DSP-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unit Testability of Each Conversion Path
+STATEMENT: >>>
+Each conversion function shall be independently testable by supplying a specific input and asserting the exact expected output. The test suite shall include at minimum the following cases:
+
+  Downsample_True_To_256:
+    - Pure black (0, 0, 0)         -> 16  (cube origin)
+    - Pure white (255, 255, 255)   -> 231 (cube maximum)
+    - Mid-gray (128, 128, 128)     -> a grayscale ramp index in 232–255
+    - A non-gray color (e.g., (255, 0, 0) for red) -> a cube index in 16–231
+
+  Downsample_True_To_16:
+    - Pure black (0, 0, 0)         -> 0   (Black)
+    - Pure white (255, 255, 255)   -> 15  (Bright White)
+    - Bright red (255, 0, 0)       -> 9   (Bright Red)
+
+  Downsample_256_To_16:
+    - Index 0   -> 0  (already a 16-color index, pass-through)
+    - Index 15  -> 15 (already a 16-color index, pass-through)
+    - Index 231 -> nearest of the 16 ANSI colors to (255, 255, 255) = 15
+
+  General Downsample (identity cases):
+    - Downsample(RGB, True_Color)   returns the same RGB
+    - Downsample(Index_256, Extended_256) returns the same index
+    - Downsample(Index_16, Basic_16)  returns the same index
+
+  Strip-to-None:
+    - Downsample(any RGB, None) returns no-color
+    - Downsample(any Index_256, None) returns no-color
+
+All tests shall be pure unit tests with no live process environment or TTY dependency, consistent with the test architecture of FUNC-TID-012.
+<<<
+COMMENT: >>>
+Explicit test cases for boundary inputs (pure black, pure white, mid-gray) are listed here as requirements rather than implementation notes because they define the normative expected behavior of the cube formula and grayscale detection. The pure-black and pure-white results are fixed by the xterm palette definition and serve as regression anchors. The mid-gray test verifies that the grayscale-first check (FUNC-DSP-004, Step 1) fires correctly for equal-component inputs.
+<<<

@@ -10,12 +10,13 @@ Termicap                          (root namespace — no types or subprograms)
 │   └── Termicap.Environment.Capture  [SPARK_Mode => Off] — sole OS FFI boundary
 ├── Termicap.TTY                  [spec: SPARK, body: SPARK_Mode => Off] — TTY detection
 ├── Termicap.Color                [SPARK Silver] — color level detection (11-step cascade)
+├── Termicap.Downsampling         [SPARK Gold]   — color downsampling conversions (TrueColor/256-color to lower levels)
 ├── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
 ├── Termicap.Unicode              [SPARK Silver] — Unicode support level detection (5-step cascade)
 └── Termicap.Terminal_Id          [spec: SPARK, body: SPARK_Mode => Off] — terminal identity detection (8-step cascade)
 ```
 
-`Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id` are detection packages that depend on `Termicap.Environment`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. The root package remains a namespace-only package.
+`Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id` are detection packages that depend on `Termicap.Environment`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, or any OS interface. The root package remains a namespace-only package.
 
 ## Level 2: Package Descriptions
 
@@ -375,6 +376,45 @@ After step 8, `Is_Multiplexer` is derived: `Result.Kind in Multiplexer_Kind`.
 
 ---
 
+### `Termicap.Downsampling`
+
+**Responsibility:** Converts color values from higher-fidelity levels (TrueColor, 256-color) to the nearest equivalent at a lower fidelity level (256-color, 16-color, or no-color). Performs no OS calls, no dynamic allocation, no global state, and no unbounded loops.
+
+All functions are pure integer arithmetic over bounded subtypes. The entire package — both spec and body — carries `SPARK_Mode => On`, achieving SPARK Gold provability. This is the complement to `Termicap.Color`: detection tells a caller what the terminal supports; downsampling converts a color value to that level.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-downsampling.ads`, `src/termicap-downsampling.adb` |
+| SPARK_Mode | On (spec and body) — **Gold level** |
+| Dependencies | `Termicap.Color` (for `Color_Level`) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Color_Component` | Subtype of `Natural` in `0 .. 255`. Represents one 8-bit sRGB channel. The explicit range lets GNATprove discharge overflow obligations in cube-index and distance calculations without manual lemmas. |
+| `RGB` | Plain record with three `Color_Component` fields (`Red`, `Green`, `Blue`). No invariant, no discriminant; usable as a function parameter without dynamic allocation. |
+| `Color_Index_256` | Subtype of `Natural` in `0 .. 255`. Represents an xterm 256-color palette index. Sub-range partition: 0–15 = ANSI 16 colors; 16–231 = 6×6×6 RGB cube; 232–255 = 24-step grayscale ramp. |
+| `Color_Index_16` | Subtype of `Color_Index_256` in `0 .. 15`. Represents an ANSI 16-color index. Being a subtype of `Color_Index_256`, any `Color_Index_16` value is directly assignable to `Color_Index_256` without conversion. |
+| `Downsampled_Color` | Discriminated record keyed on `Color_Level`. Variant `None` carries no data; `Basic_16` carries `Index_16 : Color_Index_16`; `Extended_256` carries `Index_256 : Color_Index_256`; `True_Color` carries `RGB_Value : RGB`. The default discriminant (`Level => None`) allows unconstrained stack allocation. Callers dispatch on the discriminant in a case statement. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Description | Requirements |
+|-----------|------|---------------|-------------|--------------|
+| `Downsample_True_To_256` | Function | `Global => null`; result in `16 .. 255` | Maps an RGB value to the nearest xterm 256-color palette entry using a grayscale-first check (ramp indices 232–255) then 6×6×6 cube quantization (indices 16–231). Never returns indices 0–15. | FUNC-DSP-004 |
+| `Downsample_True_To_16` | Function | `Global => null` | Maps an RGB value to the nearest of the 16 standard ANSI colors using the integer redmean weighted Euclidean distance. Ties are broken in favor of the lower index. | FUNC-DSP-005 |
+| `Downsample_256_To_16` | Function | `Global => null` | Maps a 256-color palette index to the nearest ANSI 16-color index. Indices 0–15 are returned directly (pass-through). Indices 16–231 are reconstructed to RGB via the cube formula; indices 232–255 via the grayscale ramp formula; both then pass to `Downsample_True_To_16`. | FUNC-DSP-006 |
+| `Downsample` (RGB overload) | Function | `Global => null`; idempotency and monotonicity postconditions | Dispatches a TrueColor RGB value to the appropriate primitive based on `Target`. Returns a `Downsampled_Color` discriminated by the effective output level. Postcondition guarantees: when `Target >= True_Color` the result carries the original RGB; when `Target = None` the result level is `None`; `Color_Level_Of (result) <= Color_Level'Min (True_Color, Target)`. | FUNC-DSP-008, FUNC-DSP-009, FUNC-DSP-010 |
+| `Downsample` (256 overload) | Function | `Global => null`; idempotency and monotonicity postconditions | Dispatches a 256-color palette index to the appropriate primitive based on `Target`. Postcondition guarantees: when `Target >= Extended_256` the result carries the original index; when `Target = None` the result level is `None`; `Color_Level_Of (result) <= Color_Level'Min (Extended_256, Target)`. `Color_Index_16` values (0–15) may be passed to this overload directly. | FUNC-DSP-008, FUNC-DSP-009, FUNC-DSP-010 |
+| `Color_Level_Of` | Function | `Global => null`; result = `D.Level` | Returns the `Color_Level` discriminant of a `Downsampled_Color`. Used in monotonicity postconditions and by callers that need to inspect the level of a result before extracting the variant. | FUNC-DSP-010 |
+
+#### Relationship to Other Packages
+
+`Termicap.Downsampling` depends on `Termicap.Color` for the `Color_Level` type used as the `Target` parameter and as the discriminant of `Downsampled_Color`. It has no dependency on `Termicap.Environment`, `Termicap.TTY`, or any OS interface. Because it operates purely on values passed by the caller, it is usable in any context where `Termicap.Color` is available, including test bodies, without capturing an environment snapshot or querying TTY status.
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -394,6 +434,16 @@ After step 8, `Is_Multiplexer` is derived: `Result.Kind in Multiplexer_Kind`.
 │   │  Detect_Color_Level (Env, Is_TTY : Boolean) │  │
 │   │  Global => null — 11-step cascade           │  │
 │   └─────────────────────────────────────────────┘  │
+│   Termicap.Downsampling (spec + body) [Gold]        │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Color_Component, RGB,                      │  │
+│   │    Color_Index_256, Color_Index_16,         │  │
+│   │    Downsampled_Color types                  │  │
+│   │  Downsample_True_To_256/16, _256_To_16,    │  │
+│   │    Downsample (×2), Color_Level_Of          │  │
+│   │  Global => null — pure arithmetic, no FFI   │  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
 │                                                     │
 │   Termicap.Unicode (spec + body)                    │
 │   ┌─────────────────────────────────────────────┐  │
@@ -462,7 +512,7 @@ After step 8, `Is_Multiplexer` is derived: `Result.Kind in Multiplexer_Kind`.
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, the `Termicap.Dimensions` body, and the `Termicap.Terminal_Id` body are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the spec contracts on `Get_Size` and `Detect_Terminal_Identity` — stay within the provable zone. `Termicap.Unicode` is the only detection package where both spec and body carry `SPARK_Mode => On`. `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, the `Termicap.Dimensions` body, and the `Termicap.Terminal_Id` body are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the spec contracts on `Get_Size` and `Detect_Terminal_Identity` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter.
 
 ## Related Documents
 
@@ -478,4 +528,5 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY`
 - **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
 - **ADR-0008** (`docs/adr/0008-terminal-id-string-representation-spark-boundary.md`): Rationale for `SPARK_Mode => Off` body and `Ada.Strings.Unbounded` use in `Termicap.Terminal_Id`
 - **Tech Spec F6** (`docs/tech-specs/terminal-identification.md`): Terminal identification detection design rationale
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012
+- **Tech Spec F7** (`docs/tech-specs/color-downsampling.md`): Color downsampling design rationale, algorithm survey, and type design decisions (ADR-0009)
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012
