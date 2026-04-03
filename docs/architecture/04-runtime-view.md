@@ -482,6 +482,110 @@ Test body
 - The ioctl path is exercised only via integration tests or the interactive demo (`examples/dimensions_demo/`).
 - Tests are fully parallelizable and reproduce identically across machines, including CI environments without a TTY.
 
+## Scenario 13: Terminal Identity Detection Flow
+
+Full end-to-end scenario showing how a client calls `Detect_Terminal_Identity`. Only the environment snapshot is required — no TTY status.
+
+```
+Application Init (Ada-only region)
+  │
+  │  Env : Environment;
+  │
+  │  Capture_Current (Env);             -- Scenario 1 (SPARK_Mode => Off)
+  │
+  ▼
+Termicap.Terminal_Id.Detect_Terminal_Identity (Env)   [spec: SPARK, body: SPARK_Mode => Off]
+  │
+  │  Result := (Kind => Unknown, Is_Multiplexer => False,
+  │             Program_Name | Program_Version | Term_Value => "")
+  │
+  │  [String fields populated unconditionally from env, regardless of Kind]
+  │  Result.Program_Name    := Value (Env, "TERM_PROGRAM")
+  │  Result.Program_Version := Value (Env, "TERM_PROGRAM_VERSION")
+  │  Result.Term_Value      := Value (Env, "TERM")
+  │
+  │  Step 1: TERM_PROGRAM (priority 1 — FUNC-TID-004)
+  │    Contains (Env, "TERM_PROGRAM")?
+  │      "iTerm.app"      → Kind := ITerm2
+  │      "Apple_Terminal" → Kind := Apple_Terminal
+  │      "vscode"         → Kind := VSCode
+  │      "WezTerm"        → Kind := WezTerm
+  │      "WarpTerminal"   → Kind := WarpTerminal
+  │      "mintty"         → Kind := Mintty
+  │
+  │  Step 2: TERMINAL_EMULATOR (priority 2, only if Kind = Unknown)
+  │    "JetBrains-JediTerm" → Kind := JediTerm
+  │
+  │  Step 3: WT_SESSION presence (priority 3, only if Kind = Unknown)
+  │    present → Kind := Windows_Terminal
+  │
+  │  Step 4: KONSOLE_VERSION presence (priority 4, only if Kind = Unknown)
+  │    present → Kind := Konsole
+  │
+  │  Step 5: VTE_VERSION presence (priority 5, only if Kind = Unknown)
+  │    present → Kind := VTE
+  │
+  │  Step 6: TMUX presence (priority 6, only if Kind = Unknown)
+  │    present → Kind := Tmux
+  │
+  │  Step 7: TERM value/prefix matching (priority 7, only if Kind = Unknown)
+  │    "dumb"         → Kind := Dumb
+  │    "linux"        → Kind := Linux_Console
+  │    prefix "tmux"  → Kind := Tmux
+  │    prefix "screen"→ Kind := Screen
+  │    "xterm-kitty"  → Kind := Kitty
+  │    "xterm-ghostty"→ Kind := Ghostty
+  │    "alacritty"    → Kind := Alacritty
+  │    "wezterm"      → Kind := WezTerm
+  │    prefix "rxvt"  → Kind := Rxvt
+  │    "foot"/"foot-extra" → Kind := Foot
+  │    prefix "xterm" → Kind := Xterm
+  │
+  │  Step 8: Default — Kind remains Unknown if no rule matched
+  │
+  │  [Derive Is_Multiplexer — FUNC-TID-006]
+  │  Result.Is_Multiplexer := Result.Kind in Multiplexer_Kind
+  │                        -- (i.e., Kind in Tmux | Screen)
+  │
+  └──► Terminal_Identity
+         .Kind            -- Classified terminal or Unknown
+         .Is_Multiplexer  -- True iff Kind in Tmux | Screen
+         .Program_Name    -- raw TERM_PROGRAM value (or "")
+         .Program_Version -- raw TERM_PROGRAM_VERSION value (or "")
+         .Term_Value      -- raw TERM value (or "")
+```
+
+**Key properties:**
+
+- `Detect_Terminal_Identity` takes only `Env` — no `Is_TTY` parameter. Terminal identity is determined entirely from environment variable strings, independent of stream connectivity (FUNC-TID-003).
+- All value comparisons are case-insensitive, delegating to `Equal_Case_Insensitive` in `Termicap.Environment` or the private `Starts_With_CI` helper for prefix checks (FUNC-TID-010).
+- String fields (`Program_Name`, `Program_Version`, `Term_Value`) are always populated from the snapshot regardless of whether those variables influenced the `Kind` classification. Absent variables yield the empty `Unbounded_String` (FUNC-TID-004).
+- The spec carries two GNATprove-verifiable postconditions: (1) if none of the seven probe variables are present in `Env` then `Kind = Unknown` and `Is_Multiplexer = False`; (2) `Is_Multiplexer` equals `Kind in Multiplexer_Kind` in all cases (FUNC-TID-005, FUNC-TID-006).
+- The body has `SPARK_Mode => Off` because `Ada.Strings.Unbounded` is a controlled type outside the SPARK subset. The spec contracts remain verifiable for all callers in the SPARK zone (ADR-0008).
+- Integration test pattern (no OS, no TTY):
+
+```ada
+declare
+   Env    : Environment := EMPTY_ENVIRONMENT;
+   Result : Terminal_Identity;
+begin
+   --  tmux multiplexer via TERM
+   Insert (Env, "TERM", "tmux-256color");
+   Result := Detect_Terminal_Identity (Env);
+   pragma Assert (Result.Kind = Tmux);
+   pragma Assert (Result.Is_Multiplexer);
+
+   --  TERM_PROGRAM takes priority over TERM
+   Insert (Env, "TERM_PROGRAM", "WezTerm");
+   Result := Detect_Terminal_Identity (Env);
+   pragma Assert (Result.Kind = WezTerm);
+   pragma Assert (not Result.Is_Multiplexer);
+
+   --  String fields populated even when a different variable drove Kind
+   pragma Assert (To_String (Result.Term_Value) = "tmux-256color");
+end;
+```
+
 ---
 
 ## Related Documents
@@ -492,6 +596,8 @@ Test body
 - **Tech Spec F3** (`docs/tech-specs/f3-color-level-detection.md`): Color level detection design rationale
 - **Tech Spec F4** (`docs/tech-specs/terminal-dimensions.md`): Terminal dimensions detection design rationale
 - **Tech Spec F5** (`docs/tech-specs/unicode-support.md`): Unicode support level detection design rationale
+- **Tech Spec F6** (`docs/tech-specs/terminal-identification.md`): Terminal identification detection design rationale
 - **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
 - **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008
+- **ADR-0008** (`docs/adr/0008-terminal-id-string-representation-spark-boundary.md`): Rationale for `SPARK_Mode => Off` body and `Ada.Strings.Unbounded` use in `Termicap.Terminal_Id`
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012

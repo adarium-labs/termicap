@@ -11,10 +11,11 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.TTY                  [spec: SPARK, body: SPARK_Mode => Off] — TTY detection
 ├── Termicap.Color                [SPARK Silver] — color level detection (11-step cascade)
 ├── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
-└── Termicap.Unicode              [SPARK Silver] — Unicode support level detection (5-step cascade)
+├── Termicap.Unicode              [SPARK Silver] — Unicode support level detection (5-step cascade)
+└── Termicap.Terminal_Id          [spec: SPARK, body: SPARK_Mode => Off] — terminal identity detection (8-step cascade)
 ```
 
-`Termicap.Color`, `Termicap.Dimensions`, and `Termicap.Unicode` are detection packages that depend on `Termicap.Environment`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` requires no TTY parameter at all, as Unicode capability is a property of the terminal emulator and locale configuration rather than stream connectivity. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. The root package remains a namespace-only package.
+`Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id` are detection packages that depend on `Termicap.Environment`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. The root package remains a namespace-only package.
 
 ## Level 2: Package Descriptions
 
@@ -325,6 +326,55 @@ The detection algorithm is a single pure function implementing a 5-step priority
 
 ---
 
+### `Termicap.Terminal_Id`
+
+**Responsibility:** Identifies the terminal emulator or multiplexer hosting the current session by inspecting environment variables passively. Performs no OS calls and reads no global state.
+
+The detection algorithm is a single pure function implementing an 8-step priority cascade. All logic consists of enum comparisons and string matching via the `Termicap.Environment` API; there is no FFI. The package spec is SPARK Silver provable. The body has `SPARK_Mode => Off` because it uses `Ada.Strings.Unbounded` (a controlled type not supported by the SPARK subset); the spec-level contracts — `Global => null` and both postconditions — remain verifiable for all callers in the SPARK zone (ADR-0008).
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-terminal_id.ads`, `src/termicap-terminal_id.adb` |
+| SPARK_Mode | On (spec), Off (body) |
+| Dependencies | `Termicap.Environment`, `Ada.Strings.Unbounded` (Ada standard library) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Terminal_Kind` | Twenty-value enumeration classifying the active terminal emulator or multiplexer. Values: `Unknown`, `Alacritty`, `Apple_Terminal`, `Dumb`, `Foot`, `Ghostty`, `ITerm2`, `JediTerm`, `Kitty`, `Konsole`, `Linux_Console`, `Mintty`, `Rxvt`, `Screen`, `Tmux`, `VSCode`, `VTE`, `WarpTerminal`, `WezTerm`, `Windows_Terminal`, `Xterm`. `Unknown` means no recognised signal was found; `Dumb` means `TERM=dumb` was declared explicitly. |
+| `Multiplexer_Kind` | Subtype of `Terminal_Kind` restricted by a static predicate to `Tmux \| Screen`. Usable in membership tests and case alternatives. |
+| `Terminal_Identity` | Record with four fields: `Kind : Terminal_Kind`, `Program_Name : Unbounded_String` (raw `TERM_PROGRAM` value), `Program_Version : Unbounded_String` (raw `TERM_PROGRAM_VERSION` value), `Term_Value : Unbounded_String` (raw `TERM` value), and `Is_Multiplexer : Boolean` (derived from `Kind`). String fields are always populated from the environment snapshot regardless of classification outcome; absent variables yield the empty string. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Detect_Terminal_Identity` | Function | `Global => null`; postcondition: if no recognised env var is present then `Kind = Unknown` and `Is_Multiplexer = False`; always `Is_Multiplexer = (Kind in Multiplexer_Kind)` | FUNC-TID-003, FUNC-TID-005, FUNC-TID-006, FUNC-TID-007 |
+
+#### Detection Cascade
+
+`Detect_Terminal_Identity` implements an 8-step priority cascade (FUNC-TID-004):
+
+| Priority | Environment Variable | Rule |
+|----------|---------------------|------|
+| 1 | `TERM_PROGRAM` | Value matched case-insensitively against known program names: `iTerm.app` → `ITerm2`; `Apple_Terminal` → `Apple_Terminal`; `vscode` → `VSCode`; `WezTerm` → `WezTerm`; `WarpTerminal` → `WarpTerminal`; `mintty` → `Mintty` |
+| 2 | `TERMINAL_EMULATOR` | If still `Unknown`: `JetBrains-JediTerm` → `JediTerm` |
+| 3 | `WT_SESSION` | If still `Unknown` and variable present: → `Windows_Terminal` |
+| 4 | `KONSOLE_VERSION` | If still `Unknown` and variable present: → `Konsole` |
+| 5 | `VTE_VERSION` | If still `Unknown` and variable present: → `VTE` |
+| 6 | `TMUX` | If still `Unknown` and variable present: → `Tmux` |
+| 7 | `TERM` | If still `Unknown`: exact match `"dumb"` → `Dumb`; `"linux"` → `Linux_Console`; prefix `"tmux"` → `Tmux`; prefix `"screen"` → `Screen`; `"xterm-kitty"` → `Kitty`; `"xterm-ghostty"` → `Ghostty`; `"alacritty"` → `Alacritty`; `"wezterm"` → `WezTerm`; prefix `"rxvt"` → `Rxvt`; `"foot"`/`"foot-extra"` → `Foot`; prefix `"xterm"` → `Xterm` |
+| 8 | *(default)* | `Kind` remains `Unknown` if no rule matched |
+
+After step 8, `Is_Multiplexer` is derived: `Result.Kind in Multiplexer_Kind`.
+
+#### Relationship to Other Packages
+
+`Termicap.Terminal_Id` depends on `Termicap.Environment` (for `Contains`, `Value`, and `Equal_Case_Insensitive`) and has **no dependency** on `Termicap.TTY`. Unlike `Termicap.Color` and `Termicap.Dimensions`, no TTY status parameter is required — terminal identity is determined entirely from environment variable strings. This makes `Detect_Terminal_Identity` callable in the same manner as `Detect_Unicode_Level`: the environment snapshot alone is sufficient.
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -350,8 +400,7 @@ The detection algorithm is a single pure function implementing a 5-step priority
 │   │  Unicode_Level type                         │  │
 │   │  Detect_Unicode_Level (Env)                 │  │
 │   │  Global => null — 5-step cascade            │  │
-│   │  (no Is_TTY parameter — unique among        │  │
-│   │   detection packages)                       │  │
+│   │  (no Is_TTY parameter)                      │  │
 │   └─────────────────────────────────────────────┘  │
 │                                                     │
 │   Termicap.Dimensions (spec only)                   │
@@ -359,6 +408,15 @@ The detection algorithm is a single pure function implementing a 5-step priority
 │   │  Terminal_Size type                         │  │
 │   │  Get_Size (Env, Is_TTY : Boolean)           │  │
 │   │  Global => null — 3-step fallback chain     │  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Terminal_Id (spec only)                  │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Terminal_Kind, Multiplexer_Kind,           │  │
+│   │    Terminal_Identity types                  │  │
+│   │  Detect_Terminal_Identity (Env)             │  │
+│   │  Global => null — 8-step cascade            │  │
+│   │  (no Is_TTY parameter)                      │  │
 │   └─────────────────────────────────────────────┘  │
 │                                                     │
 │   Termicap.TTY (spec only)                          │
@@ -393,10 +451,18 @@ The detection algorithm is a single pure function implementing a 5-step priority
 │   │  Try_Parse_Positive helper                  │  │
 │   │  Get_Size implementation                    │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Terminal_Id (body)                       │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Ada.Strings.Unbounded (controlled type —   │  │
+│   │    not in SPARK subset; see ADR-0008)        │  │
+│   │  Starts_With_CI private helper              │  │
+│   │  Detect_Terminal_Identity implementation    │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, and the `Termicap.Dimensions` body are the only points where OS calls occur. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the `Get_Size` spec contract — stay within the provable zone. `Termicap.Unicode` is the only detection package where both spec and body carry `SPARK_Mode => On`; it requires no TTY status at all.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, the `Termicap.Dimensions` body, and the `Termicap.Terminal_Id` body are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the spec contracts on `Get_Size` and `Detect_Terminal_Identity` — stay within the provable zone. `Termicap.Unicode` is the only detection package where both spec and body carry `SPARK_Mode => On`. `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter.
 
 ## Related Documents
 
@@ -410,4 +476,6 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY`
 - **Tech Spec F5** (`docs/tech-specs/unicode-support.md`): Unicode support level detection design rationale
 - **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
 - **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008
+- **ADR-0008** (`docs/adr/0008-terminal-id-string-representation-spark-boundary.md`): Rationale for `SPARK_Mode => Off` body and `Ada.Strings.Unbounded` use in `Termicap.Terminal_Id`
+- **Tech Spec F6** (`docs/tech-specs/terminal-identification.md`): Terminal identification detection design rationale
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012

@@ -3,5 +3,6 @@ aggregate project Termicap_Examples is
                           "tty_demo/tty_demo.gpr",
                           "color_demo/color_demo.gpr",
                           "dimensions_demo/dimensions_demo.gpr",
-                          "unicode_demo/unicode_demo.gpr");
+                          "unicode_demo/unicode_demo.gpr",
+                          "terminal_id_demo/terminal_id_demo.gpr");
 end Termicap_Examples;

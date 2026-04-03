@@ -1,0 +1,339 @@
+[DOCUMENT]
+TITLE: Terminal Identification (Passive)
+UID: REQ-TID
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[REQUIREMENT]
+UID: FUNC-TID-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminal_Kind Enumeration Type
+STATEMENT: >>>
+The library shall provide a Terminal_Kind enumeration type whose values represent all terminal emulators and terminal multiplexers that can be identified passively from environment variables. The enumeration shall include at minimum the following values:
+
+  Unknown          -- no recognized terminal identifier found
+  Alacritty        -- Alacritty GPU-accelerated terminal (TERM=alacritty)
+  Apple_Terminal   -- macOS Terminal.app (TERM_PROGRAM=Apple_Terminal)
+  Foot             -- foot Wayland terminal (TERM=foot or TERM=foot-extra)
+  Ghostty          -- Ghostty terminal (TERM=xterm-ghostty)
+  ITerm2           -- iTerm2 for macOS (TERM_PROGRAM=iTerm.app)
+  JediTerm         -- JetBrains embedded terminal (TERMINAL_EMULATOR=JetBrains-JediTerm)
+  Kitty            -- kitty GPU terminal (TERM=xterm-kitty)
+  Konsole          -- KDE Konsole (KONSOLE_VERSION present)
+  Linux_Console    -- Linux kernel virtual console (TERM=linux)
+  Mintty           -- mintty for Cygwin/MSYS2 (TERM_PROGRAM=mintty)
+  Rxvt             -- rxvt or urxvt (TERM prefix "rxvt")
+  Screen           -- GNU Screen multiplexer (TERM prefix "screen")
+  Tmux             -- tmux multiplexer (TMUX present, or TERM prefix "tmux")
+  VSCode           -- VS Code integrated terminal (TERM_PROGRAM=vscode)
+  VTE              -- VTE-based terminals (VTE_VERSION present; includes GNOME Terminal,
+                      XFCE Terminal, Tilix, Guake)
+  WezTerm          -- WezTerm terminal (TERM_PROGRAM=WezTerm or TERM=wezterm)
+  Windows_Terminal -- Windows Terminal (WT_SESSION present)
+  Xterm            -- xterm or xterm-compatible (TERM prefix "xterm", after all more-
+                      specific xterm-prefixed terminals have been eliminated)
+  Dumb             -- dumb terminal (TERM=dumb)
+
+The enumeration shall be defined such that it is extensible in future versions without breaking existing callers that perform exhaustive case analysis (callers shall be documented to include an others branch).
+<<<
+COMMENT: >>>
+The enumeration captures every terminal that reference implementations (notcurses, tcell, termenv, is-unicode-supported) fingerprint from environment variables alone. Multiplexers (Tmux, Screen) are included because they affect how downstream capabilities should be interpreted — in particular, color and Unicode capability must be read from the outer terminal, not from the multiplexer's TERM value. The Dumb value is separate from Unknown: "dumb" is an explicit declaration by the environment that the terminal has no capability, whereas Unknown means no identification signal was found but the terminal may still be capable. VTE bundles several terminal emulators because they all set VTE_VERSION and share an identical capability profile; callers that need to distinguish GNOME Terminal from Tilix must query additional variables beyond this library's scope.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminal_Identity Record Type
+STATEMENT: >>>
+The library shall provide a Terminal_Identity record type that aggregates the results of passive terminal identification. The record shall contain at minimum the following fields:
+
+  Kind              : Terminal_Kind
+    -- The classified terminal or multiplexer, or Unknown if unrecognised.
+
+  Program_Name      : Ada.Strings.Unbounded.Unbounded_String
+    -- The raw value of TERM_PROGRAM as found in the environment snapshot,
+    -- or the empty string if TERM_PROGRAM is absent.
+
+  Program_Version   : Ada.Strings.Unbounded.Unbounded_String
+    -- The raw value of TERM_PROGRAM_VERSION as found in the environment
+    -- snapshot, or the empty string if TERM_PROGRAM_VERSION is absent.
+
+  Term_Value        : Ada.Strings.Unbounded.Unbounded_String
+    -- The raw value of TERM as found in the environment snapshot,
+    -- or the empty string if TERM is absent.
+
+  Is_Multiplexer    : Boolean
+    -- True when Kind is Tmux or Screen; False for all other values.
+    -- Downstream features shall use this flag to signal that capability
+    -- detection must account for a multiplexer wrapping an outer terminal.
+
+All fields shall be readable with no side effects. The record shall not expose any mutable state.
+<<<
+COMMENT: >>>
+Storing the raw TERM_PROGRAM and TERM_PROGRAM_VERSION strings alongside the enumerated Kind gives callers two complementary views: a structured value suitable for pattern-matching (Kind) and the raw strings needed for version-specific heuristics (e.g., iTerm2 v3+ supports true color while v2 does not). Is_Multiplexer is a derived convenience flag; it could be computed from Kind, but making it explicit prevents callers from accidentally omitting the multiplexer check in downstream color or Unicode logic. Unbounded_String is chosen for the string fields because the length of TERM_PROGRAM_VERSION values is not bounded in the environment — version strings such as "3.4.19beta14" cannot be constrained at compile time.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detect_Terminal_Identity Function Signature
+STATEMENT: >>>
+The library shall provide a pure function Detect_Terminal_Identity that accepts an Environment snapshot and returns a Terminal_Identity value. The function shall perform no OS calls, read no global state, and produce no side effects beyond its return value. All detection logic shall operate exclusively on the supplied Environment snapshot.
+
+A representative signature is:
+
+  function Detect_Terminal_Identity
+     (Env : Termicap.Environment.Environment) return Terminal_Identity
+
+The function shall be defined in a SPARK-annotated package and shall carry the SPARK contract Global => null. The package spec shall be compiled with SPARK_Mode => On.
+<<<
+COMMENT: >>>
+Terminal identification is fully SPARK-provable at Silver level because it is pure string pattern-matching against an immutable snapshot — no OS calls, no global state, no dynamic allocation beyond constructing the return record. This mirrors the design of Detect_Unicode_Level (FUNC-UNI-002) and Detect_Color_Level (FUNC-CLR-002). The function does not accept an Is_TTY parameter because terminal identity is a property of the terminal emulator, not of the output stream's attachment status; a tool writing to a pipe may still need to know which terminal wraps the session.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Environment Variable Reading Order and Priority
+STATEMENT: >>>
+The Detect_Terminal_Identity function shall read environment variables in the following strict priority order, using the first rule that yields a non-Unknown classification:
+
+  1. TERM_PROGRAM — checked first because it is set explicitly by terminal emulators
+     and is more specific than TERM:
+       "iTerm.app"        -> Kind := ITerm2
+       "Apple_Terminal"   -> Kind := Apple_Terminal
+       "vscode"           -> Kind := VSCode
+       "WezTerm"          -> Kind := WezTerm
+       "mintty"           -> Kind := Mintty
+
+  2. TERMINAL_EMULATOR — checked for JetBrains-family terminals:
+       "JetBrains-JediTerm" -> Kind := JediTerm
+
+  3. WT_SESSION — presence of this variable (any value, including empty)
+     identifies Windows Terminal:
+       present            -> Kind := Windows_Terminal
+
+  4. KONSOLE_VERSION — presence of this variable (any value) identifies
+     KDE Konsole:
+       present            -> Kind := Konsole
+
+  5. VTE_VERSION — presence of this variable (any value) identifies a VTE-
+     based terminal:
+       present            -> Kind := VTE
+
+  6. TMUX — presence of this variable (any value) identifies a tmux session:
+       present            -> Kind := Tmux
+
+  7. TERM — inspected last because its values are less specific and may be
+     set by a multiplexer rather than the outer terminal:
+       "dumb"                           -> Kind := Dumb
+       "linux"                          -> Kind := Linux_Console
+       starts with "tmux"               -> Kind := Tmux
+       starts with "screen"             -> Kind := Screen
+       "xterm-kitty"                    -> Kind := Kitty
+       "xterm-ghostty"                  -> Kind := Ghostty
+       "alacritty"                      -> Kind := Alacritty
+       "wezterm"                        -> Kind := WezTerm
+       starts with "rxvt"               -> Kind := Rxvt
+       "foot" or "foot-extra"           -> Kind := Foot
+       starts with "xterm"              -> Kind := Xterm
+
+  8. Default — if no rule above matched:
+       Kind := Unknown
+
+All string comparisons shall be case-insensitive. The Program_Name, Program_Version, and Term_Value fields of the returned Terminal_Identity shall be populated from TERM_PROGRAM, TERM_PROGRAM_VERSION, and TERM respectively, regardless of which rule determined the Kind.
+<<<
+COMMENT: >>>
+TERM_PROGRAM takes priority over TERM because it is an application-level signal that a terminal emulator injects intentionally, whereas TERM may be set by a multiplexer (e.g., tmux sets TERM=screen-256color, hiding the outer terminal's identity). WT_SESSION, KONSOLE_VERSION, VTE_VERSION, and TMUX are presence-only checks — their values are not meaningful for classification. TERM is checked last and with the most specificity at the top (xterm-kitty before plain xterm) to avoid misclassifying a kitty session as a generic Xterm. The Is_Multiplexer field of the returned record shall be set to True if and only if Kind is Tmux or Screen; all other values yield False.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unknown Fallback Postcondition
+STATEMENT: >>>
+The Detect_Terminal_Identity function shall satisfy the following SPARK postcondition: when none of the environment variables TERM_PROGRAM, TERMINAL_EMULATOR, WT_SESSION, KONSOLE_VERSION, VTE_VERSION, TMUX, and TERM is present in the supplied snapshot, the returned Terminal_Identity shall have Kind = Unknown, Is_Multiplexer = False, and all string fields equal to the empty string.
+
+More precisely, the function shall carry the SPARK postcondition:
+
+  Post =>
+    (if not Env.Contains ("TERM_PROGRAM") and then
+        not Env.Contains ("TERMINAL_EMULATOR") and then
+        not Env.Contains ("WT_SESSION") and then
+        not Env.Contains ("KONSOLE_VERSION") and then
+        not Env.Contains ("VTE_VERSION") and then
+        not Env.Contains ("TMUX") and then
+        not Env.Contains ("TERM")
+     then
+        Detect_Terminal_Identity'Result.Kind = Unknown and then
+        not Detect_Terminal_Identity'Result.Is_Multiplexer)
+<<<
+COMMENT: >>>
+An explicit postcondition on the empty-environment case gives the SPARK prover a verifiable boundary condition and documents the guaranteed baseline behavior for callers. This mirrors the spirit of the Unknown fallback postcondition pattern used in color level detection. The condition is sufficient (not necessary): the function may return Unknown in other cases as well, but must return Unknown in this fully-absent case.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Is_Multiplexer Derivation Rule
+STATEMENT: >>>
+The Is_Multiplexer field of the returned Terminal_Identity record shall be set to True if and only if at least one of the following conditions holds in the supplied environment snapshot:
+
+  1. The variable TMUX is present (any value, including empty); or
+  2. The value of TERM starts with the prefix "tmux" (case-insensitive); or
+  3. The value of TERM starts with the prefix "screen" (case-insensitive).
+
+Is_Multiplexer shall be False when none of those conditions holds.
+
+This rule is intentionally independent of the Kind field. A terminal emulator recognised via TERM_PROGRAM (e.g., VSCode) may simultaneously be running inside a tmux session (TMUX present); in that case Kind = VSCode and Is_Multiplexer = True. Kind reflects which terminal emulator hosts the session; Is_Multiplexer reflects whether a multiplexer layer is also present.
+
+The SPARK postcondition shall enforce the positive direction for the TMUX variable:
+
+  Post =>
+    (if Termicap.Environment.Contains (Env, "TMUX") then
+       Detect_Terminal_Identity'Result.Is_Multiplexer)
+
+The TERM-prefix directions are verified by unit tests (FUNC-TID-012) rather than SPARK contracts, because prefix matching requires a helper not currently visible in the spec.
+
+Downstream consumers — in particular the color level detection module (Termicap.Color) and the Unicode detection module (Termicap.Unicode) — shall treat Is_Multiplexer = True as a signal that TERM and related variables reflect the multiplexer's capability profile rather than the outer terminal's, and should apply additional heuristics (e.g., reading TERM_PROGRAM for the outer terminal's true capabilities).
+<<<
+COMMENT: >>>
+The original design derived Is_Multiplexer from Kind, which fails when both TERM_PROGRAM=vscode and TMUX are set: Kind = VSCode, Is_Multiplexer = False even though tmux is present. The corrected rule checks raw environment signals independently of Kind. Reference: Approach B analysis, 2026-04-03. The SPARK postcondition covers only the TMUX-presence direction; TERM-prefix cases are covered by unit tests because prefix matching requires a helper not visible in the SPARK spec boundary.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Provability for Detect_Terminal_Identity
+STATEMENT: >>>
+The Detect_Terminal_Identity function shall be SPARK-provable at Silver level. Its SPARK contract shall specify Global => null, confirming it reads no global variables and produces no side effects beyond its return value. The function body shall contain no dynamic allocation, no unbounded loops, and no FFI calls, ensuring the SPARK prover can discharge all proof obligations without manual lemmas.
+
+The package containing the Terminal_Kind type, Terminal_Identity record, and Detect_Terminal_Identity function shall be compiled with SPARK_Mode => On. No SPARK_Mode => Off boundary shall appear within this package.
+<<<
+COMMENT: >>>
+Terminal identification is a pure structural decision: compare strings, follow a fixed priority chain, and construct a record. There is no inherent need for OS calls (contrast with TTY detection and dimensions detection, which require ioctl). This property makes the module a good SPARK Silver candidate alongside Unicode detection (FUNC-UNI-007). The absence of unbounded loops is ensured by the fixed, finite set of environment variable names and TERM prefix candidates checked in the priority cascade.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Version String Representation Strategy
+STATEMENT: >>>
+The library shall store the TERM_PROGRAM_VERSION value as a raw, unparsed string in the Program_Version field of Terminal_Identity. The library shall not attempt to parse the version string into major, minor, or patch components in v1. Callers that require version-specific behaviour (e.g., distinguishing iTerm2 v3+ from v2 for true-color gating) shall inspect the raw Program_Version string directly using standard Ada string operations.
+
+The library shall document the following known formats for reference:
+  - iTerm2:    "3.4.19" (decimal dot notation, major.minor.patch)
+  - WezTerm:   "20231203-110809-5046fc22" (date-time-hash notation)
+  - VS Code:   not set (TERM_PROGRAM_VERSION absent in vscode terminal)
+  - mintty:    "3.6.4" (decimal dot notation)
+
+No parsing, validation, or range-checking of the version string shall be performed by this library.
+<<<
+COMMENT: >>>
+Version string parsing is deliberately deferred from v1 to avoid scope creep. The formats are heterogeneous (semantic versioning, date-hash, absent) and the only consumer that currently needs version-level discrimination is color detection for iTerm2 (v3+ supports true color). That check is already handled by the existing Termicap.Color module, which reads TERM_PROGRAM_VERSION directly. Introducing structured version parsing in Terminal_Identity would require handling malformed strings and would add proof obligations to the SPARK contract without delivering value to any current downstream consumer.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-009
+STATUS: Approved
+PRIORITY: Should
+TITLE: Authoritative Source of TERM_PROGRAM for Downstream Modules
+STATEMENT: >>>
+The Terminal_Identity record produced by Detect_Terminal_Identity shall be treated by all downstream detection modules as the authoritative, pre-parsed source for TERM_PROGRAM and TERM_PROGRAM_VERSION values. Downstream modules (e.g., Termicap.Color, Termicap.Unicode) should accept a Terminal_Identity value as an optional input and use its Kind, Program_Name, and Program_Version fields rather than re-reading TERM_PROGRAM from the environment snapshot directly, when a Terminal_Identity is supplied.
+
+When no Terminal_Identity is supplied (e.g., when a downstream module is called standalone), those modules shall continue to read TERM_PROGRAM directly from the environment snapshot, preserving backward compatibility.
+
+This requirement does not mandate a specific API shape; the interaction mechanism (overloaded function, optional parameter, or wrapper type) shall be determined at the Ada specification stage.
+<<<
+COMMENT: >>>
+The motivation is to eliminate duplicated env-var reading and to ensure consistent interpretation. Both color detection and Unicode detection already key on TERM_PROGRAM (e.g., TERM_PROGRAM=iTerm.app for color level, TERM_PROGRAM=vscode for Unicode on Windows). If Terminal_Identity is computed first (as is natural in the Capability Record Assembly step), feeding its result into downstream modules avoids re-parsing the same string and eliminates the risk of divergent classification decisions — e.g., color detection classifying TERM_PROGRAM=iTerm.app as ITerm2 using one set of rules while terminal identification uses a different set. The "should" priority reflects that this is an architectural preference, not a hard correctness requirement for v1.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Case-Insensitive String Comparison for All Classifications
+STATEMENT: >>>
+All environment variable value comparisons performed by Detect_Terminal_Identity shall be case-insensitive. Specifically:
+
+  - TERM_PROGRAM values shall be compared case-insensitively (e.g., "ITERM.APP",
+    "iterm.app", and "iTerm.app" shall all yield Kind := ITerm2).
+  - TERMINAL_EMULATOR values shall be compared case-insensitively.
+  - TERM values shall be compared case-insensitively for exact matches and
+    prefix matches (e.g., "Xterm-256color" shall be recognised as the
+    "xterm" prefix and yield Kind := Xterm).
+  - Presence checks (WT_SESSION, KONSOLE_VERSION, VTE_VERSION, TMUX) are
+    presence-only and do not involve value comparison; they are unaffected
+    by this requirement.
+
+The case-insensitive comparison shall use the Equal_Case_Insensitive utility provided by Termicap.Environment (FUNC-ENV-006) or an equivalent function with identical semantics.
+<<<
+COMMENT: >>>
+Case-insensitive comparison is mandatory because environment variable values are not guaranteed to be lowercase in all environments. In practice, most terminal emulators use consistent casing, but defensive case-folding is cheap and prevents silent misclassification when a user has manually set TERM_PROGRAM or when a non-standard terminal emulator uses uppercase. Using the shared Equal_Case_Insensitive from Termicap.Environment ensures a single, tested implementation rather than ad hoc comparisons scattered through the detection function body.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-011
+STATUS: Approved
+PRIORITY: Should
+TITLE: Terminal_Kind Multiplexer Subset Subtype
+STATEMENT: >>>
+The library shall provide a named subtype or constant set that enumerates the multiplexer values of Terminal_Kind, namely Tmux and Screen. This subtype shall be usable in membership tests and case alternatives. A representative declaration is:
+
+  subtype Multiplexer_Kind is Terminal_Kind
+     with Static_Predicate => Multiplexer_Kind in Tmux | Screen;
+
+The Is_Multiplexer derivation rule (FUNC-TID-006) shall reference this subtype in its implementation so that adding a new multiplexer value in a future version requires only an update to the subtype definition and the SPARK postcondition, not a search through the function body.
+<<<
+COMMENT: >>>
+Centralising the multiplexer set in a named subtype is a maintainability measure. Without it, the Is_Multiplexer derivation and any caller that pattern-matches on multiplexers must independently enumerate the same values — a violation of the DRY principle that is easy to miss when a new multiplexer (e.g., Zellij) is added. The Static_Predicate form is compatible with SPARK Silver and can appear in postconditions and membership tests without additional proof obligations.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TID-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unit Testability of Each Classification Rule
+STATEMENT: >>>
+Each classification rule in the detection priority cascade (FUNC-TID-004) shall be independently testable by constructing an Environment snapshot that exercises only that rule and asserting the expected Terminal_Identity result. Specifically, the test suite shall include at minimum one test case per Terminal_Kind value (excluding Unknown, which shall have its own dedicated test verifying the all-absent postcondition from FUNC-TID-005), and at minimum one test case verifying that a higher-priority rule correctly shadows a lower-priority rule (e.g., TERM_PROGRAM=iTerm.app with TERM=xterm shall yield Kind = ITerm2, not Xterm).
+
+The Detect_Terminal_Identity function shall be testable with a programmatically constructed Environment snapshot using the Insert operation (FUNC-ENV-005) so that tests require no live process environment.
+<<<
+COMMENT: >>>
+Explicit testability is listed as a requirement rather than an implementation note because it constrains the function's interface: it must accept an Environment snapshot parameter (rather than reading the live environment directly) to allow test injection. This is already implied by FUNC-TID-003 but is made explicit here to document the test coverage expectation. The shadow-rule test case is particularly important for catching priority inversion bugs introduced by future edits to the classification cascade.
+<<<

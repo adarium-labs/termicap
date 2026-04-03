@@ -13,6 +13,7 @@ with Test_Color;
 with Test_Dimensions;
 with Test_Environment;
 with Test_Environment_Capture;
+with Test_Terminal_Id;
 with Test_TTY;
 with Test_Unicode;
 
@@ -29,6 +30,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_Color.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Dimensions.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Unicode.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_Terminal_Id.Test_Case);
       return Result;
    end All_Tests;
 
