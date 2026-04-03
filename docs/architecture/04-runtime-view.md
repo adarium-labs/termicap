@@ -666,6 +666,146 @@ begin
 end;
 ```
 
+## Scenario 15: SIGWINCH Resize Notification Flow
+
+End-to-end sequence showing both the polling pattern and the self-pipe (event-loop) pattern for consuming terminal resize events.
+
+### Phase A — Installation
+
+```
+Application (Ada-only region)
+  │
+  │  Termicap.Sigwinch.Install (Terminal_FD => 1)
+  ▼
+Termicap.Sigwinch                       [SPARK_Mode => Off]
+  │
+  │  Protected singleton: Installed = False → proceed
+  │
+  │  pipe2 (read_fd, write_fd, O_NONBLOCK)   [C trampoline]
+  │    └──► OS creates pipe; write end is O_NONBLOCK to avoid
+  │         blocking inside the async-signal-safe handler
+  │
+  │  ioctl (Terminal_FD, TIOCGWINSZ, &ws)    [C trampoline]
+  │    └──► Cached_Size := (Rows => ws.ws_row, Columns => ws.ws_col, ...)
+  │
+  │  sigaction (SIGWINCH, new_handler, &old_sa)  [C trampoline]
+  │    └──► OS installs C handler; old disposition saved for Uninstall
+  │
+  │  Protected singleton: Installed := True, Pending := False
+  │
+  └──► Install returns; application may now use pipe read FD and polling API
+```
+
+### Phase B — Signal Delivery (OS / C handler, async-signal context)
+
+```
+OS kernel (terminal resize event)
+  │
+  │  Delivers SIGWINCH to process
+  ▼
+C handler (termicap_sigwinch.c)          [async-signal-safe]
+  │
+  │  ioctl (Terminal_FD, TIOCGWINSZ, &ws)
+  │    └──► Re-queries current dimensions; result written to shared struct
+  │
+  │  write (write_fd, "\x00", 1)
+  │    └──► Wakes any select()/poll()/epoll() waiter on read_fd
+  │         (O_NONBLOCK: never blocks even if pipe buffer is full)
+  │
+  │  [No heap allocation, no non-reentrant functions — async-signal-safe]
+  │
+  └──► C handler returns; Ada protected object will absorb the update
+       on the next entry call from the application
+```
+
+### Phase C — Consuming the Event
+
+Two consumption patterns are supported and may be mixed:
+
+**Polling pattern** (no I/O multiplexer required):
+
+```
+Application (polling loop)
+  │
+  │  if Termicap.Sigwinch.Has_Resize then
+  ▼
+Termicap.Sigwinch.Has_Resize            [protected function]
+  │
+  │  Protected singleton read: return Pending
+  │
+  └──► True if at least one SIGWINCH arrived since install or last Acknowledge
+
+  │
+  │  Size := Termicap.Sigwinch.Get_Cached_Size
+  ▼
+Termicap.Sigwinch.Get_Cached_Size       [protected function]
+  │
+  │  Protected singleton read: return Cached_Size
+  │    (dimensions from last C handler ioctl call, updated atomically)
+  │
+  └──► Terminal_Size — no new ioctl performed
+
+  │
+  │  Termicap.Sigwinch.Acknowledge_Resize
+  ▼
+Termicap.Sigwinch.Acknowledge_Resize    [protected procedure]
+  │
+  │  Protected singleton write: Pending := False
+  │  [Separate from Has_Resize to prevent loss of a concurrent SIGWINCH]
+  │
+  └──► Has_Resize will now return False until the next signal
+```
+
+**Self-pipe / event-loop pattern** (`select` / `poll` / `epoll`):
+
+```
+Application (event loop setup)
+  │
+  │  FD := Termicap.Sigwinch.Get_Pipe_Read_FD
+  │    └──► Non-negative FD when installed; -1 on non-Unix or not installed
+  │
+  │  Register FD with select()/poll()/epoll()
+  │
+  ▼
+Event loop (blocking on select/poll/epoll)
+  │
+  │  [FD becomes readable after C handler writes to pipe]
+  │
+  │  Drain pipe: read and discard all available bytes (loop until EAGAIN)
+  │  Size := Termicap.Sigwinch.Get_Cached_Size
+  │  Termicap.Sigwinch.Acknowledge_Resize
+  │
+  └──► Application handles resize with fresh cached dimensions
+```
+
+### Phase D — Uninstallation
+
+```
+Application
+  │
+  │  Termicap.Sigwinch.Uninstall
+  ▼
+Termicap.Sigwinch                       [SPARK_Mode => Off]
+  │
+  │  sigaction (SIGWINCH, &old_sa, NULL)   -- restore previous disposition
+  │  close (write_fd)
+  │  close (read_fd)
+  │
+  │  Protected singleton: Installed := False, Pending := False,
+  │                        Cached_Size := DEFAULT_SIZE
+  │
+  └──► All resources released; FD from Get_Pipe_Read_FD is now invalid
+```
+
+**Key properties:**
+
+- `Install` and `Uninstall` are idempotent: repeated calls without a matching pair are safe (FUNC-SWC-001).
+- The C handler is entirely async-signal-safe: only `ioctl` (which is async-signal-safe) and `write` (which is async-signal-safe on Linux/macOS) are called. No heap allocation, no `malloc`, no stdio (FUNC-SWC-004).
+- `Has_Resize` and `Get_Cached_Size` are non-blocking protected reads. `Acknowledge_Resize` is a protected write. All are safe to call from multiple Ada tasks concurrently (FUNC-SWC-007).
+- The pipe write end is O_NONBLOCK so the C handler never stalls even if the reader has not drained the pipe between consecutive SIGWINCH signals. Multiple unread bytes in the pipe are normalised by draining the pipe before calling `Get_Cached_Size` (FUNC-SWC-004).
+- On non-Unix platforms, `Install` and `Uninstall` are no-ops, `Get_Pipe_Read_FD` returns `-1`, `Has_Resize` returns `False`, and `Get_Cached_Size` returns the default size. No exceptions are raised (FUNC-SWC-008).
+- Integration test pattern (interactive demo only): because `Install` performs a real `sigaction` and `ioctl`, the SIGWINCH path is exercised by the interactive example (`examples/sigwinch_demo/`) rather than automated unit tests.
+
 ---
 
 ## Related Documents
@@ -678,7 +818,8 @@ end;
 - **Tech Spec F5** (`docs/tech-specs/unicode-support.md`): Unicode support level detection design rationale
 - **Tech Spec F6** (`docs/tech-specs/terminal-identification.md`): Terminal identification detection design rationale
 - **Tech Spec F7** (`docs/tech-specs/color-downsampling.md`): Color downsampling design rationale, algorithm survey, and type design decisions (ADR-0009)
+- **Tech Spec F8** (`docs/tech-specs/sigwinch.md`): SIGWINCH resize notification design rationale, self-pipe pattern, and C trampoline decision
 - **ADR-0006** (`docs/adr/0006-c-wrapper-for-ioctl-tiocgwinsz.md`): Rationale for the thin C wrapper over ioctl
 - **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
 - **ADR-0008** (`docs/adr/0008-terminal-id-string-representation-spark-boundary.md`): Rationale for `SPARK_Mode => Off` body and `Ada.Strings.Unbounded` use in `Termicap.Terminal_Id`
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011

@@ -5,5 +5,6 @@ aggregate project Termicap_Examples is
                           "dimensions_demo/dimensions_demo.gpr",
                           "unicode_demo/unicode_demo.gpr",
                           "terminal_id_demo/terminal_id_demo.gpr",
-                          "downsampling_demo/downsampling_demo.gpr");
+                          "downsampling_demo/downsampling_demo.gpr",
+                          "sigwinch_demo/sigwinch_demo.gpr");
 end Termicap_Examples;

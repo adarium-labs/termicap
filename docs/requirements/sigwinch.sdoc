@@ -1,0 +1,176 @@
+[DOCUMENT]
+TITLE: SIGWINCH Resize Notification
+UID: REQ-SWC
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[REQUIREMENT]
+UID: FUNC-SWC-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Signal Handler Installation and Removal
+STATEMENT: >>>
+The library shall provide an explicit operation to install a SIGWINCH signal handler on request. The handler shall not be installed automatically at program startup or at library elaboration time. A corresponding uninstall operation shall be provided to restore the previous signal disposition. The install and uninstall operations shall be idempotent: calling install when already installed, or uninstall when not installed, shall have no effect and shall not raise an exception.
+<<<
+COMMENT: >>>
+Automatic installation would interfere with applications that manage signal handlers themselves (e.g., those using ncurses or their own event loop). Requiring an explicit call gives the caller full control over the signal handler lifecycle. Idempotency makes it safe to call from finalisation or cleanup paths where the state may be uncertain. The Ada mechanism for attaching a handler to a protected object is Ada.Interrupts.Attach_Handler or Ada.Interrupts.Dynamic
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Automatic Dimension Re-Query on SIGWINCH
+STATEMENT: >>>
+When the SIGWINCH signal handler is installed and a SIGWINCH signal is received, the library shall automatically re-query the current terminal dimensions by invoking ioctl(TIOCGWINSZ) on the file descriptor that was registered at install time. The result shall be cached internally so that subsequent calls to retrieve the current size return the updated value without performing another ioctl call. If the ioctl call fails (returns a negative status), the previously cached dimensions shall be retained unchanged.
+<<<
+COMMENT: >>>
+Re-querying ioctl(TIOCGWINSZ) inside the signal handler (via the Ada protected entry) is the canonical POSIX approach. The POSIX standard permits a small set of async-signal-safe functions inside signal handlers; ioctl is on that list. Caching the result avoids the need for every caller to perform a system call — the protected object's internal state always holds the latest known size. Retaining the previous value on ioctl failure provides resilience against transient kernel errors without exposing a zero or invalid size to callers.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Resize Event Polling Interface
+STATEMENT: >>>
+The library shall provide a non-blocking polling operation that reports whether a resize event has occurred since the last acknowledgement. The operation shall return True if at least one SIGWINCH signal has been received since the handler was installed or since the last call to the acknowledgement operation, and False otherwise. A separate acknowledgement operation shall clear the pending-resize flag. Both operations shall be callable from any task without risk of data races.
+<<<
+COMMENT: >>>
+A polling interface suits applications that check for resize events at natural points in their render loop rather than blocking on a file descriptor. Separating the query from the acknowledgement allows an application to read the current size and confirm acknowledgement as two distinct steps, avoiding a race where a resize that arrives between the two calls is silently lost. The flag is managed inside the Ada protected object, which serialises access and prevents data races automatically.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Self-Pipe Write on SIGWINCH
+STATEMENT: >>>
+When the SIGWINCH signal handler is installed, the library shall create a pipe (a pair of file descriptors: read end and write end). On receipt of each SIGWINCH signal, the handler shall write exactly one byte to the write end of the pipe. This write shall use a non-blocking write to avoid stalling the signal handler. If the pipe write buffer is full (EAGAIN), the byte shall be silently discarded; the existing unread bytes already signal a pending resize. The write end of the pipe shall be kept internal to the library and shall not be exposed to callers.
+<<<
+COMMENT: >>>
+The self-pipe trick is the established POSIX idiom for making signal delivery compatible with I/O multiplexing via select()/poll()/epoll(). Writing a single byte per signal is sufficient to make the read FD readable; applications that drain the pipe (read all available bytes) reset the readable condition. Using O_NONBLOCK on the write end prevents the handler from blocking if the pipe buffer is full, which would violate the async-signal-safe requirement. Discarding on EAGAIN is correct because the read FD is already readable — the application has already been notified.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Pipe Read FD Exposure for I/O Loop Integration
+STATEMENT: >>>
+The library shall expose an operation that returns the read end of the self-pipe as a file descriptor (a non-negative integer). Callers may register this file descriptor with select(), poll(), epoll(), or any other I/O multiplexing interface. When the file descriptor becomes readable, the caller shall be expected to drain it (read and discard all available bytes) and then call the polling or dimension-retrieval operations to obtain the updated terminal size. The read FD shall remain valid for the lifetime of the installed handler and shall be invalidated (closed) by the uninstall operation.
+<<<
+COMMENT: >>>
+Exposing the raw read FD gives maximum flexibility: the caller can integrate resize notification into any event loop without the library needing to know which I/O framework is in use (GLib main loop, libuv, custom select loop, etc.). The contract that the caller must drain the pipe prevents the readable condition from persisting after the application has consumed the notification. Closing the pipe on uninstall avoids FD leaks and ensures that any select() call blocked on the FD will return an error, unblocking the event loop cleanly.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Handler Cleanup and Resource Release
+STATEMENT: >>>
+The uninstall operation shall perform the following cleanup steps in order:
+
+  1. Detach the SIGWINCH handler and restore the previous signal disposition (SIG_DFL or the disposition that was active before install).
+  2. Close the write end of the self-pipe.
+  3. Close the read end of the self-pipe.
+  4. Reset the internal pending-resize flag to False.
+  5. Clear the cached Terminal_Size to a defined default (80 columns, 24 rows, 0 pixel dimensions).
+
+After uninstall, the pipe read FD returned by the exposure operation shall no longer be valid and callers shall not use it.
+<<<
+COMMENT: >>>
+Releasing resources in a defined order prevents FD leaks and avoids use-after-close on the pipe FDs. Restoring the previous signal disposition rather than unconditionally setting SIG_DFL is important for composability: if another library or the application itself had installed a handler before Termicap was called, that handler is restored rather than silently dropped. Resetting the cached size to the default prevents a stale size from being returned if the handler is re-installed later without an intervening ioctl call.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Thread Safety via Ada Protected Object
+STATEMENT: >>>
+All mutable state associated with the SIGWINCH handler — including the cached Terminal_Size, the pending-resize flag, the pipe file descriptors, and the installation status — shall be encapsulated within a single Ada protected object. All public operations that read or modify this state shall be implemented as protected procedures, protected functions, or protected entries so that the Ada runtime serialises concurrent access automatically. No additional locking, semaphores, or atomic variables external to the protected object shall be required for correct concurrent use.
+<<<
+COMMENT: >>>
+Ada protected objects provide the correct abstraction for signal-handler state: they are safe to call from multiple tasks and from the signal handler itself (which Ada models as an interrupt handler on a protected type). Using a protected object rather than manual locking eliminates the risk of priority inversion and ensures that the mutual exclusion ceiling is handled by the runtime. This satisfies the thread-safety requirement without introducing low-level synchronisation primitives that would be difficult to verify or audit.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Graceful Degradation on Non-Unix Platforms
+STATEMENT: >>>
+On platforms where SIGWINCH does not exist (notably Windows), the SIGWINCH feature shall degrade gracefully using one of the following strategies, selected at compile time via conditional compilation or platform-specific package variants:
+
+  a. Compile-time exclusion: the install and uninstall operations are provided as no-ops that return immediately without error.
+  b. Variant body: a platform-specific package body is selected by the build system that provides stub implementations of all public operations.
+
+The public API (package spec) shall be identical across all platforms so that application code compiles without modification. The pipe read FD operation shall return -1 (an invalid FD) on platforms where the self-pipe is not available. The polling operation shall always return False on non-Unix platforms. The dimension re-query on non-Unix platforms shall be a no-op.
+<<<
+COMMENT: >>>
+Windows does not deliver SIGWINCH; it uses WINDOW_BUFFER_SIZE_EVENT via ReadConsoleInput instead. Rather than forcing application code to use conditional compilation, the library absorbs the platform difference behind a uniform API. Returning -1 for the pipe FD is the POSIX convention for "no valid FD", which applications already check for when registering FDs with select(). Providing a False-returning stub for the polling operation means polling-based application code works correctly on Windows without a resize event source.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-009
+STATUS: Approved
+PRIORITY: Should
+TITLE: Registered File Descriptor at Install Time
+STATEMENT: >>>
+The install operation shall accept a file descriptor parameter that specifies which terminal file descriptor to use for the ioctl(TIOCGWINSZ) call inside the signal handler. The caller shall typically pass the file descriptor of the controlling terminal (e.g., the FD obtained from opening /dev/tty, or STDIN_FILENO if connected to a TTY). The file descriptor shall be stored by the protected object for use in subsequent ioctl calls triggered by SIGWINCH. If the caller does not supply a file descriptor (or supplies the sentinel value -1), the implementation shall default to file descriptor 1 (STDOUT_FILENO).
+<<<
+COMMENT: >>>
+Different applications open /dev/tty explicitly to guarantee terminal access even when stdin/stdout/stderr are redirected; others rely on one of the standard FDs. Accepting an FD parameter at install time rather than hard-coding a specific FD makes the API composable with applications that manage their own terminal FD lifecycle. Defaulting to STDOUT_FILENO (1) is consistent with the approach used by the existing ioctl-based dimension detection in FUNC-DIM-002, which also queries FD 1.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-010
+STATUS: Approved
+PRIORITY: Should
+TITLE: Current Cached Dimensions Retrieval
+STATEMENT: >>>
+The library shall provide a protected function that returns the most recently cached Terminal_Size without performing a new ioctl call. This operation shall be callable at any time after the handler is installed — including before any SIGWINCH has been received — in which case it shall return the dimensions captured during the install call (an initial ioctl(TIOCGWINSZ) query performed at install time). The operation shall be safe to call concurrently from multiple tasks.
+<<<
+COMMENT: >>>
+Performing an initial ioctl query at install time ensures that the cached size is always valid immediately after installation, without requiring a spurious resize event. This gives applications a consistent interface: they can always call Get_Cached_Size after installing the handler, regardless of whether a resize has occurred. The operation is a protected function (read-only access), which means multiple tasks may call it concurrently without blocking each other, as Ada protected functions allow shared concurrent reads.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SWC-011
+STATUS: Approved
+PRIORITY: Could
+TITLE: SPARK Boundary Declaration for SIGWINCH Feature
+STATEMENT: >>>
+The package spec for the SIGWINCH handler shall be compiled with SPARK_Mode => Off because Ada interrupt handlers on protected types and dynamic signal handler attachment are outside the SPARK 2014 language subset. A comment in the package spec shall explicitly state that this package is an Ada FFI boundary and does not carry SPARK provability. All SPARK-verifiable logic (dimension caching, pending-flag management) that could in principle be expressed in SPARK shall be noted as candidates for extraction into a SPARK-annotated helper package if future tooling supports it.
+<<<
+COMMENT: >>>
+Signal handling via Ada.Interrupts.Dynamic_Handler_Attachment involves tasking and interrupt semantics that GNATprove does not support at any SPARK level. Marking the package SPARK_Mode => Off at the spec level prevents misleading verification results and makes the boundary explicit in the source code. This follows the same convention used throughout Termicap for Ada FFI boundaries (see FUNC-DIM-007, FUNC-TTY-005). Noting the SPARK-candidate logic documents the intent for future refactoring without blocking the current implementation.
+<<<

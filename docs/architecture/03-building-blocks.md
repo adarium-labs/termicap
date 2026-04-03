@@ -12,11 +12,12 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Color                [SPARK Silver] — color level detection (11-step cascade)
 ├── Termicap.Downsampling         [SPARK Gold]   — color downsampling conversions (TrueColor/256-color to lower levels)
 ├── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
+├── Termicap.Sigwinch             [SPARK_Mode => Off] — SIGWINCH resize notification, self-pipe, protected object
 ├── Termicap.Unicode              [SPARK Silver] — Unicode support level detection (5-step cascade)
 └── Termicap.Terminal_Id          [spec: SPARK, body: SPARK_Mode => Off] — terminal identity detection (8-step cascade)
 ```
 
-`Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id` are detection packages that depend on `Termicap.Environment`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, or any OS interface. The root package remains a namespace-only package.
+`Termicap.Color`, `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` are detection packages that depend on `Termicap.Environment`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, or any OS interface. The root package remains a namespace-only package.
 
 ## Level 2: Package Descriptions
 
@@ -234,6 +235,51 @@ Pixel dimensions (`Pixel_Width`, `Pixel_Height`) are populated only from the ioc
 #### Relationship to Other Packages
 
 `Termicap.Dimensions` depends on `Termicap.Environment` (for `Contains` and `Value`) and does not depend on `Termicap.TTY` directly. TTY status enters as a plain `Boolean` parameter, keeping the `isatty()` FFI call outside the SPARK verification perimeter — the same pattern used by `Termicap.Color`.
+
+---
+
+### `Termicap.Sigwinch`
+
+**Responsibility:** Manages the SIGWINCH signal handler lifecycle, providing asynchronous terminal resize notification via a self-pipe and a concurrent-safe polling interface. When installed, the handler automatically re-queries terminal dimensions on every SIGWINCH delivery and caches the result. Applications may poll via `Has_Resize` or integrate with `select()`/`poll()`/`epoll()` via the exposed self-pipe read FD.
+
+The entire package (spec and body) carries `SPARK_Mode => Off`. Ada protected objects with interrupt handlers and dynamic signal attachment via `sigaction` are outside the SPARK 2014 language subset. Signal-context work (ioctl query, pipe write) is delegated to a C trampoline (`src/c/termicap_sigwinch.c`) that is async-signal-safe. The Ada body wraps a private protected singleton, presenting a flat procedural API to callers.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-sigwinch.ads`, `src/termicap-sigwinch.adb`, `src/c/termicap_sigwinch.c` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Termicap.Dimensions` (for the `Terminal_Size` type), C binding (`termicap_sigwinch.c`) |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Install` | Procedure | Creates the self-pipe (write end O_NONBLOCK), performs an initial `ioctl(TIOCGWINSZ)` query, and registers the C-level handler via `sigaction()`. Idempotent. Accepts `Terminal_FD` (default 1) for ioctl queries. | FUNC-SWC-001, FUNC-SWC-004, FUNC-SWC-009, FUNC-SWC-010 |
+| `Uninstall` | Procedure | Restores the previous signal disposition, closes the pipe, clears the pending flag, and resets the cached size. Idempotent. | FUNC-SWC-001, FUNC-SWC-006 |
+| `Has_Resize` | Function | Returns `True` if at least one SIGWINCH has arrived since install or the last `Acknowledge_Resize`. Non-blocking; no side effects. Returns `False` when not installed. | FUNC-SWC-003 |
+| `Acknowledge_Resize` | Procedure | Clears the pending-resize flag atomically. Separate from `Has_Resize` to avoid losing a signal that arrives between query and acknowledgement. No-op when not installed. | FUNC-SWC-003 |
+| `Get_Pipe_Read_FD` | Function | Returns the read end of the self-pipe for registration with I/O multiplexers (`select`/`poll`/`epoll`). Returns `-1` when not installed or on non-Unix platforms. | FUNC-SWC-005, FUNC-SWC-008 |
+| `Get_Cached_Size` | Function | Returns the most recently cached `Terminal_Size` without performing a new ioctl call. Safe to call concurrently. Returns the default size (80 × 24, 0 pixel dims) when not installed. | FUNC-SWC-002, FUNC-SWC-010 |
+
+#### Internal: `termicap_sigwinch.c`
+
+A C trampoline required because POSIX signal handlers must be async-signal-safe — Ada protected object entry calls are not. The C handler performs `ioctl(TIOCGWINSZ)` to re-query dimensions, writes one byte to the pipe write end, and stores the result in a shared structure. The Ada body reads this structure from within the protected object after each notification.
+
+#### Internal: Protected Singleton
+
+A private protected singleton in the package body serialises concurrent callers of all six public operations. The protected object holds three state items: an `Installed` flag, a `Pending` flag, and a `Cached_Size : Terminal_Size`. It is declared private so that callers interact only through the flat procedural API.
+
+#### Thread Safety
+
+All public operations are safe to call from multiple Ada tasks concurrently. The Ada protected object enforces mutual exclusion. The C handler is async-signal-safe by design (no heap allocation, no non-reentrant functions).
+
+#### Platform Behaviour
+
+On non-Unix platforms (including Windows), `Install` and `Uninstall` are no-ops, `Has_Resize` returns `False`, `Acknowledge_Resize` is a no-op, `Get_Pipe_Read_FD` returns `-1`, and `Get_Cached_Size` returns the default size. The SIGWINCH signal does not exist on Windows; the package degrades gracefully without raising exceptions (FUNC-SWC-008).
+
+#### Relationship to Other Packages
+
+`Termicap.Sigwinch` depends on `Termicap.Dimensions` for the `Terminal_Size` type. Unlike `Termicap.Dimensions.Get_Size`, it does **not** accept an `Environment` snapshot — dimensions are queried live via ioctl inside the C handler, not derived from environment variables. `Termicap.Sigwinch` has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Unicode`, or `Termicap.Terminal_Id`.
 
 ---
 
@@ -509,10 +555,22 @@ All functions are pure integer arithmetic over bounded subtypes. The entire pack
 │   │  Starts_With_CI private helper              │  │
 │   │  Detect_Terminal_Identity implementation    │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Sigwinch (spec + body)                   │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Protected singleton: Installed, Pending,   │  │
+│   │    Cached_Size — serialises all callers     │  │
+│   │  Install / Uninstall / Has_Resize /         │  │
+│   │    Acknowledge_Resize / Get_Pipe_Read_FD /  │  │
+│   │    Get_Cached_Size implementations          │  │
+│   │  C trampoline (termicap_sigwinch.c):         │  │
+│   │    async-signal-safe handler, ioctl +       │  │
+│   │    pipe write, sigaction installation       │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, the `Termicap.Dimensions` body, and the `Termicap.Terminal_Id` body are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the spec contracts on `Get_Size` and `Detect_Terminal_Identity` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, and the entirety of `Termicap.Sigwinch` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the spec contracts on `Get_Size` and `Detect_Terminal_Identity` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` is the only package where both spec and body are wholly outside the SPARK zone: its protected object, interrupt handler, and C FFI cannot be expressed in SPARK 2014.
 
 ## Related Documents
 
@@ -529,4 +587,5 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.TTY`
 - **ADR-0008** (`docs/adr/0008-terminal-id-string-representation-spark-boundary.md`): Rationale for `SPARK_Mode => Off` body and `Ada.Strings.Unbounded` use in `Termicap.Terminal_Id`
 - **Tech Spec F6** (`docs/tech-specs/terminal-identification.md`): Terminal identification detection design rationale
 - **Tech Spec F7** (`docs/tech-specs/color-downsampling.md`): Color downsampling design rationale, algorithm survey, and type design decisions (ADR-0009)
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012
+- **Tech Spec F8** (`docs/tech-specs/sigwinch.md`): SIGWINCH resize notification design rationale, self-pipe pattern, and C trampoline decision
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011
