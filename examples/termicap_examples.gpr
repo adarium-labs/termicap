@@ -7,5 +7,6 @@ aggregate project Termicap_Examples is
                           "terminal_id_demo/terminal_id_demo.gpr",
                           "downsampling_demo/downsampling_demo.gpr",
                           "sigwinch_demo/sigwinch_demo.gpr",
-                          "override_demo/override_demo.gpr");
+                          "override_demo/override_demo.gpr",
+                          "capabilities_demo/capabilities_demo.gpr");
 end Termicap_Examples;

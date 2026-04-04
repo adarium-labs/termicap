@@ -940,6 +940,127 @@ Scoped_Override.Finalize              [SPARK_Mode => Off]
 - Finalization suppresses all exceptions via a `when others => null` handler. This is required by Ada rules: an exception propagated out of `Finalize` during stack unwinding causes `Program_Error` (FUNC-OVR-008).
 - Scoped guards nest correctly in a single task: each `Scoped_Override` saves the mode that was active at the time of its declaration, so overlapping guards restore in LIFO order. Across tasks, the save/restore sequences interleave — use process-wide `Set_Override` / `Reset_Override` when task-local override scoping is needed.
 
+## Scenario 17: Capability Record Assembly — Get and Detect Flows
+
+End-to-end scenarios showing how `Termicap.Capabilities.Get` and `Termicap.Capabilities.Detect` aggregate all sub-detector results into a single `Terminal_Capabilities` record.
+
+### Phase A — Get (Cached Path, Cache Miss)
+
+On the first call for a given stream, `Get` delegates to `Detect` and caches the result.
+
+```
+Application
+  │
+  │  Caps : Terminal_Capabilities := Termicap.Capabilities.Get
+  │                                  -- Stream => Stdout (default)
+  ▼
+Termicap.Capabilities.Get (Stream => Stdout)   [body: SPARK_Mode => Off]
+  │
+  │  Protected cache object: slot for Stdout not yet populated
+  │    → cache miss → call Detect (Stdout)
+  │
+  ▼
+Termicap.Capabilities.Detect (Stream => Stdout)
+  │
+  │  Step 1: Capture_Current (Env)              [SPARK_Mode => Off]
+  │    └──► Immutable Environment snapshot of the live process environment
+  │
+  │  Step 2: Detect_Terminal_Identity (Env)     [spec: SPARK, body: Off]
+  │    └──► Terminal_Identity (Kind, Is_Multiplexer, string fields)
+  │
+  │  Step 3: Status := Query_All                [SPARK_Mode => Off]
+  │    └──► TTY_Status (Stdin, Stdout, Stderr — each from isatty() or override)
+  │
+  │  Step 4: Detect_Color_Level (Env, Status.Stdout)  [SPARK Silver]
+  │    └──► Color_Level (None / Basic_16 / Extended_256 / True_Color)
+  │
+  │  Step 5: Get_Size (Env, Status.Stdout)      [spec: SPARK, body: Off]
+  │    └──► Terminal_Size (Columns, Rows, Pixel_Width, Pixel_Height)
+  │
+  │  Step 6: Detect_Unicode_Level (Env)         [SPARK Silver]
+  │    └──► Unicode_Level (None / Basic / Extended)
+  │
+  │  Step 7: Assemble (Status.Stdin, Status.Stdout, Status.Stderr,
+  │                    Color, Size, Unicode, Identity)   [SPARK Silver, Global => null]
+  │    └──► Terminal_Capabilities record;
+  │         Downsampling_Available := Color >= Extended_256
+  │         (GNATprove-verifiable postcondition)
+  │
+  └──► Terminal_Capabilities returned from Detect
+  │
+  ▼
+Termicap.Capabilities.Get (cache write)
+  │
+  │  Protected cache object: store result in Stdout slot
+  │    → subsequent Get (Stdout) calls return this copy without re-running sub-detectors
+  │
+  └──► Terminal_Capabilities copy returned to application
+```
+
+**Key properties:**
+
+- The single `Capture_Current` call (step 1) ensures all sub-detectors operate on the same environment snapshot, satisfying FUNC-CAP-011.
+- Sub-detectors are invoked in dependency order: identity and TTY status first (no environment dependency on each other), then color (needs TTY), size (needs TTY), and Unicode (no TTY needed) — satisfying FUNC-CAP-010.
+- The `Assemble` function (step 7) is the only SPARK Silver subprogram in the body. All OS interaction is confined to steps 1–6 (FUNC-CAP-013).
+- The cache is a protected object; the first-call population and all subsequent reads are thread-safe (FUNC-CAP-008).
+- The returned record is a value copy — the cache is not aliased to the caller (FUNC-CAP-009).
+
+### Phase B — Get (Cached Path, Cache Hit)
+
+On subsequent calls for the same stream, `Get` returns the cached value immediately.
+
+```
+Application
+  │
+  │  Caps2 : Terminal_Capabilities := Termicap.Capabilities.Get
+  │                                   -- Stream => Stdout (second call)
+  ▼
+Termicap.Capabilities.Get (Stream => Stdout)
+  │
+  │  Protected cache object: slot for Stdout is populated
+  │    → cache hit → return copy without calling Detect
+  │
+  └──► Terminal_Capabilities copy returned to application
+       (identical to first call result; no sub-detector executed)
+```
+
+**Key properties:**
+
+- No sub-detector is invoked; no OS call is made.
+- The cached value reflects the override state that was active at the time the cache slot was first populated (FUNC-CAP-006). If `Set_Override` is called after the first `Get`, the cached result is not automatically invalidated — callers that need fresh detection after an override change should use `Detect` directly.
+
+### Phase C — Detect (Uncached, Fresh Detection)
+
+`Detect` always performs a full detection run and never reads or writes the cache.
+
+```
+Application (e.g., after SIGWINCH or after calling Set_Override)
+  │
+  │  Caps : Terminal_Capabilities := Termicap.Capabilities.Detect
+  │                                  -- Stream => Stdout (default)
+  ▼
+Termicap.Capabilities.Detect (Stream => Stdout)
+  │
+  │  [Identical to Phase A steps 1–7]
+  │  [Cache is not consulted and not written]
+  │
+  └──► Fresh Terminal_Capabilities returned to application
+```
+
+**Key properties:**
+
+- Every `Detect` call performs a complete detection run regardless of cache state, satisfying FUNC-CAP-004 and FUNC-CAP-014.
+- Use `Detect` after `SIGWINCH` (to pick up new terminal dimensions) or after a `Set_Override` / `Reset_Override` call (to reflect the new override state immediately).
+- `Detect` is safe to call from multiple Ada tasks concurrently — it holds no shared state of its own; all sub-detectors are either pure functions or thread-safe protected calls.
+
+### Override Integration
+
+When `Termicap.Override.Set_Override` has been called before `Get` or `Detect`:
+
+- `TTY_Stdin`, `TTY_Stdout`, and `TTY_Stderr` fields reflect the override: any `Force_*` mode except `Force_None` returns `True`; `Force_None` returns `False` (FUNC-CAP-007).
+- The `Color` field reflects the forced level directly from `Detect_Color_Level`'s step-0 override check (FUNC-CAP-006).
+- `Downsampling_Available` is derived from `Color` by `Assemble`, so it also reflects the override indirectly.
+
 ---
 
 ## Related Documents
@@ -958,4 +1079,8 @@ Scoped_Override.Finalize              [SPARK_Mode => Off]
 - **ADR-0007** (`docs/adr/0007-unicode-level-three-value-enum.md`): Rationale for the three-value `Unicode_Level` enumeration
 - **ADR-0008** (`docs/adr/0008-terminal-id-string-representation-spark-boundary.md`): Rationale for `SPARK_Mode => Off` body and `Ada.Strings.Unbounded` use in `Termicap.Terminal_Id`
 - **ADR-0010** (`docs/adr/0010-override-mode-flat-enum.md`): Rationale for the five-literal flat enumeration over alternative override representations
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014
+- **ADR-0011** (`docs/adr/0011-capability-record-package-placement.md`): Rationale for placing the aggregation package as a top-level child of `Termicap`
+- **ADR-0012** (`docs/adr/0012-capability-cache-design.md`): Rationale for the per-stream protected cache design
+- **ADR-0013** (`docs/adr/0013-spark-annotation-split-capabilities.md`): Rationale for the SPARK/Ada split in `Termicap.Capabilities`
+- **Tech Spec F10** (`docs/tech-specs/capability-record.md`): Capability record assembly design rationale
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014

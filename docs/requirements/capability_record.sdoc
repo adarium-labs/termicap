@@ -1,0 +1,436 @@
+[DOCUMENT]
+TITLE: Capability Record Assembly
+UID: REQ-CAP
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Record Type and Fields
+
+[REQUIREMENT]
+UID: FUNC-CAP-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminal_Capabilities Record Type
+STATEMENT: >>>
+The library shall provide an immutable record type Terminal_Capabilities that aggregates the results of all Tier 1 and Tier 2 terminal capability detections into a single value. The record shall contain at minimum the following fields:
+
+  TTY_Stdin         : Boolean
+    -- True when the standard input stream is connected to an interactive
+    -- terminal; determined by Termicap.TTY.Is_TTY (Stdin).
+
+  TTY_Stdout        : Boolean
+    -- True when the standard output stream is connected to an interactive
+    -- terminal; determined by Termicap.TTY.Is_TTY (Stdout).
+
+  TTY_Stderr        : Boolean
+    -- True when the standard error stream is connected to an interactive
+    -- terminal; determined by Termicap.TTY.Is_TTY (Stderr).
+
+  Color             : Termicap.Color.Color_Level
+    -- The color capability for the default stream (Stdout), with any active
+    -- Termicap.Override state already applied.  Reflects the result of
+    -- Termicap.Color.Detect_Color_Level at the time of detection.
+
+  Size              : Termicap.Dimensions.Terminal_Size
+    -- Terminal dimensions (rows, columns, pixel width, pixel height) as
+    -- returned by Termicap.Dimensions.Get_Size for the Stdout stream.
+
+  Unicode           : Termicap.Unicode.Unicode_Level
+    -- The Unicode rendering capability of the terminal, as returned by
+    -- Termicap.Unicode.Detect_Unicode_Level.
+
+  Identity          : Termicap.Terminal_Id.Terminal_Identity
+    -- The passively identified terminal emulator or multiplexer, as returned
+    -- by Termicap.Terminal_Id.Detect_Terminal_Identity.
+
+  Downsampling_Available : Boolean
+    -- True when the color level supports downsampling operations; i.e., when
+    -- Color is Extended_256 or True_Color.  Callers may use this flag to
+    -- determine whether Termicap.Downsampling functions are meaningful for
+    -- the current terminal.
+
+All fields shall be readable with no side effects. The record shall not expose any mutable state; callers receive a copy and cannot modify the library's internal cache through it.
+<<<
+COMMENT: >>>
+The Terminal_Capabilities record is the single integration point that applications need after initial setup: rather than calling each sub-detector independently and passing results between them, an application calls Get (FUNC-CAP-003) once and obtains a fully populated snapshot. Separating TTY status per stream (TTY_Stdin, TTY_Stdout, TTY_Stderr) mirrors the TTY sub-API (FUNC-TTY-001, FUNC-TTY-006) and is necessary because stdout may be piped while stderr remains a terminal. The Color field reflects the Stdout stream by default, matching the most common application use case (writing colored output to stdout). Downsampling_Available is a derived convenience flag: callers who want to use Termicap.Downsampling to produce palette-compatible output need to know whether the terminal supports at least Extended_256 colors; encoding this as a Boolean field avoids repeated comparisons against the Color field.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CAP-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Stream Selection for Per-Stream Color Detection
+STATEMENT: >>>
+The library shall provide a mechanism to obtain a Terminal_Capabilities value with the Color and TTY fields computed for a caller-specified stream rather than the default Stdout. Specifically, the library shall support the following stream selection values, drawn from Termicap.TTY.Stream_Kind:
+
+  Stdout  -- default; color and TTY status derived from the standard output stream
+  Stderr  -- color and TTY status derived from the standard error stream
+  Stdin   -- TTY status derived from the standard input stream; Color is derived
+             using the Stdin TTY flag as the is_tty input to color detection
+
+When Stderr or Stdin is selected, the Color field shall reflect the detected color level for that stream's TTY status. The Size field shall always be derived from the Stdout stream regardless of the selected stream, as terminal dimensions are a property of the controlling terminal rather than a specific file descriptor.
+
+The stream selection shall be expressed as a parameter to both the Detect function (FUNC-CAP-004) and the Get function (FUNC-CAP-003).
+<<<
+COMMENT: >>>
+Applications that write colored diagnostic output to stderr (a common pattern for logging libraries) need a capability record reflecting stderr's TTY and color status, which may differ from stdout's when stdout is redirected to a file or pipe. Stream_Kind reuses the enumeration already defined by Termicap.TTY (FUNC-TTY-001) so that callers are not introduced to a new type for this purpose. Dimensions are excluded from per-stream variation because ioctl(TIOCGWINSZ) returns the same result regardless of which file descriptor it is called on, as long as the descriptor refers to the controlling terminal.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Detection and Caching Functions
+
+[REQUIREMENT]
+UID: FUNC-CAP-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Get Function — Cached Lazy Initialisation
+STATEMENT: >>>
+The library shall provide a function Get that returns a Terminal_Capabilities value computed for a specified stream. Its representative signature is:
+
+  function Get
+     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
+      return Terminal_Capabilities;
+
+On the first call for a given Stream value, Get shall perform full detection by invoking all sub-detectors in dependency order (see FUNC-CAP-010) and cache the result. On every subsequent call for the same Stream value, Get shall return the previously cached value without re-invoking any sub-detector.
+
+The cache shall be initialised lazily: no detection is performed until the first call to Get for each stream. The function shall be callable from any task without risk of data races; the cache shall be protected such that concurrent calls for the same stream do not produce duplicate or partial initialisation (see FUNC-CAP-006).
+
+Get shall return a copy of the cached record. Callers may not modify the internal cache through the returned copy.
+<<<
+COMMENT: >>>
+Lazy initialisation is preferred over eager initialisation at library elaboration time because TTY status and terminal dimensions require OS calls that may fail or behave unexpectedly during elaboration (e.g., when the library is loaded as a shared object into a non-interactive process). Deferring detection to the first explicit call ensures the process is fully initialised before OS calls are made. Caching is justified because all inputs to detection (environment variables, TTY file descriptors, terminal dimensions) are stable for the lifetime of a process in the common case; re-reading them on every call to Get would add unnecessary overhead in applications that call Get frequently. The optional Stream parameter with a default of Stdout means that the overwhelmingly common case — Get for stdout — requires no argument, keeping the API ergonomic.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CAP-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detect Function — Fresh Detection
+STATEMENT: >>>
+The library shall provide a function Detect that performs a complete, uncached detection for a specified stream and returns a fresh Terminal_Capabilities value. Its representative signature is:
+
+  function Detect
+     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
+      return Terminal_Capabilities;
+
+Detect shall always invoke all sub-detectors in dependency order (FUNC-CAP-010), regardless of any previously cached value. It shall not read from or write to the cache maintained by Get (FUNC-CAP-003). The returned value reflects the terminal state at the moment of the call.
+
+Callers that need up-to-date capability information after a terminal resize or environment change shall use Detect rather than Get. The result of Detect may be used by the caller to update application state but does not automatically replace the cached value returned by future Get calls.
+<<<
+COMMENT: >>>
+Detect is the escape hatch from the cached Get path. It is useful in at least two scenarios: (1) an application that handles SIGWINCH (FUNC-SWC-001) needs fresh terminal dimensions after a resize event; calling Detect gives a new Terminal_Capabilities with the updated Size field. (2) A testing harness that manipulates environment variables between test cases needs fresh detection rather than stale cached results. Keeping Detect and the Get cache independent (Detect does not invalidate the cache) avoids surprising interactions where a single Detect call changes the behavior of all subsequent Get calls across unrelated code paths. Applications that want to refresh the cache explicitly can call Detect and then use the result directly rather than via Get.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CAP-005
+STATUS: Approved
+PRIORITY: Should
+TITLE: Default Stream Convenience Aliases
+STATEMENT: >>>
+The library shall provide parameterless aliases or default-argument forms of the Get and Detect functions so that the common case of querying capabilities for the Stdout stream requires no argument at the call site. The default value for the Stream parameter in both Get and Detect shall be Termicap.TTY.Stdout.
+
+A representative usage pattern is:
+
+  Caps : constant Terminal_Capabilities := Termicap.Get;
+  --  Equivalent to: Termicap.Get (Stream => Termicap.TTY.Stdout)
+
+This requirement is satisfied by the default parameter in the signatures given in FUNC-CAP-003 and FUNC-CAP-004 and does not require separate subprogram declarations.
+<<<
+COMMENT: >>>
+The vast majority of applications query capabilities for stdout only. Requiring callers to write Termicap.Get (Stream => Termicap.TTY.Stdout) for every capability query adds noise without value. Ada's default parameter mechanism provides the equivalent of a no-argument overload without introducing a separate subprogram body, keeping the API surface small. This mirrors the ergonomic conventions used by reference libraries such as supports-color (JavaScript) and termenv (Go), which treat stdout as the implicit target unless a stream is explicitly passed.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Override Integration
+
+[REQUIREMENT]
+UID: FUNC-CAP-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Override State Applied to Color Field
+STATEMENT: >>>
+The Color field of a Terminal_Capabilities value returned by Get or Detect shall always reflect the current Termicap.Override state at the time of detection. Specifically:
+
+  When Termicap.Override.Get_Override returns a non-Auto value at the time
+  Get or Detect is called, the Color field shall be the Color_Level that
+  corresponds to the active override mode, as defined by FUNC-OVR-004:
+
+    Force_None       -> Color = None
+    Force_Basic      -> Color = Basic_16
+    Force_256        -> Color = Extended_256
+    Force_True_Color -> Color = True_Color
+
+  When the override is Auto, the Color field shall be the result of the
+  full detection cascade (FUNC-CLR-015) applied to the captured environment
+  snapshot and the stream's TTY status.
+
+The override check shall be delegated to Termicap.Color.Detect_Color_Level, which already incorporates override consultation (FUNC-OVR-004). The Detect function (FUNC-CAP-004) shall always reflect the override state at the moment of the call; the Get function shall reflect the override state at the moment the cache was first populated.
+<<<
+COMMENT: >>>
+Because the cached Get path captures the Color field at first-call time, applications that set the override via Set_Override (FUNC-OVR-002) should do so before the first call to Get, or use Detect after setting the override. This is the expected usage pattern: a CLI application parses --color flags, calls Set_Override, then calls Get or Detect. The requirement explicitly notes that Get reflects the override at cache-population time rather than at each call, because re-checking the override on every Get call would require either invalidating the cache on every Set_Override call (complex) or re-running partial detection (inconsistent). The Detect path does not have this limitation and is the correct choice when the override may change between calls.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CAP-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: TTY Fields Reflect Override State
+STATEMENT: >>>
+The TTY_Stdout, TTY_Stderr, and TTY_Stdin fields of a Terminal_Capabilities value returned by Get or Detect shall reflect the Termicap.Override state in accordance with FUNC-OVR-005. Specifically:
+
+  When the override is Force_Basic, Force_256, or Force_True_Color, all three
+  TTY fields shall be True, regardless of the actual file descriptor attachment.
+
+  When the override is Force_None, all three TTY fields shall be False,
+  regardless of the actual file descriptor attachment.
+
+  When the override is Auto, each TTY field shall reflect the actual isatty()
+  result for the corresponding file descriptor.
+
+The TTY fields shall be set by delegating to Termicap.TTY.Is_TTY for each stream, which already incorporates override consultation (FUNC-OVR-005).
+<<<
+COMMENT: >>>
+Override coherence between Color and TTY fields is essential: an application using Terminal_Capabilities to gate both colored output and TTY-dependent features (such as progress bars or Unicode symbols) must see consistent results. If Color were forced to True_Color but TTY_Stdout remained False, the application would produce colored output but suppress other terminal-dependent features, resulting in an incoherent display. The rule that all three TTY fields reflect the override uniformly (rather than only the selected stream) ensures that callers do not need to know which stream was used for color detection when making decisions about stdin or stderr.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Thread Safety and Immutability
+
+[REQUIREMENT]
+UID: FUNC-CAP-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Thread-Safe Cache Initialisation
+STATEMENT: >>>
+The internal cache used by the Get function (FUNC-CAP-003) shall be protected against concurrent initialisation from multiple tasks. When two or more tasks call Get for the same Stream value simultaneously before the cache has been populated, exactly one detection run shall occur and all callers shall receive the same Terminal_Capabilities value. No task shall observe a partially initialised record.
+
+The cache shall be implemented using an Ada protected object or an equivalent Ada-standard mechanism that provides the necessary mutual exclusion without external locking. The mechanism shall not introduce deadlocks when Get is called recursively (e.g., from within a library package body elaboration) or from a task that holds no other Termicap locks.
+
+The Detect function (FUNC-CAP-004) is stateless with respect to the cache and requires no special synchronisation beyond the thread safety of its sub-detector calls.
+<<<
+COMMENT: >>>
+Thread safety at the cache level is required because Termicap is a library intended for use in concurrent Ada programs. The most common hazard is two tasks both calling Get for the first time before the cache is populated; without protection, both would run detection concurrently and one result would be silently discarded. An Ada protected object provides the correct abstraction: the cache check-and-initialise pair can be expressed as a protected procedure that is atomic with respect to other protected operations on the same object. The no-deadlock requirement under recursive calls is relevant for library packages that call Get during their own elaboration: Ada's elaboration order may cause a package body to be elaborated while the Termicap cache is being populated by another elaboration unit, but because library elaboration is single-threaded by default this scenario does not cause deadlock in practice. The requirement is stated for completeness in case the library is used with the -gnatN (No_Task_Attributes_Support) restriction or similar configurations.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CAP-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Immutability of Returned Record
+STATEMENT: >>>
+The Terminal_Capabilities value returned by Get and Detect shall be a complete copy of the detection result. Callers shall not be able to modify the library's internal cache or any shared detection state through the returned value.
+
+The record type Terminal_Capabilities shall be a plain Ada record (not a tagged type with mutable discriminants, not an access type, and not an aliased type that provides indirect write access to internal state). Assignment of a Terminal_Capabilities value shall produce an independent copy with value semantics.
+
+No procedure or entry in the public Termicap API shall accept a Terminal_Capabilities value as an in-out or out parameter in a way that could propagate modifications back to the internal cache.
+<<<
+COMMENT: >>>
+Value semantics for the capability record follow the design principle established for all detection sub-results in Termicap: Environment snapshots (FUNC-ENV-001), Terminal_Identity (FUNC-TID-002), and Terminal_Size (FUNC-DIM-001) are all plain records returned by value. Terminal_Capabilities extends this pattern to the aggregate. Immutability eliminates an entire class of bugs where application code accidentally modifies the cached capabilities and affects the behavior of other components. In Ada, plain record assignment is copy-by-value; there is no reference aliasing unless the caller explicitly takes 'Access, which requires the Unchecked_Access attribute and is outside the library's control.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Sub-Detector Dependency and Ordering
+
+[REQUIREMENT]
+UID: FUNC-CAP-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sub-Detector Invocation Order
+STATEMENT: >>>
+The Detect function (FUNC-CAP-004) and the cache initialisation path of Get (FUNC-CAP-003) shall invoke sub-detectors in the following order, respecting the dependency relationships between them:
+
+  1. Capture environment snapshot
+       Termicap.Environment.Capture.Capture
+       -- Must be first: all subsequent sub-detectors consume the snapshot.
+
+  2. Detect terminal identity
+       Termicap.Terminal_Id.Detect_Terminal_Identity (Env)
+       -- Must precede TTY override check (provides Is_Multiplexer for color
+       -- detection context) and precedes color detection (FUNC-TID-009).
+
+  3. Query TTY status for all streams
+       Termicap.TTY.Query_All
+       -- Provides Is_TTY flags used by color and dimensions detection.
+       -- Override state (Termicap.Override) is consulted inside Is_TTY.
+
+  4. Detect color level for the selected stream
+       Termicap.Color.Detect_Color_Level (Env, Is_TTY => <stream TTY flag>)
+       -- Depends on: environment snapshot (step 1), TTY status (step 3).
+       -- Override state is consulted inside Detect_Color_Level.
+
+  5. Detect terminal dimensions
+       Termicap.Dimensions.Get_Size (Env, Is_TTY => TTY_Stdout)
+       -- Depends on: environment snapshot (step 1), Stdout TTY status (step 3).
+
+  6. Detect Unicode support level
+       Termicap.Unicode.Detect_Unicode_Level (Env)
+       -- Depends on: environment snapshot (step 1) only.
+
+  7. Derive Downsampling_Available
+       Color >= Termicap.Color.Extended_256
+       -- Derived from step 4; no additional sub-detector call required.
+
+  8. Assemble Terminal_Capabilities record from steps 1-7 results.
+
+No step shall be skipped. Steps 4 through 7 may be executed in any order relative to one another, as they share only the environment snapshot from step 1 and the TTY flags from step 3 as inputs.
+<<<
+COMMENT: >>>
+The ordering requirement exists to prevent bugs where a sub-detector is called before its inputs are available. The most critical dependency is that the environment snapshot must be captured first, as all pure detection functions receive it as a parameter. The second important dependency is that TTY status must be queried before color detection, because Detect_Color_Level takes an Is_TTY parameter. Terminal identity is placed early (step 2) because FUNC-TID-009 designates Terminal_Identity as the authoritative source of TERM_PROGRAM for downstream modules; in a future version where Detect_Color_Level accepts a Terminal_Identity parameter, step 2 must precede step 4. Steps 4-7 have no inter-dependencies and may be parallelised in a future implementation if needed for performance, without violating this requirement, as long as all four complete before step 8.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CAP-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Environment Snapshot Used Consistently
+STATEMENT: >>>
+A single environment snapshot shall be captured at the beginning of each Detect call and each Get cache-initialisation run. All sub-detectors invoked during that call shall receive the same snapshot. No sub-detector shall re-capture the environment or call Termicap.Environment.Capture.Capture more than once per detection run.
+
+This ensures that the Terminal_Capabilities record is internally consistent: all fields are derived from the same point-in-time view of the environment. A call to Detect shall never produce a record where, for example, the Color field reflects a different TERM value than the Identity field, due to an environment variable changing between sub-detector calls.
+<<<
+COMMENT: >>>
+Environment consistency is a correctness requirement, not merely a performance optimisation. If each sub-detector captured its own snapshot, a race between detection and an external process that modifies environment variables (unusual but possible on some POSIX systems via putenv in a shared library) could produce a record where different fields reflect different snapshots. More practically, test harnesses that inject controlled environment snapshots via the programmatic construction API (FUNC-ENV-005) rely on the guarantee that a single injected snapshot is used throughout detection; if each sub-detector re-captured, injected values could be overwritten by the live process environment.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK Annotations and Provability
+
+[REQUIREMENT]
+UID: FUNC-CAP-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Target for Pure Detection Logic
+STATEMENT: >>>
+The pure assembly logic that constructs a Terminal_Capabilities record from pre-computed sub-detector results shall be SPARK-provable at Silver level. Specifically, any function that accepts the individual sub-detector outputs as parameters and combines them into a Terminal_Capabilities record shall be declared with SPARK_Mode => On and shall carry at minimum the following contract:
+
+  Global => null
+    -- The assembly function reads no global state; all inputs are supplied
+    -- as parameters.
+
+  Post =>
+    Detect'Result.Downsampling_Available =
+      (Detect'Result.Color >= Termicap.Color.Extended_256)
+    -- Derived field is consistent with Color field.
+
+The package spec containing the Terminal_Capabilities type declaration shall be compiled with SPARK_Mode => On. Sub-detector calls that read global state (Override_State) shall be wrapped so that the pure assembly step remains Global => null.
+<<<
+COMMENT: >>>
+The SPARK Silver target for the assembly function follows the same approach used for all pure detection logic in Termicap (FUNC-CLR-014, FUNC-UNI-007, FUNC-TID-007): the pure logic is provable at Silver, while the OS-call and protected-object boundaries are marked SPARK_Mode => Off. The Downsampling_Available postcondition is included as a representative contract because it is a deterministic derived field whose value can be expressed entirely in terms of another field of the result record; the SPARK prover can discharge this obligation with no manual lemmas. The Global => null contract on the assembly function is achievable because all sub-detector results are passed as parameters rather than read from global state; the assembly function itself does not call Get_Override or Is_TTY directly.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CAP-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: No FFI in Capability Record Assembly
+STATEMENT: >>>
+The Terminal_Capabilities type declaration, the assembly logic that combines sub-detector results into a Terminal_Capabilities record, and any helper functions that derive fields such as Downsampling_Available shall be implemented entirely in Ada with no calls to C, POSIX, or any other foreign language interface.
+
+FFI calls (isatty(), ioctl(TIOCGWINSZ), environment variable enumeration) are the responsibility of the individual sub-detector packages (Termicap.TTY, Termicap.Dimensions, Termicap.Environment.Capture). The Capability Record Assembly layer shall receive only the already-computed Ada values from those packages and shall perform no OS interaction of its own.
+
+The package body implementing Detect and the Get cache shall use SPARK_Mode => Off solely at the protected-object boundary for the cache (thread safety), not for any FFI call.
+<<<
+COMMENT: >>>
+Keeping the assembly layer free of FFI is essential for SPARK provability: SPARK_Mode => Off is required only at the protected-object cache boundary (tasking semantics) and is not needed for the record construction itself. This mirrors the FUNC-OVR-009 requirement for the Override package, which is also pure Ada with no FFI. The constraint also keeps the assembly layer portable across all GNAT-supported targets: a platform that does not support POSIX (e.g., a bare-metal target) can still use the assembly layer by providing stub sub-detector packages that return default values, without modifying the assembly code.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Re-Detection and Cache Invalidation
+
+[REQUIREMENT]
+UID: FUNC-CAP-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: Re-Detection on Explicit Detect Call
+STATEMENT: >>>
+Every call to the Detect function (FUNC-CAP-004) shall perform a complete detection run regardless of any previously cached result. Detect shall never short-circuit by returning a cached value, even if the internal cache has already been populated by a prior Get call.
+
+The Detect function shall re-invoke all sub-detectors in the order specified by FUNC-CAP-010 and shall re-capture the environment snapshot at the start of each call. The returned Terminal_Capabilities value shall reflect terminal state at the moment of the call.
+
+Applications that require the Get cache to reflect the latest detection result shall call Detect and store the returned value themselves; there is no automatic cache-invalidation mechanism.
+<<<
+COMMENT: >>>
+The separation between Detect (always fresh) and Get (always cached) is a deliberate design choice that avoids the complexity of cache invalidation. Automatic cache invalidation would require Termicap to know about every event that could change detection results (resize, environment change, override change), which is not feasible without hooks into the OS and the application's event loop. By keeping the cache immutable and providing Detect as the fresh-detection path, the library gives applications explicit control over when re-detection occurs. This pattern is used by supports-color (on() vs. on_cached()) and is cited in the global synthesis (§3.3).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CAP-015
+STATUS: Approved
+PRIORITY: Should
+TITLE: Unit Testability Without a Live Terminal
+STATEMENT: >>>
+The Detect function shall be testable with a programmatically constructed environment snapshot (FUNC-ENV-005) without requiring a live terminal, a real TTY file descriptor, or environment variable mutation. The test suite shall include at minimum the following cases:
+
+  Basic detection (all sub-detectors exercised):
+    - With TERM=xterm-256color, Is_TTY=True: Color = Extended_256,
+      Unicode depends on locale vars, Identity.Kind = Xterm.
+    - With NO_COLOR present, Is_TTY=True: Color = None.
+    - With Is_TTY=False and no force override: Color = None.
+
+  Override integration:
+    - With Set_Override (Force_True_Color) active: Color = True_Color
+      regardless of environment content.
+    - With Set_Override (Force_None) active: Color = None and all TTY
+      fields are False regardless of actual fd status.
+
+  Downsampling_Available derivation:
+    - Color = True_Color implies Downsampling_Available = True.
+    - Color = Extended_256 implies Downsampling_Available = True.
+    - Color = Basic_16 implies Downsampling_Available = False.
+    - Color = None implies Downsampling_Available = False.
+
+  Stream selection:
+    - Detect (Stream => Stderr) returns Color reflecting the Stderr TTY
+      status, which may differ from Detect (Stream => Stdout) when
+      stdout is redirected.
+
+  Record immutability:
+    - Modifying a local copy of a returned Terminal_Capabilities value
+      shall not affect subsequent Get or Detect results.
+
+All tests shall be deterministic and shall not depend on the real process environment or live file descriptors.
+<<<
+COMMENT: >>>
+Explicit testability requirements constrain the Detect function's interface in the same way that FUNC-TID-012 constrains Detect_Terminal_Identity: the function must accept or use an injectable environment snapshot so that test cases can supply controlled inputs without spawning subprocesses or mutating process-global state. The override integration test cases are included because the interaction between the cache, the override, and the TTY flags is the most complex part of the assembly layer and is most likely to be broken by refactoring. The Downsampling_Available derivation tests ensure that the convenience flag is always consistent with the Color field, complementing the SPARK postcondition from FUNC-CAP-012.
+<<<
+
+[/SECTION]

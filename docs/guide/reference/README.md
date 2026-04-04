@@ -7,6 +7,9 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Detection API](api-detection.md)**
   Core detection functions (Detect, Is_Terminal, Color_Level, Size)
 
+- **[Termicap.Capabilities](termicap-capabilities.md)**
+  Aggregated capability record — `Terminal_Capabilities` type, `Assemble` (pure, SPARK Silver), `Detect` (fresh), `Get` (cached, thread-safe)
+
 - **[Termicap.Color](termicap-color.md)**
   Color level detection — `Color_Level` type, `Detect_Color_Level` function, 11-step cascade, environment variable reference
 

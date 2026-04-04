@@ -9,6 +9,7 @@ with AUnit.Run;
 with AUnit.Reporter.Text;
 with AUnit.Test_Suites;
 
+with Test_Capabilities;
 with Test_Color;
 with Test_Dimensions;
 with Test_Downsampling;
@@ -27,6 +28,7 @@ procedure Termicap_Tests is
    function All_Tests return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      AUnit.Test_Suites.Add_Test (Result, new Test_Capabilities.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Environment.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Environment_Capture.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_TTY.Test_Case);

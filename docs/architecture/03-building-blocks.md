@@ -15,10 +15,11 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
 ├── Termicap.Sigwinch             [SPARK_Mode => Off] — SIGWINCH resize notification, self-pipe, protected object
 ├── Termicap.Unicode              [SPARK Silver] — Unicode support level detection (5-step cascade)
-└── Termicap.Terminal_Id          [spec: SPARK, body: SPARK_Mode => Off] — terminal identity detection (8-step cascade)
+├── Termicap.Terminal_Id          [spec: SPARK, body: SPARK_Mode => Off] — terminal identity detection (8-step cascade)
+└── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
-`Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. The root package remains a namespace-only package.
+`Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. `Termicap.Capabilities` sits at the top of the dependency graph: it depends on all Tier 1 and Tier 2 packages (`Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id`) and orchestrates them into a single `Terminal_Capabilities` record. The root package remains a namespace-only package.
 
 ## Level 2: Package Descriptions
 
@@ -523,6 +524,40 @@ All functions are pure integer arithmetic over bounded subtypes. The entire pack
 
 ---
 
+### `Termicap.Capabilities`
+
+**Responsibility:** Aggregates all sub-detector results into a single `Terminal_Capabilities` record, providing a cached lazy entry point (`Get`) and an uncached fresh entry point (`Detect`). Applications that need the full capability picture in a single call use this package rather than invoking each sub-detector independently.
+
+The pure `Assemble` function is SPARK Silver-provable (`Global => null`) and carries a postcondition that relates `Downsampling_Available` to the `Color` field. `Detect` and `Get` delegate to OS-calling sub-detectors and are compiled without SPARK Global contracts. The per-stream cache is implemented as an Ada protected object in the package body, providing thread-safe lazy initialisation (FUNC-CAP-008).
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-capabilities.ads`, `src/termicap-capabilities.adb` |
+| SPARK_Mode | On (spec and `Assemble` function); Off (protected cache, `Detect` and `Get` bodies) |
+| Dependencies | `Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, `Termicap.Terminal_Id` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Terminal_Capabilities` | Plain Ada record with eight fields: `TTY_Stdin : Boolean`, `TTY_Stdout : Boolean`, `TTY_Stderr : Boolean`, `Color : Termicap.Color.Color_Level`, `Size : Termicap.Dimensions.Terminal_Size`, `Unicode : Termicap.Unicode.Unicode_Level`, `Identity : Termicap.Terminal_Id.Terminal_Identity`, and `Downsampling_Available : Boolean`. Value semantics — assignment produces an independent copy with no aliasing. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Assemble` | Function | `Global => null`; `Post => Assemble'Result.Downsampling_Available = (Assemble'Result.Color >= Termicap.Color.Extended_256)` | FUNC-CAP-012, FUNC-CAP-013 |
+| `Detect` | Function | No Global contract (delegates to OS-calling sub-detectors) | FUNC-CAP-004, FUNC-CAP-005, FUNC-CAP-006, FUNC-CAP-007, FUNC-CAP-010, FUNC-CAP-011, FUNC-CAP-014 |
+| `Get` | Function | No Global contract (reads/writes protected cache) | FUNC-CAP-003, FUNC-CAP-005, FUNC-CAP-008, FUNC-CAP-009 |
+
+Both `Detect` and `Get` accept a `Stream : Termicap.TTY.Stream_Kind` parameter with default value `Stdout` (FUNC-CAP-005). `Detect` always performs a full detection run; `Get` populates the per-stream cache slot on the first call and returns a copy of the cached value on subsequent calls (FUNC-CAP-003). Override state installed via `Termicap.Override.Set_Override` is reflected in the `Color` and TTY fields of both `Detect` and `Get` results (FUNC-CAP-006, FUNC-CAP-007).
+
+#### Relationship to Other Packages
+
+`Termicap.Capabilities` is the integration apex of the package hierarchy. It depends on every Tier 1 and Tier 2 detection package and has no dependents within the library itself. Applications and tests interact with it directly; the individual sub-detectors remain available for callers that need only a subset of capabilities.
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -654,10 +689,21 @@ All functions are pure integer arithmetic over bounded subtypes. The entire pack
 │   │    async-signal-safe handler, ioctl +       │  │
 │   │    pipe write, sigaction installation       │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Capabilities (body — non-spec sections)  │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Protected per-stream cache object          │  │
+│   │  Detect body — calls sub-detectors, builds  │  │
+│   │    Terminal_Capabilities via Assemble       │  │
+│   │  Get body — reads/writes cache, delegates   │  │
+│   │    to Detect on first call per stream       │  │
+│   │  (Ada protected type + OS-calling sub-      │  │
+│   │    detectors — outside SPARK 2014 subset)   │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, and the entirety of `Termicap.Sigwinch` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, and the spec contracts on `Get_Size` and `Detect_Terminal_Identity` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` is the only package where both spec and body are wholly outside the SPARK zone: its protected object, interrupt handler, and C FFI cannot be expressed in SPARK 2014.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, and the `Detect`/`Get` bodies of `Termicap.Capabilities` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` is the only package where both spec and body are wholly outside the SPARK zone: its protected object, interrupt handler, and C FFI cannot be expressed in SPARK 2014. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`.
 
 ## Related Documents
 
@@ -677,4 +723,8 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **Tech Spec F8** (`docs/tech-specs/sigwinch.md`): SIGWINCH resize notification design rationale, self-pipe pattern, and C trampoline decision
 - **Tech Spec F9** (`docs/tech-specs/override.md`): Global override feature design rationale, SPARK strategy, and framework survey
 - **ADR-0010** (`docs/adr/0010-override-mode-flat-enum.md`): Rationale for the five-literal flat enumeration over alternative override representations
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014
+- **ADR-0011** (`docs/adr/0011-capability-record-package-placement.md`): Rationale for placing the aggregation package as a top-level child of `Termicap`
+- **ADR-0012** (`docs/adr/0012-capability-cache-design.md`): Rationale for the per-stream protected cache design
+- **ADR-0013** (`docs/adr/0013-spark-annotation-split-capabilities.md`): Rationale for the SPARK/Ada split in `Termicap.Capabilities`
+- **Tech Spec F10** (`docs/tech-specs/capability-record.md`): Capability record assembly design rationale
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014
