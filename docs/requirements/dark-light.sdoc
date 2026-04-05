@@ -1,0 +1,290 @@
+[DOCUMENT]
+TITLE: Dark / Light Theme Classification
+UID: REQ-DKL
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Theme Classification Type
+
+[REQUIREMENT]
+UID: FUNC-DKL-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Theme_Kind Enumeration
+STATEMENT: >>>
+The library shall define an enumeration type that classifies a terminal background theme as either dark or light:
+
+  type Theme_Kind is (Dark, Light);
+
+The value Dark indicates that the terminal background has a perceived luminance below the midpoint of the 0..255 scale, corresponding to a dark-themed terminal (e.g., a black or deep-coloured background). The value Light indicates that the terminal background has a perceived luminance at or above the midpoint, corresponding to a light-themed terminal (e.g., a white or pale background).
+
+The type shall be declared in a package with SPARK_Mode => On so that all classification logic operating on Theme_Kind values is provable at Gold level.
+<<<
+COMMENT: >>>
+Defining Theme_Kind as a two-literal enumeration provides a clear, strongly-typed representation of the single binary outcome of the classification algorithm. Using an enumeration rather than a Boolean avoids the readability problem of writing "if Is_Dark = True" or interpreting what True and False mean in context; code that reads "Theme = Dark" or "case Theme is when Dark => ..." is immediately self-documenting. The two literals are named Dark and Light rather than Dark_Background / Light_Background or Dark_Mode / Light_Mode for conciseness at call sites — callers will typically be reading "Classify_Theme(Color) = Dark", where the context of the surrounding code makes the meaning clear. The SPARK_Mode => On declaration enables the SPARK prover to reason exhaustively over case statements on Theme_Kind, ensuring that no classification branch is ever omitted. Constant naming in ALL_CAPS and type naming in Mixed_Case follow the Termicap coding standard.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DKL-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Theme_Result Discriminated Record
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DKL-001
+STATEMENT: >>>
+The library shall define a discriminated record type that represents the outcome of a combined background-colour detection and theme-classification operation:
+
+  type Theme_Result (Success : Boolean := False) is record
+     case Success is
+        when True  =>
+           Theme : Theme_Kind;
+           Color : RGB;
+        when False =>
+           Error : Detect_Error;
+     end case;
+  end record;
+
+When Success is True, the Theme component holds the classified theme (Dark or Light) and the Color component holds the raw RGB value that was detected from the terminal and used as input to the classification. When Success is False, the Error component holds a Detect_Error value indicating why detection failed.
+
+The type shall be declared in the same package as Detect_Theme (FUNC-DKL-005). The RGB type shall be Termicap.Color.BG_Query.RGB (FUNC-BGC-001). The Detect_Error type shall be the same Detect_Error enumeration used by Detect_Background_Color (FUNC-BGC-013):
+
+  type Detect_Error is
+     (Not_A_Terminal, Not_Foreground, Query_Timeout, Parse_Failed, No_Fallback);
+
+The default discriminant value of False ensures that an uninitialized Theme_Result is always in the failure state, preventing accidental use of an uninitialised Theme component.
+<<<
+COMMENT: >>>
+The discriminated record design mirrors the Pattern used throughout the Termicap library (e.g., Parse_Result in FUNC-BGC-007, Colorfgbg_Result in FUNC-BGC-011) and the broader functional Result idiom: a caller cannot access the Theme or Color fields without first checking — or asserting — that Success is True. In Ada, discriminant constraints are enforced at runtime as Constraint_Error, so there is no silent use of invalid fields. Including both Theme and Color in the success branch gives callers maximum flexibility: a caller who merely wants to branch on dark vs. light uses the Theme field, while a caller who also wants to display or log the detected colour can use Color without making a second detection call. The Detect_Error reuse from FUNC-BGC-013 is deliberate: Detect_Theme is a thin wrapper around Detect_Background_Color, so its failure modes are identical. Reusing the same error type allows callers to handle errors uniformly, with a single case statement, rather than learning a new error vocabulary for each API surface.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Luminance Computation (SPARK Gold)
+
+[REQUIREMENT]
+UID: FUNC-DKL-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Luminance Computation Function
+STATEMENT: >>>
+The library shall define a pure function that computes the ITU-R BT.601 perceived luminance of an RGB colour value using integer arithmetic:
+
+  function Luminance (Color : RGB) return Natural
+    with SPARK_Mode => On,
+         Post => Luminance'Result in 0 .. 255;
+
+The function shall implement the BT.601 formula using scaled integer coefficients to avoid any floating-point arithmetic:
+
+  Y = (299 * R + 587 * G + 114 * B) / 1000
+
+where R, G, B are the Red, Green, Blue components of Color respectively, each in the range 0 .. 255, and the division is integer division (truncation toward zero). The result shall be in the range 0 .. 255.
+
+The implementation shall use intermediate values of a type wide enough to hold the maximum partial sum without overflow. The maximum intermediate value is:
+
+  299 * 255 + 587 * 255 + 114 * 255 = 255_000
+
+which fits comfortably within Natural (whose upper bound is at least 2**31 - 1 on all supported platforms). No overflow can occur on any valid RGB input.
+
+No floating-point types, floating-point operations, or fixed-point types shall be used in the implementation of this function. All arithmetic shall use integer types.
+
+The function shall carry a postcondition:
+  Post => Luminance'Result in 0 .. 255
+<<<
+COMMENT: >>>
+The ITU-R BT.601 standard defines a luminance formula originally designed for analogue television colour encoding but widely adopted in software for perceived-brightness estimation. The three coefficients (0.299, 0.587, 0.114) weight the green channel most heavily because the human eye is most sensitive to green light, the red channel second, and the blue channel least. Scaling the coefficients by 1000 and performing integer division at the end preserves the relative weighting with a precision of three decimal places — sufficient for a binary dark/light classification — while keeping the function entirely in the integer subset of SPARK. Using integer arithmetic is a deliberate SPARK design choice: floating-point operations in SPARK require the Floating_Point_Overflow_Checks restriction and an IEEE 754 model assumption, which complicates Gold-level proof; integer arithmetic carries no such requirements, and GNATprove can discharge overflow checks by inspecting the component ranges and the coefficient values directly. The maximum intermediate value of 255_000 is computed at specification time to demonstrate that no overflow annotation or pragma is needed: Natural accommodates values up to at least 2_147_483_647 on all Termicap target platforms. The postcondition Y in 0..255 is provable because Y = floor((299*R + 587*G + 114*B) / 1000) and with R, G, B in 0..255 the minimum is 0 (all components zero) and the maximum is floor(255_000 / 1000) = 255.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Theme Classification Functions (SPARK Gold)
+
+[REQUIREMENT]
+UID: FUNC-DKL-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Classify_Theme Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DKL-001
+- TYPE: Parent
+  VALUE: FUNC-DKL-002
+STATEMENT: >>>
+The library shall define a pure function that classifies a terminal background RGB colour as Dark or Light by applying the luminance threshold:
+
+  function Classify_Theme (Color : RGB) return Theme_Kind
+    with SPARK_Mode => On;
+
+The function shall:
+  1. Call Luminance (FUNC-DKL-002) with Color to obtain a perceived luminance value Y in 0 .. 255.
+  2. If Y < 128, return Dark.
+  3. If Y >= 128, return Light.
+
+The threshold value 128 corresponds to a normalised luminance of 0.5 on the continuous scale [0.0, 1.0], where 0.0 is pure black and 1.0 is pure white. This threshold is consistent with the dark/light classification boundary used by termbg, termenv (Go), and lipgloss (Go) as documented in the global synthesis.
+
+The function body shall be a complete, exhaustive two-branch conditional covering both outcomes. No default or others branch is required because the two conditions Y < 128 and Y >= 128 together partition the full range 0 .. 255 without gaps or overlaps.
+<<<
+COMMENT: >>>
+The 128 threshold (0.5 on a normalised scale) is the canonical midpoint for dark/light classification and is used uniformly across the reference implementations surveyed in the global synthesis (§2.3): termbg (Go) applies BT.601 luminance with this threshold, termenv and lipgloss use HSL lightness < 0.5. For integer arithmetic on the 0..255 scale, 128 is the natural threshold: it is the smallest integer strictly greater than 127.5, the exact midpoint. Choosing 128 rather than 127 means that a 50% grey (RGB 128, 128, 128, luminance = 128) is classified as Light, which matches the convention in CSS and most GUI toolkits where the "neutral" grey sits on the light side. The function deliberately does not carry a postcondition on its return value, since Theme_Kind is an enumeration and all possible return values are valid by construction; the exhaustiveness of the conditional is verified by the SPARK prover through path analysis. The SPARK_Mode => On annotation propagates the Gold-level provability target to this function: with Luminance proved free of runtime errors (FUNC-DKL-002), Classify_Theme adds no new proof obligations beyond the completeness of the conditional.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DKL-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Is_Dark and Is_Light Convenience Functions
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DKL-001
+- TYPE: Parent
+  VALUE: FUNC-DKL-003
+STATEMENT: >>>
+The library shall define two pure convenience functions that provide Boolean shorthands for the two outcomes of Classify_Theme:
+
+  function Is_Dark (Color : RGB) return Boolean
+    with SPARK_Mode => On,
+         Post => Is_Dark'Result = (Classify_Theme (Color) = Dark);
+
+  function Is_Light (Color : RGB) return Boolean
+    with SPARK_Mode => On,
+         Post => Is_Light'Result = (Classify_Theme (Color) = Light);
+
+Each function shall delegate entirely to Classify_Theme (FUNC-DKL-003):
+
+  function Is_Dark  (Color : RGB) return Boolean is
+    (Classify_Theme (Color) = Dark);
+
+  function Is_Light (Color : RGB) return Boolean is
+    (Classify_Theme (Color) = Light);
+
+The functions shall be declared in the same package as Classify_Theme and Luminance, with SPARK_Mode => On throughout.
+
+The postconditions shall express the logical equivalence between the Boolean result and the corresponding Classify_Theme comparison, providing machine-verifiable contracts that callers can rely on in their own SPARK proofs.
+<<<
+COMMENT: >>>
+Is_Dark and Is_Light improve API ergonomics at call sites where a Boolean is expected: "if Is_Dark(Background)" reads more naturally than "if Classify_Theme(Background) = Dark" in conditional expressions, guard clauses, and assertion contexts. Implementing each as a single-expression function (Ada 2012 expression function syntax) guarantees that the implementation is exactly equal to the postcondition — GNATprove can discharge the postcondition by simple rewriting. The logical relationship Is_Dark(C) = not Is_Light(C) is a consequence of the two postconditions combined with the fact that Classify_Theme returns exactly one of the two Theme_Kind literals; GNATprove can prove this implication automatically without a manual lemma. Providing both functions rather than only Is_Dark avoids the cognitive load of negation ("not Is_Dark" vs "Is_Light") and matches the style of boolean predicate pairs found in the Ada standard library (e.g., Is_Open / Is_Closed, Is_Empty / Is_Full). The ALL_CAPS-free naming Is_Dark / Is_Light follows the Termicap coding standard for function identifiers.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: High-Level Detection API
+
+[REQUIREMENT]
+UID: FUNC-DKL-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detect_Theme Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DKL-001
+- TYPE: Parent
+  VALUE: FUNC-DKL-003
+- TYPE: Parent
+  VALUE: FUNC-DKL-006
+STATEMENT: >>>
+The library shall provide a high-level function that combines background colour detection with theme classification into a single call:
+
+  function Detect_Theme
+     (Timeout_Ms : Natural := 1000)
+      return Theme_Result;
+
+The function shall execute the following algorithm:
+
+  1. Call Detect_Background_Color (FUNC-BGC-013) with Timeout_Ms, obtaining a Result_RGB.
+  2. If the result is Ok(Color):
+     a. Call Classify_Theme (FUNC-DKL-003) with Color to obtain a Theme_Kind value.
+     b. Return Theme_Result'(Success => True, Theme => <classified theme>, Color => Color).
+  3. If the result is Err(E):
+     a. Return Theme_Result'(Success => False, Error => E).
+
+The Timeout_Ms parameter shall have a default value of 1000 (one second) and shall be clamped to a maximum of 30_000 before being passed to Detect_Background_Color, consistent with the timeout policy in FUNC-BGC-015.
+
+The function shall not raise an exception on any path. SPARK_Mode shall be Off for this function because it calls Detect_Background_Color, which itself calls I/O procedures and Ada controlled types outside the SPARK subset.
+
+The Theme_Result type is defined in FUNC-DKL-006.
+<<<
+COMMENT: >>>
+Detect_Theme is the primary entry point for the most common use case in terminal UI libraries: "is this terminal dark or light themed?" It spares the caller from having to import two separate packages (Termicap.Color.Detection for background detection and Termicap.Color.Dark_Light for classification) and from writing the result-unwrapping boilerplate themselves. The function is deliberately thin — it contains no algorithmic logic of its own beyond calling Detect_Background_Color and Classify_Theme — so its SPARK_Mode => Off status does not represent a loss of verification coverage. All the interesting correctness properties (overflow safety in luminance computation, range validity of RGB components, exhaustiveness of the classification) are proved in the Gold-level SPARK functions it calls. Including the detected Color in the success branch of Theme_Result (not just the Theme) allows callers to log, display, or cache the raw background value alongside the derived classification, without a second detection round trip. The 30_000 ms upper clamp is inherited from the COLORFGBG timeout policy (FUNC-BGC-015) and documented here so that callers reading only the Detect_Theme specification are aware of it.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK and Provability Boundaries
+
+[REQUIREMENT]
+UID: FUNC-DKL-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Gold Provability for Classification Functions
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DKL-002
+- TYPE: Parent
+  VALUE: FUNC-DKL-003
+- TYPE: Parent
+  VALUE: FUNC-DKL-004
+STATEMENT: >>>
+The following functions in the DARK-LIGHT feature shall be declared and implemented with SPARK_Mode => On, targeting SPARK Gold level provability (absence of all runtime errors including overflow, division by zero, and out-of-range assignments):
+
+  SPARK Gold-provable functions (SPARK_Mode => On):
+    - Luminance        (FUNC-DKL-002) — integer arithmetic, no loops, no I/O
+    - Classify_Theme   (FUNC-DKL-003) — calls Luminance, two-branch conditional
+    - Is_Dark          (FUNC-DKL-004) — single-expression function calling Classify_Theme
+    - Is_Light         (FUNC-DKL-004) — single-expression function calling Classify_Theme
+
+  Not SPARK-provable (SPARK_Mode => Off):
+    - Detect_Theme     (FUNC-DKL-005) — calls Detect_Background_Color (I/O dependency)
+
+Each Gold-level function shall carry contracts sufficient for GNATprove to discharge all proof obligations without manual lemmas:
+
+  Luminance:
+    Post => Luminance'Result in 0 .. 255
+
+  Is_Dark:
+    Post => Is_Dark'Result = (Classify_Theme (Color) = Dark)
+
+  Is_Light:
+    Post => Is_Light'Result = (Classify_Theme (Color) = Light)
+
+The Classify_Theme function requires no postcondition beyond the return type constraint because Theme_Kind is an enumeration and all enumeration values are valid by construction; the exhaustiveness of the two-branch conditional is verified by path analysis.
+
+All Gold-level functions shall be placed in a package separate from any package containing SPARK_Mode => Off code. The recommended package is Termicap.Color.Dark_Light with SPARK_Mode => On at the package level.
+
+The SPARK_Mode => Off annotation on Detect_Theme shall be placed on the function specification, not merely on the body, so that callers in SPARK-annotated packages cannot inadvertently call it without a mode barrier.
+<<<
+COMMENT: >>>
+Gold level (rather than Silver) is the appropriate SPARK target for the classification functions because they contain no loops, no heap allocation, no recursive calls, and no global state — they are pure integer arithmetic and enumeration operations on bounded types. GNATprove's Gold mode requires proof of absence of all runtime errors, including integer overflow; for Luminance this reduces to verifying that 299*R + 587*G + 114*B does not exceed Natural'Last, which follows directly from the component ranges and coefficient values without any loop invariant or manual proof step. The distinction between Silver (flow analysis and type checking) and Gold (full absence of runtime errors) matters for a library like Termicap whose classification output influences UI rendering decisions in downstream applications: Gold certification gives integrators a machine-verified guarantee that Luminance will never raise Constraint_Error or Overflow_Error regardless of input. The package boundary requirement (Gold functions in a SPARK_Mode => On package, Detect_Theme in a separate SPARK_Mode => Off package or sub-package) enforces the provability partition at the Ada compilation unit level, consistent with the boundary partitioning established by the OSC infrastructure (FUNC-OSC-015) and the BG-COLOR feature (FUNC-BGC-017). Annotating the Detect_Theme specification (not just its body) with SPARK_Mode => Off is necessary because Ada 2012 / SPARK 2014 require the specification annotation to be present for the compiler to reject calls from SPARK-annotated callers; a body-only annotation would create a silent provability gap.
+<<<
+
+[/SECTION]

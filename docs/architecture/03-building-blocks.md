@@ -13,7 +13,9 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Color                [spec: SPARK, body: SPARK Silver] — color level detection (11-step cascade, depends on Termicap.Override)
 │   ├── Termicap.Color.BG_Query       [SPARK Silver] — RGB type, OSC query constants, pure color response parsing
 │   │   └── Termicap.Color.BG_Query.IO [SPARK_Mode => Off] — Query_Color I/O via Probe_Session
-│   └── Termicap.Color.Detection      [SPARK_Mode => Off] — Detect_Background/Foreground_Color cascade
+│   ├── Termicap.Color.Detection      [SPARK_Mode => Off] — Detect_Background/Foreground_Color cascade
+│   └── Termicap.Color.Dark_Light     [SPARK Gold] — Theme_Kind, Luminance, Classify_Theme, Is_Dark, Is_Light
+│       └── Termicap.Color.Dark_Light.Detect  [SPARK_Mode => Off] — Theme_Result, Detect_Theme
 ├── Termicap.Downsampling         [SPARK Gold]   — color downsampling conversions (TrueColor/256-color to lower levels)
 ├── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
 ├── Termicap.Sigwinch             [SPARK_Mode => Off] — SIGWINCH resize notification, self-pipe, protected object
@@ -770,6 +772,75 @@ Both functions clamp `Timeout_Ms` to 30 000 ms. When `Timeout_Ms = 0`, the OSC q
 
 ---
 
+### `Termicap.Color.Dark_Light`
+
+**Responsibility:** All SPARK Gold-provable building blocks for the DARK-LIGHT feature. Provides the `Theme_Kind` enumeration, the `LUMINANCE_THRESHOLD` named number, and pure functions that compute ITU-R BT.601 perceived luminance using integer-only arithmetic, classify an RGB color as `Dark` or `Light`, and expose Boolean convenience predicates. No I/O, no global state, no exceptions.
+
+The luminance formula `Y = (299 * R + 587 * G + 114 * B) / 1000` uses only bounded integer arithmetic. The maximum intermediate value is 255 000, well within `Natural` on all supported platforms. GNATprove discharges all proof obligations (overflow safety, range postcondition) without manual lemmas.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-color-dark_light.ads`, `src/termicap-color-dark_light.adb` |
+| SPARK_Mode | On (spec and body — Gold level) |
+| Dependencies | `Termicap.Color.BG_Query` (for `RGB` type) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Theme_Kind` | Two-literal enumeration: `Dark` (luminance < 128), `Light` (luminance >= 128). Strongly typed; SPARK prover verifies exhaustiveness of `case` statements over this type. |
+
+#### Key Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `LUMINANCE_THRESHOLD` | 128 | Named number (not a typed constant) so it participates in static expressions. Midpoint of the 0..255 luminance scale (0.5 on [0.0, 1.0]). |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirement |
+|-----------|------|---------------|-------------|
+| `Luminance` | Function (expression) | `Post => Luminance'Result in 0 .. 255` | FUNC-DKL-002 |
+| `Classify_Theme` | Function (expression) | — (return type constraint; exhaustiveness proved by path analysis) | FUNC-DKL-003 |
+| `Is_Dark` | Function (expression) | `Post => Is_Dark'Result = (Classify_Theme (Color) = Dark)` | FUNC-DKL-004 |
+| `Is_Light` | Function (expression) | `Post => Is_Light'Result = (Classify_Theme (Color) = Light)` | FUNC-DKL-004 |
+
+All four functions are expression functions declared in the spec; GNATprove inlines their definitions at every call site and discharges all Gold-level proof obligations automatically.
+
+---
+
+### `Termicap.Color.Dark_Light.Detect`
+
+**Responsibility:** High-level theme detection wrapper. Combines `Detect_Background_Color` (OSC 11 query cascade) with `Classify_Theme` (BT.601 luminance threshold) into a single call returning a discriminated `Theme_Result`. Carries `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O.
+
+This package is the SPARK Off boundary for the DARK-LIGHT feature, mirroring the role of `Termicap.Color.BG_Query.IO` in the BG-COLOR feature. All algorithmic correctness properties are proved in the Gold-level parent package.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-color-dark_light-detect.ads`, `src/termicap-color-dark_light-detect.adb` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Termicap.Color.BG_Query` (for `RGB`), `Termicap.Color.Detection` (for `Detect_Background_Color`, `Detect_Error`), `Termicap.Color.Dark_Light` (for `Theme_Kind`, `Classify_Theme`) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Theme_Result` | Discriminated record: `Success => True` carries `Theme : Theme_Kind` and `Color : RGB`; `Success => False` carries `Error : Detect_Error`. Default discriminant `False` ensures uninitialized values are always in the failure state. |
+
+#### Key Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MAX_TIMEOUT_MS` | 30 000 | Upper clamp on `Timeout_Ms` before passing to `Detect_Background_Color`, consistent with the FUNC-BGC-015 timeout policy. |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirement |
+|-----------|------|-------------|-------------|
+| `Detect_Theme` | Function | Clamps `Timeout_Ms`, calls `Detect_Background_Color`, classifies the color with `Classify_Theme`, and returns a `Theme_Result`. `Timeout_Ms` defaults to 1 000 ms. Never raises. | FUNC-DKL-005 |
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -954,6 +1025,17 @@ Both functions clamp `Timeout_Ms` to 30 000 ms. When `Timeout_Ms = 0`, the OSC q
 │   │    Ansi_To_RGB, Query_Sequence              │  │
 │   │  Global => null — no FFI, no state          │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Color.Dark_Light (spec + body) [Gold]   │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Theme_Kind (Dark, Light) enumeration       │  │
+│   │  LUMINANCE_THRESHOLD : constant := 128      │  │
+│   │  Luminance — BT.601 integer formula,        │  │
+│   │    Post => Result in 0..255                 │  │
+│   │  Classify_Theme — threshold comparison      │  │
+│   │  Is_Dark / Is_Light — expression functions  │  │
+│   │  Global => null — pure arithmetic, no I/O   │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────┐
@@ -977,10 +1059,21 @@ Both functions clamp `Timeout_Ms` to 30 000 ms. When `Timeout_Ms = 0`, the OSC q
 │   │  (calls Query_Color + env capture —         │  │
 │   │    outside SPARK 2014 subset)               │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Color.Dark_Light.Detect (spec + body)   │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Theme_Result discriminated record          │  │
+│   │  MAX_TIMEOUT_MS : constant := 30_000        │  │
+│   │  Detect_Theme — clamps timeout, calls       │  │
+│   │    Detect_Background_Color, classifies      │  │
+│   │    via Classify_Theme, returns Theme_Result │  │
+│   │  (calls Detect_Background_Color —           │  │
+│   │    outside SPARK 2014 subset)               │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O.
 
 ## Related Documents
 
@@ -1005,4 +1098,5 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **ADR-0013** (`docs/adr/0013-spark-annotation-split-capabilities.md`): Rationale for the SPARK/Ada split in `Termicap.Capabilities`
 - **Tech Spec F10** (`docs/tech-specs/capability-record.md`): Capability record assembly design rationale
 - **Tech Spec OSC** (`docs/tech-specs/osc-query-infra.md`): OSC query infrastructure design rationale, sentinel pattern, C helper design, and ADR-0014
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015
+- **Tech Spec DARK-LIGHT** (`docs/tech-specs/dark-light.md`): Dark/light theme classification design rationale — BT.601 integer luminance, SPARK Gold boundary, discriminated result type
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007

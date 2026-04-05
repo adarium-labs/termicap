@@ -1293,6 +1293,88 @@ Termicap.Color.BG_Query.Ansi_To_RGB (Background_Index)
 
 ---
 
+## Scenario 20: Dark / Light Theme Classification and Detection
+
+Two execution paths are defined for the DARK-LIGHT feature: a pure classification path (no I/O, SPARK Gold) and a combined detection path (I/O via the existing BG-COLOR cascade).
+
+### Path A — Pure Classification (SPARK Gold, no I/O)
+
+Used when the caller already holds an `RGB` value (e.g., from a prior call to `Detect_Background_Color` or from a test fixture).
+
+```
+Caller (application)
+  │
+  │  Classify_Theme (Color : RGB)          -- or Is_Dark / Is_Light
+  ▼
+Termicap.Color.Dark_Light                   [SPARK Gold]
+  │
+  │  Luminance (Color)
+  │    Y := (299 * Color.Red
+  │           + 587 * Color.Green
+  │           + 114 * Color.Blue) / 1_000
+  │
+  │    Post: Y in 0 .. 255
+  │    GNATprove: range of each term computed from field constraints;
+  │               sum 0..255_000 fits Natural; no overflow possible
+  │
+  │  if Y < LUMINANCE_THRESHOLD (128) then
+  │     return Dark
+  │  else
+  │     return Light
+  │
+  └──► Theme_Kind (Dark | Light)
+```
+
+**Key properties:**
+
+- No OS interaction, no global state, no exceptions. `Global => null` (implicit, as no `Abstract_State` is referenced).
+- Expression functions: `Luminance`, `Classify_Theme`, `Is_Dark`, and `Is_Light` are all declared as expression functions in the spec; GNATprove inlines their definitions at every call site.
+- SPARK Gold: all proof obligations (overflow, range postcondition, path exhaustiveness) discharged automatically without manual lemmas.
+- Boundary case: `RGB(128, 128, 128)` → `Y = 128 >= 128` → `Light`. This matches the CSS and termenv convention (boundary classified as Light, FUNC-DKL-003).
+
+### Path B — Combined Detection (SPARK_Mode => Off)
+
+Used when the caller needs to determine the terminal theme without having previously queried the background color. Internally invokes the full BG-COLOR cascade (Scenario 19) and then applies Path A classification.
+
+```
+Caller (application)
+  │
+  │  Detect_Theme (Timeout_Ms : Natural := 1_000)
+  ▼
+Termicap.Color.Dark_Light.Detect            [SPARK_Mode => Off]
+  │
+  │  Effective_Timeout := Natural'Min (Timeout_Ms, MAX_TIMEOUT_MS)
+  │                                           -- MAX_TIMEOUT_MS = 30_000
+  │
+  │  Detect_Background_Color (Effective_Timeout)
+  │    └──► (see Scenario 19 for the full OSC 11 → COLORFGBG cascade)
+  │
+  │  Detection result?
+  │
+  │  Case Success => True:
+  │    Color : RGB := Result.Color
+  │    │
+  │    │  Classify_Theme (Color)          [SPARK Gold — Path A above]
+  │    │    └──► Theme : Theme_Kind (Dark | Light)
+  │    │
+  │    └──► Theme_Result'(Success => True, Theme => Theme, Color => Color)
+  │
+  │  Case Success => False:
+  │    Error : Detect_Error := Result.Error
+  │    └──► Theme_Result'(Success => False, Error => Error)
+  │
+  └──► Theme_Result (discriminated record)
+```
+
+**Key properties:**
+
+- `Detect_Theme` is exception-free on all paths: `Detect_Background_Color` is documented as exception-free and discriminated record construction is statically safe.
+- The SPARK Off boundary is confined to `Termicap.Color.Dark_Light.Detect`. All algorithmic correctness (overflow safety in `Luminance`, range validity of `RGB` components, exhaustiveness of the classification) is proved in the Gold-level parent package.
+- Including both `Theme` and `Color` in the success branch gives callers maximum flexibility: they can branch on `Dark`/`Light` using `Theme` and also log or cache the raw detected color using `Color`, without a second detection round trip.
+- Failure modes are identical to `Detect_Background_Color`: `Not_A_Terminal`, `Not_Foreground`, `Query_Timeout`, `Parse_Failed`, `No_Fallback`. The `Detect_Error` type is reused directly.
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1316,4 +1398,5 @@ Termicap.Color.BG_Query.Ansi_To_RGB (Background_Index)
 - **Tech Spec OSC** (`docs/tech-specs/osc-query-infra.md`): OSC query infrastructure design rationale — sentinel pattern, C helper design, session lifecycle
 - **Tech Spec BG-COLOR** (`docs/tech-specs/bg-color-query.md`): Background/foreground color detection design rationale — SPARK split, discriminated result types, COLORFGBG fallback, multiplexer passthrough
 - **ADR-0016** (`docs/adr/0016-discriminated-record-for-bg-color-results.md`): Rationale for discriminated record result types in the BG-COLOR feature
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019
+- **Tech Spec DARK-LIGHT** (`docs/tech-specs/dark-light.md`): Dark/light theme classification design rationale — BT.601 integer luminance, SPARK Gold boundary, framework survey
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007
