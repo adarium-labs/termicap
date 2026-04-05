@@ -1190,6 +1190,109 @@ Termicap.OSC.Finalize / Close  [SPARK_Mode => Off, Ada.Finalization]
 
 ---
 
+## Scenario 19: Background / Foreground Color Detection — Two-Level Cascade
+
+End-to-end scenario for `Detect_Background_Color` (or `Detect_Foreground_Color`). Two phases: OSC query attempt, then COLORFGBG environment variable fallback.
+
+### Phase A — OSC Query Path (Primary)
+
+```
+Caller
+  │
+  │  Result := Detect_Background_Color (Timeout_Ms => 1_000)
+  ▼
+Termicap.Color.Detection.Detect_Background_Color   [SPARK_Mode => Off]
+  │
+  │  Timeout_Ms := Natural'Min (1_000, 30_000)   -- clamp to 30 s cap
+  │
+  │  Step 0: Timeout_Ms = 0?
+  │    Yes → skip OSC query; go to Phase B
+  │    No  → continue
+  │
+  ▼
+Termicap.Color.BG_Query.IO.Query_Color (Background, 1_000, ...)
+  │                                         [SPARK_Mode => Off]
+  │
+  │  Capture_Current (Env)                  [SPARK_Mode => Off]
+  │  Detect_Terminal_Identity (Env)         [spec: SPARK, body: Off]
+  │    └──► Is_Multiplexer?
+  │           Yes → Wrap_For_Passthrough    [SPARK Silver]
+  │                  (tmux DCS wrapping or screen DCS wrapping)
+  │
+  │  declare Session : Probe_Session;       [SPARK_Mode => Off]
+  │  Open (Session, Status)
+  │    Status ≠ Session_OK?
+  │      Session_Not_Foreground → Timed_Out := True; return
+  │      Session_No_Terminal    → Timed_Out := True; return
+  │      Session_Raw_Failed     → Timed_Out := True; return
+  │    Status = Session_OK → continue
+  │
+  │  Sentinel_Query (Session, Query, Response, Resp_Length,
+  │                  Timeout_Ms => 1_000, Timed_Out, Retry => True)
+  │    │
+  │    │  Write OSC_BG_QUERY (possibly DCS-wrapped) + DA1 sentinel
+  │    │  Accumulate response bytes until DA1 detected or timeout
+  │    └──► Response(1..Resp_Length) = pre-sentinel bytes; Timed_Out flag set
+  │
+  │  end;  -- Finalize: termios restored, /dev/tty closed
+  │
+  └──► Response bytes and Timed_Out returned to Detection body
+
+  │  Timed_Out = True → go to Phase B (COLORFGBG fallback)
+  │  Timed_Out = False →
+  │
+  ▼
+Termicap.Color.BG_Query.Strip_OSC_Header   [SPARK Silver]
+  │  Verifies ESC ] 1 1 ; prefix; locates payload region
+  │  Success = False → go to Phase B
+  │
+Termicap.Color.BG_Query.Parse_RGB_Response [SPARK Silver]
+  │  Find_RGB_Prefix → Split_RGB_Channels → Parse_Hex_Channel (×3)
+  │  Normalises 4-digit hex to 8-bit (high-byte extraction)
+  │  Success = False → go to Phase B
+  │
+  └──► Detection_Result'(Success => True, Color => (R, G, B))
+```
+
+### Phase B — COLORFGBG Fallback
+
+Executed when the OSC query times out, the session fails to open, or the response cannot be parsed.
+
+```
+Termicap.Color.Detection (continuation)   [SPARK_Mode => Off]
+  │
+  │  Capture_Current (Env)                [SPARK_Mode => Off]
+  │    └──► (or reuse captured snapshot if already available)
+  │
+  │  Contains (Env, "COLORFGBG")?
+  │    No → return Detection_Result'(Success => False, Error => No_Fallback)
+  │    Yes →
+  │
+  ▼
+Termicap.Color.BG_Query.Parse_Colorfgbg (Value (Env, "COLORFGBG"))
+  │                                          [SPARK Silver]
+  │  Parses "fg;bg" or "fg;extra;bg" form
+  │  Both indices must be decimal 0..15
+  │  Success = False → return (Success => False, Error => No_Fallback)
+  │
+Termicap.Color.BG_Query.Ansi_To_RGB (Background_Index)
+  │                                          [SPARK Silver, Global => null]
+  │  Direct lookup in ANSI_COLOR_TABLE (16-entry constant array)
+  │
+  └──► Detection_Result'(Success => True, Color => ANSI_COLOR_TABLE (Index))
+```
+
+**Key properties:**
+
+- The OSC query is guarded by a foreground-process check inside `Open`. Background processes receive `Timed_Out = True` without sending any query to the terminal (FUNC-BGC-006).
+- Multiplexer passthrough wrapping (`Wrap_For_Passthrough`, SPARK Silver) is applied before `Sentinel_Query` when the terminal identity is `Tmux` or `Screen`. No new C wrappers are introduced — the existing `Termicap.OSC` infrastructure handles the wrapped query transparently (FUNC-BGC-006).
+- All parsing (hex normalisation, OSC header stripping, COLORFGBG scanning) is confined to `Termicap.Color.BG_Query` (SPARK Silver, `Global => null`). The SPARK prover verifies that channel values are always in `0 .. 255` and that `Colorfgbg_Result` indices are always in `0 .. 15` (FUNC-BGC-007 through FUNC-BGC-012).
+- `COLORFGBG` is parsed only after the OSC query path has been exhausted, preserving OSC accuracy for terminals that support it (FUNC-BGC-013, FUNC-BGC-014).
+- When `Timeout_Ms = 0`, the caller explicitly opts out of active probing and the function becomes a pure environment-variable query — useful in contexts where terminal I/O must not occur (FUNC-BGC-015).
+- Neither `Detect_Background_Color` nor `Detect_Foreground_Color` raises exceptions. All failure modes are represented by `Detection_Result'(Success => False, Error => <Detect_Error>)`.
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1211,4 +1314,6 @@ Termicap.OSC.Finalize / Close  [SPARK_Mode => Off, Ada.Finalization]
 - **ADR-0013** (`docs/adr/0013-spark-annotation-split-capabilities.md`): Rationale for the SPARK/Ada split in `Termicap.Capabilities`
 - **Tech Spec F10** (`docs/tech-specs/capability-record.md`): Capability record assembly design rationale
 - **Tech Spec OSC** (`docs/tech-specs/osc-query-infra.md`): OSC query infrastructure design rationale — sentinel pattern, C helper design, session lifecycle
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014
+- **Tech Spec BG-COLOR** (`docs/tech-specs/bg-color-query.md`): Background/foreground color detection design rationale — SPARK split, discriminated result types, COLORFGBG fallback, multiplexer passthrough
+- **ADR-0016** (`docs/adr/0016-discriminated-record-for-bg-color-results.md`): Rationale for discriminated record result types in the BG-COLOR feature
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019

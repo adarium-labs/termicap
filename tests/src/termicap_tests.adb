@@ -9,6 +9,7 @@ with AUnit.Run;
 with AUnit.Reporter.Text;
 with AUnit.Test_Suites;
 
+with Test_BG_Query;
 with Test_Capabilities;
 with Test_Color;
 with Test_Dimensions;
@@ -41,6 +42,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_Sigwinch.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Override.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_OSC_Parsing.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_BG_Query.Test_Case);
       return Result;
    end All_Tests;
 

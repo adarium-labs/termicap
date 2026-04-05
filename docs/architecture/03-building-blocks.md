@@ -11,6 +11,9 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Override             [spec: SPARK, body: mixed] — process-wide color override, Override_Mode type, Parse_Color_Flag, Scoped_Override
 ├── Termicap.TTY                  [spec: SPARK, body: SPARK_Mode => Off] — TTY detection (depends on Termicap.Override)
 ├── Termicap.Color                [spec: SPARK, body: SPARK Silver] — color level detection (11-step cascade, depends on Termicap.Override)
+│   ├── Termicap.Color.BG_Query       [SPARK Silver] — RGB type, OSC query constants, pure color response parsing
+│   │   └── Termicap.Color.BG_Query.IO [SPARK_Mode => Off] — Query_Color I/O via Probe_Session
+│   └── Termicap.Color.Detection      [SPARK_Mode => Off] — Detect_Background/Foreground_Color cascade
 ├── Termicap.Downsampling         [SPARK Gold]   — color downsampling conversions (TrueColor/256-color to lower levels)
 ├── Termicap.Dimensions           [spec: SPARK, body: SPARK_Mode => Off] — terminal size detection
 ├── Termicap.Sigwinch             [SPARK_Mode => Off] — SIGWINCH resize notification, self-pipe, protected object
@@ -21,7 +24,7 @@ Termicap                          (root namespace — no types or subprograms)
 └── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
-`Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. `Termicap.Capabilities` sits at the top of the dependency graph: it depends on all Tier 1 and Tier 2 packages (`Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id`) and orchestrates them into a single `Terminal_Capabilities` record. The root package remains a namespace-only package. `Termicap.OSC` is the FFI boundary for active terminal probing; it depends on `Ada.Finalization` and `Interfaces.C` and calls nine C helper functions via `termicap_osc.c`. Its child package `Termicap.OSC.Parsing` is a pure SPARK Silver leaf that depends only on the `Byte` and `Byte_Array` types from the parent package.
+`Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. `Termicap.Capabilities` sits at the top of the dependency graph: it depends on all Tier 1 and Tier 2 packages (`Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id`) and orchestrates them into a single `Terminal_Capabilities` record. The root package remains a namespace-only package. `Termicap.OSC` is the FFI boundary for active terminal probing; it depends on `Ada.Finalization` and `Interfaces.C` and calls nine C helper functions via `termicap_osc.c`. Its child package `Termicap.OSC.Parsing` is a pure SPARK Silver leaf that depends only on the `Byte` and `Byte_Array` types from the parent package. `Termicap.Color.BG_Query` is a SPARK Silver child of `Termicap.Color` providing the RGB type, OSC 10/11 query byte constants, and pure parsing functions for X11 `rgb:` responses, hex channel normalisation, OSC header stripping, and COLORFGBG parsing; it has no dependency on `Termicap.OSC` (which is `SPARK_Mode => Off`) — instead it re-declares compatible `Byte`/`Byte_Array` types using the same underlying `Interfaces.C.unsigned_char` base. Its child `Termicap.Color.BG_Query.IO` is the I/O boundary: it calls `Termicap.OSC.Sentinel_Query` via a `Probe_Session` and optionally wraps the query for multiplexer passthrough. `Termicap.Color.Detection` is a sibling child of `Termicap.Color` that orchestrates the two-level cascade (OSC query → COLORFGBG fallback) and exposes `Detect_Background_Color` and `Detect_Foreground_Color` as the top-level API; it depends on `Termicap.Color.BG_Query` and `Termicap.Color.BG_Query.IO`.
 
 ## Level 2: Package Descriptions
 
@@ -661,6 +664,112 @@ All subprograms operate solely on `Byte_Array` values inherited from `Termicap.O
 
 ---
 
+### `Termicap.Color.BG_Query`
+
+**Responsibility:** Pure SPARK types, constants, and parsing functions for OSC 10/11 background and foreground color query responses. Contains all provable building blocks for the BG-COLOR feature; no I/O, no global state, no exceptions.
+
+Re-declares `Byte` and `Byte_Array` independently of `Termicap.OSC` (which is `SPARK_Mode => Off`) to remain fully SPARK-provable while remaining representation-compatible at the I/O boundary.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-color-bg_query.ads`, `src/termicap-color-bg_query.adb` |
+| SPARK_Mode | On (spec and body) — **Silver level** |
+| Dependencies | `Interfaces.C` (Ada standard library) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `RGB` | Record with three `Natural range 0 .. 255` fields (`Red`, `Green`, `Blue`). Independent of `Termicap.Downsampling.RGB` — the BG-COLOR subsystem is standalone. |
+| `Query_Kind` | Enumeration: `Background` (OSC 11) / `Foreground` (OSC 10). |
+| `Parse_Result` | Discriminated record: `Success => True` carries `Color : RGB`; `Success => False` carries no data. |
+| `Channel_Result` | Discriminated record: `Success => True` carries `Value : Natural range 0 .. 255`. |
+| `Strip_Result` | Discriminated record: `Success => True` carries `Offset : Positive` and `Payload_Length : Natural` identifying the rgb: payload within the raw response buffer. |
+| `Colorfgbg_Result` | Non-discriminated record: `Success : Boolean`; `Foreground`, `Background : Natural range 0 .. 15`. |
+| `ANSI_Color_Array` | Array `(Natural range 0 .. 15) of RGB`. Basis for `ANSI_COLOR_TABLE`. |
+
+#### Key Constants
+
+| Constant | Description |
+|----------|-------------|
+| `OSC_BG_QUERY` | Byte sequence encoding `ESC ] 1 1 ; ? ESC \` (OSC 11 background query). |
+| `OSC_FG_QUERY` | Byte sequence encoding `ESC ] 1 0 ; ? ESC \` (OSC 10 foreground query). |
+| `ANSI_COLOR_TABLE` | Canonical xterm 16-color palette (`ANSI_Color_Array`). Used by `Ansi_To_RGB` and the COLORFGBG fallback. |
+| `DEFAULT_BACKGROUND` | `(0, 0, 0)` — returned when all detection steps fail for background. |
+| `DEFAULT_FOREGROUND` | `(170, 170, 170)` — returned when all detection steps fail for foreground. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Query_Sequence` | Function | `Post => result'Length > 0` | FUNC-BGC-005 |
+| `Parse_RGB_Response` | Function | `Pre => Length <= Bytes'Length`; `Post => if success then channels in 0..255` | FUNC-BGC-007 |
+| `Find_RGB_Prefix` | Procedure | `Pre => Length <= Bytes'Length`; `Post => if Found then Offset in bounds` | FUNC-BGC-008 |
+| `Split_RGB_Channels` | Procedure | Pre/Post constraining channel lengths to `1..MAX_CHANNEL_LENGTH` | FUNC-BGC-008 |
+| `Parse_Hex_Channel` | Function | `Pre` bounds `Length in 1..MAX_CHANNEL_LENGTH`; `Post => if success then Value in 0..255` | FUNC-BGC-009 |
+| `Strip_OSC_Header` | Function | `Pre => Length <= Bytes'Length`; `Post` bounds `Offset` and `Payload_Length` | FUNC-BGC-010 |
+| `Parse_Colorfgbg` | Function | `Pre => Value'Length <= MAX_COLORFGBG_LENGTH`; `Post => if success then both fields in 0..15` | FUNC-BGC-011 |
+| `Ansi_To_RGB` | Function | `Post => all channels in 0..255` | FUNC-BGC-012 |
+
+---
+
+### `Termicap.Color.BG_Query.IO`
+
+**Responsibility:** I/O boundary for the BG-COLOR feature. Sends one OSC 10 or OSC 11 color query to the terminal via a `Probe_Session` and returns the raw pre-sentinel response bytes. Optionally wraps the query for multiplexer passthrough (tmux / screen) by calling `Termicap.OSC.Parsing.Wrap_For_Passthrough`.
+
+Has `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O — both outside the SPARK 2014 subset. All parsing logic remains in the provable parent package.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-color-bg_query-io.ads`, `src/termicap-color-bg_query-io.adb` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Termicap.Color.BG_Query`, `Termicap.OSC`, `Termicap.OSC.Parsing`, `Termicap.Environment.Capture`, `Termicap.Terminal_Id` |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Query_Color` | Procedure | Opens a `Probe_Session`, optionally applies multiplexer passthrough wrapping, sends the OSC query via `Sentinel_Query`, and returns raw response bytes with a timeout flag. Never raises. `Pre => Response'Length >= BG_Query.MAX_RESPONSE_SIZE`. | FUNC-BGC-006 |
+
+---
+
+### `Termicap.Color.Detection`
+
+**Responsibility:** Implements the two-level background and foreground color detection cascade: OSC query (via `BG_Query.IO.Query_Color`) first, COLORFGBG environment variable fallback second. Exposes `Detect_Background_Color` and `Detect_Foreground_Color` as the top-level API for the BG-COLOR feature.
+
+Both functions clamp `Timeout_Ms` to 30 000 ms. When `Timeout_Ms = 0`, the OSC query is skipped and the function proceeds directly to the COLORFGBG fallback. Neither function raises exceptions.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-color-detection.ads`, `src/termicap-color-detection.adb` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Termicap.Color.BG_Query`, `Termicap.Color.BG_Query.IO`, `Termicap.Environment`, `Termicap.Environment.Capture` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Detect_Error` | Enumeration: `Not_A_Terminal`, `Not_Foreground`, `Query_Timeout`, `Parse_Failed`, `No_Fallback`. Identifies the specific failure step in the cascade. |
+| `Detection_Result` | Discriminated record: `Success => True` carries `Color : BG_Query.RGB`; `Success => False` carries `Error : Detect_Error`. |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Detect_Background_Color` | Function | OSC 11 query → COLORFGBG fallback cascade for background color. `Timeout_Ms` defaults to 1 000 ms. | FUNC-BGC-013, FUNC-BGC-015 |
+| `Detect_Foreground_Color` | Function | OSC 10 query → COLORFGBG fallback cascade for foreground color. `Timeout_Ms` defaults to 1 000 ms. | FUNC-BGC-014, FUNC-BGC-015 |
+
+#### Detection Cascade
+
+| Step | Action | Failure outcome |
+|------|--------|-----------------|
+| 0 | If `Timeout_Ms = 0`, skip to step 3 | — |
+| 1 | `Query_Color` via `Probe_Session` (OSC 10 or 11, DA1 sentinel) | `Timed_Out = True` → step 3; session failure → error `Not_A_Terminal` or `Not_Foreground` |
+| 2 | `Strip_OSC_Header` + `Parse_RGB_Response` on response bytes | parse failure → step 3 |
+| 3 | `Parse_Colorfgbg` on `COLORFGBG` env var + `Ansi_To_RGB` | failure → `Detection_Result'(Success => False, Error => No_Fallback)` |
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -820,7 +929,7 @@ All subprograms operate solely on `Byte_Array` values inherited from `Termicap.O
 └─────────────────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────┐
-│             SPARK Silver Zone (child)                │
+│             SPARK Silver Zone (children)             │
 │                                                     │
 │   Termicap.OSC.Parsing (spec + body)                │
 │   ┌─────────────────────────────────────────────┐  │
@@ -832,10 +941,46 @@ All subprograms operate solely on `Byte_Array` values inherited from `Termicap.O
 │   │  Wrap_For_Passthrough — pure                │  │
 │   │  Global => null — no FFI, no state          │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Color.BG_Query (spec + body)             │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  RGB, Query_Kind, Parse_Result,             │  │
+│   │    Strip_Result, Colorfgbg_Result types     │  │
+│   │  OSC_BG_QUERY / OSC_FG_QUERY constants      │  │
+│   │  ANSI_COLOR_TABLE (xterm 16-color palette)  │  │
+│   │  Parse_RGB_Response, Strip_OSC_Header,      │  │
+│   │    Parse_Colorfgbg, Parse_Hex_Channel,      │  │
+│   │    Find_RGB_Prefix, Split_RGB_Channels,     │  │
+│   │    Ansi_To_RGB, Query_Sequence              │  │
+│   │  Global => null — no FFI, no state          │  │
+│   └─────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────┐
+│      Ada-only Zone (children, SPARK_Mode => Off)     │
+│                                                     │
+│   Termicap.Color.BG_Query.IO (spec + body)          │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Query_Color — opens Probe_Session,         │  │
+│   │    applies multiplexer passthrough wrap,    │  │
+│   │    calls Sentinel_Query, returns bytes      │  │
+│   │  (Probe_Session Limited_Controlled +        │  │
+│   │    terminal I/O — outside SPARK 2014)       │  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Color.Detection (spec + body)            │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Detect_Error, Detection_Result types       │  │
+│   │  Detect_Background_Color / Detect_          │  │
+│   │    Foreground_Color — two-level cascade:    │  │
+│   │    OSC query → COLORFGBG fallback           │  │
+│   │  (calls Query_Color + env capture —         │  │
+│   │    outside SPARK 2014 subset)               │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O.
 
 ## Related Documents
 

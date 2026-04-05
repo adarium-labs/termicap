@@ -1,0 +1,696 @@
+[DOCUMENT]
+TITLE: Background / Foreground Color Query
+UID: REQ-BGC
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: RGB Color Type
+
+[REQUIREMENT]
+UID: FUNC-BGC-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: RGB Record Type
+STATEMENT: >>>
+The library shall define an RGB record type representing a 24-bit color value with three components:
+
+  type RGB is record
+     Red   : Natural range 0 .. 255;
+     Green : Natural range 0 .. 255;
+     Blue  : Natural range 0 .. 255;
+  end record;
+
+Each component shall be constrained to the range 0 .. 255, corresponding to a single 8-bit channel. The type shall be declared in a package with SPARK_Mode => On so that all colour-manipulation logic that operates on RGB values is provable at Silver level.
+
+The library shall also provide two distinguished RGB constants for the default terminal colours:
+
+  DEFAULT_FOREGROUND : constant RGB := (Red => 170, Green => 170, Blue => 170);
+  DEFAULT_BACKGROUND : constant RGB := (Red => 0,   Green => 0,   Blue => 0);
+
+These defaults correspond to ANSI colour index 7 (light grey) for foreground and index 0 (black) for background, which are the most common terminal defaults in the absence of an explicit query response or environment variable.
+<<<
+COMMENT: >>>
+Defining RGB as a first-class record type with constrained components — rather than as a triple of Unsigned_8 or a single packed integer — makes the type immediately readable in Ada code and allows SPARK to prove that no component overflows its representational range. The 0..255 range constraint is tighter than Natural (which allows up to Integer'Last), so the prover can discharge range-check obligations for any arithmetic that stays within 8-bit bounds. The two default constants capture the conventional fallback behaviour described in the global synthesis (§2.3): when neither an OSC response nor the COLORFGBG environment variable is available, standard ANSI palette entries are used. Constant naming in ALL_CAPS follows the Termicap coding standard.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Query_Kind Enumeration
+STATEMENT: >>>
+The library shall define an enumeration type that identifies which terminal colour channel is being queried:
+
+  type Query_Kind is (Background, Foreground);
+
+The value Background corresponds to OSC 11 (terminal background colour). The value Foreground corresponds to OSC 10 (terminal foreground colour). The enumeration shall be used throughout the BG-COLOR feature to select the correct escape sequence, the correct COLORFGBG fallback field, and the correct default colour constant.
+<<<
+COMMENT: >>>
+A dedicated enumeration type prevents callers from passing an arbitrary integer or Boolean to distinguish foreground from background, which would silently accept out-of-range values in Ada. Using an enumeration also enables exhaustive case statements that the SPARK prover can verify are complete (no missing branches). Naming the literals Background and Foreground rather than OSC_11 and OSC_10 keeps the public API in terms of user-visible concepts rather than protocol numbers; the protocol mapping is an implementation detail confined to the escape sequence construction layer (FUNC-BGC-003 / FUNC-BGC-004).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: OSC Color Query Escape Sequences
+
+[REQUIREMENT]
+UID: FUNC-BGC-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: OSC 11 Background Query Byte Sequence
+STATEMENT: >>>
+The library shall define a constant byte sequence for the OSC 11 background colour query:
+
+  OSC_BG_QUERY : constant Byte_Array :=
+     (16#1B#, 16#5D#,                      -- ESC ]
+      Character'Pos ('1'), Character'Pos ('1'), Character'Pos (';'),
+      Character'Pos ('?'),
+      16#1B#, 16#5C#);                     -- ESC \ (ST)
+
+This sequence encodes the string ESC ] 1 1 ; ? ESC \, which is the standard XTERM OSC 11 query. A terminal that supports background colour reporting shall respond with ESC ] 1 1 ; rgb:RRRR/GGGG/BBBB ESC \ (or BEL-terminated) followed (after the DA1 sentinel) by the DA1 response.
+
+The constant shall be declared with SPARK_Mode => On so that callers can reference it in SPARK-annotated code without a mode barrier.
+<<<
+COMMENT: >>>
+Defining the query as a named constant rather than a literal embedded in the query procedure has two benefits: it makes the intent self-documenting (FUNC-BGC-005 calls this constant by name rather than assembling bytes inline), and it allows independent unit tests to verify that the bytes are correct without executing any I/O. The ST terminator (ESC \, 0x1B 0x5C) is preferred over BEL (0x07) because it is universally accepted by modern terminal emulators and multiplexers, whereas some implementations are inconsistent in their handling of BEL-terminated OSC sequences. The bytes are expressed as hex literals to avoid any confusion with Ada character encoding — escape sequences are pure byte-level constructs.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: OSC 10 Foreground Query Byte Sequence
+STATEMENT: >>>
+The library shall define a constant byte sequence for the OSC 10 foreground colour query:
+
+  OSC_FG_QUERY : constant Byte_Array :=
+     (16#1B#, 16#5D#,                      -- ESC ]
+      Character'Pos ('1'), Character'Pos ('0'), Character'Pos (';'),
+      Character'Pos ('?'),
+      16#1B#, 16#5C#);                     -- ESC \ (ST)
+
+This sequence encodes the string ESC ] 1 0 ; ? ESC \, which is the standard XTERM OSC 10 query. A terminal that supports foreground colour reporting shall respond with ESC ] 1 0 ; rgb:RRRR/GGGG/BBBB ESC \ followed by the DA1 response.
+
+The constant shall be declared with SPARK_Mode => On alongside OSC_BG_QUERY (FUNC-BGC-003) in the same package.
+<<<
+COMMENT: >>>
+OSC 10 and OSC 11 are symmetric: OSC 10 queries the foreground ("text") colour and OSC 11 queries the background colour. The only difference in the byte sequence is the digit '0' versus '1' in the second byte of the parameter string. Defining both as named constants keeps the query construction in one auditable place and prevents a digit transposition error at call sites. Because the response format for OSC 10 is identical to OSC 11 (rgb:RRRR/GGGG/BBBB), the same parsing function (FUNC-BGC-007) handles both responses.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Query Escape Sequence Selection by Kind
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-002
+- TYPE: Parent
+  VALUE: FUNC-BGC-003
+- TYPE: Parent
+  VALUE: FUNC-BGC-004
+STATEMENT: >>>
+The library shall provide a pure function that returns the appropriate OSC query byte sequence for a given Query_Kind:
+
+  function Query_Sequence (Kind : Query_Kind) return Byte_Array
+    with SPARK_Mode => On;
+
+The function shall return OSC_BG_QUERY (FUNC-BGC-003) when Kind = Background and OSC_FG_QUERY (FUNC-BGC-004) when Kind = Foreground. The function body shall be a complete case statement covering both enumeration literals.
+
+The function shall carry a postcondition:
+  Post => Query_Sequence'Result'Length > 0
+<<<
+COMMENT: >>>
+Centralising query sequence selection in a single pure function allows the high-level query procedure (FUNC-BGC-006) to treat Background and Foreground queries identically at the I/O level — the only input-dependent variation is which constant is passed to Sentinel_Query. A case statement with both literals is exhaustive by construction in Ada, so adding a new Query_Kind literal in the future will cause a compile-time error here, forcing the implementer to handle the new case. The non-empty postcondition is a trivial contract that the SPARK prover can discharge by unrolling the two branches; it serves as a guard against accidental introduction of a zero-length constant during future maintenance.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: OSC Color Query Execution via Probe Session
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-005
+- TYPE: Parent
+  VALUE: FUNC-OSC-006
+- TYPE: Parent
+  VALUE: FUNC-OSC-008
+- TYPE: Parent
+  VALUE: FUNC-OSC-014
+STATEMENT: >>>
+The library shall provide a procedure that sends an OSC colour query to the terminal and returns the raw response bytes, using the Probe_Session and Sentinel_Query infrastructure. Its representative signature is:
+
+  procedure Query_Color
+     (Kind       :     Query_Kind;
+      Timeout_Ms :     Natural;
+      Response   : out Byte_Array;
+      Resp_Length: out Natural;
+      Timed_Out  : out Boolean);
+
+The procedure shall execute the following steps:
+
+  1. Determine the multiplexer kind from the Terminal_Identity (Termicap.Terminal_Id). If Terminal_Identity.Passthrough_Mode is Tmux or Screen, wrap the query sequence via Wrap_For_Passthrough (FUNC-OSC-014) before sending.
+  2. Obtain the query byte sequence by calling Query_Sequence (FUNC-BGC-005) with Kind.
+  3. Open a Probe_Session (FUNC-OSC-008). If the session fails to open (foreground check failed, /dev/tty unavailable, raw mode error), set Timed_Out to True and Resp_Length to 0 and return.
+  4. Call Sentinel_Query (FUNC-OSC-006) with the (possibly wrapped) query sequence and Timeout_Ms.
+  5. Close the Probe_Session unconditionally (FUNC-OSC-008 RAII).
+  6. Return the pre-sentinel response bytes in Response and Resp_Length, and the Timed_Out flag from Sentinel_Query.
+
+The procedure shall not raise an exception on any path. SPARK_Mode shall be Off for this procedure because it calls Ada.Finalization controlled types (Probe_Session).
+<<<
+COMMENT: >>>
+Query_Color is the I/O boundary of the BG-COLOR feature. By isolating all terminal interaction here — and marking the procedure SPARK_Mode => Off — the colour parsing layer above it (FUNC-BGC-007 through FUNC-BGC-011) can be kept fully SPARK-provable. The multiplexer passthrough step must occur before the Probe_Session is opened, because Wrap_For_Passthrough is a pure function that does not require a raw-mode terminal; wrapping before opening also means that if the terminal identity indicates a multiplexer, the correctly wrapped bytes are sent as the first write of the session. Treating all session-open failures as Timed_Out = True with Resp_Length = 0 is consistent with the error model in the rest of the probing infrastructure: callers (FUNC-BGC-012, FUNC-BGC-013) inspect Resp_Length and Timed_Out to decide whether to proceed to the COLORFGBG fallback, so any failure that prevents a response is semantically equivalent to a timeout.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Color Response Parsing (SPARK Silver)
+
+[REQUIREMENT]
+UID: FUNC-BGC-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: X11 rgb: Color Response Parsing
+STATEMENT: >>>
+The library shall provide a pure function that parses the X11 colour response format returned by OSC 10 and OSC 11 queries and extracts an RGB value. Its representative signature is:
+
+  function Parse_RGB_Response
+     (Bytes  : Byte_Array;
+      Length : Natural)
+      return Parse_Result;
+
+where Parse_Result is a discriminated record:
+
+  type Parse_Result (Success : Boolean := False) is record
+     case Success is
+        when True  => Color : RGB;
+        when False => null;
+     end case;
+  end record;
+
+The function shall:
+  1. Locate the prefix "rgb:" (or "rgba:") in the byte sequence (FUNC-BGC-008).
+  2. Extract the three channel strings (R, G, B) separated by '/' characters.
+  3. Call Parse_Hex_Channel (FUNC-BGC-009) for each channel to obtain a Natural value in 0..255.
+  4. If all three parses succeed, return Parse_Result'(Success => True, Color => (Red => R, Green => G, Blue => B)).
+  5. If any parse step fails (prefix not found, malformed channel, value out of range), return Parse_Result'(Success => False).
+
+The function shall be declared with SPARK_Mode => On and carry contracts:
+  Pre  => Length <= Bytes'Length,
+  Post => (if Parse_RGB_Response'Result.Success
+           then Parse_RGB_Response'Result.Color.Red   in 0 .. 255 and
+                Parse_RGB_Response'Result.Color.Green in 0 .. 255 and
+                Parse_RGB_Response'Result.Color.Blue  in 0 .. 255)
+<<<
+COMMENT: >>>
+Parse_RGB_Response is the most critical SPARK function in the BG-COLOR feature: it takes untrusted bytes from the terminal and converts them into a typed RGB value. The discriminated record return type (rather than a success/failure out parameter) makes it impossible for a caller to use the Color field without first checking the Success discriminant — Ada discriminant constraints enforce this at compile time. The postcondition that each channel is in 0..255 is provable because Parse_Hex_Channel (FUNC-BGC-009) has a corresponding postcondition that its result is in this range; the prover can chain the two postconditions. The precondition Length <= Bytes'Length prevents an out-of-bounds read — a fundamental safety property that the prover can discharge by inspection of the input loop bounds. Keeping this function purely in SPARK (no I/O, no globals, no exceptions) means it can be called from any SPARK-annotated context and its correctness is machine-verified rather than relying on review alone.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: rgb: / rgba: Prefix Detection and Channel Extraction
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-007
+STATEMENT: >>>
+The library shall provide a pure helper function that locates the "rgb:" or "rgba:" prefix within a byte sequence and returns the start index of the first channel string (the bytes immediately following the prefix). Its representative signature is:
+
+  function Find_RGB_Prefix
+     (Bytes  : Byte_Array;
+      Length : Natural;
+      Offset : out Natural)
+      return Boolean
+    with SPARK_Mode => On,
+         Pre  => Length <= Bytes'Length,
+         Post => (if Find_RGB_Prefix'Result
+                  then Offset < Length and Offset >= 4);
+
+The function shall:
+  1. Scan Bytes(Bytes'First .. Bytes'First + Length - 1) for the byte subsequence corresponding to "rgb:" (four bytes: 0x72, 0x67, 0x62, 0x3A).
+  2. If found, set Offset to the index of the first byte after the colon (the start of the R channel) and return True.
+  3. If not found with "rgb:", repeat the scan for "rgba:" (five bytes). The alpha channel introduced by "rgba:" shall be ignored by the caller (Parse_RGB_Response, FUNC-BGC-007); only the R/G/B channels preceding the alpha are extracted.
+  4. If neither prefix is found, return False.
+
+A separate helper function shall extract the three '/' delimited channel substrings from the byte array starting at Offset:
+
+  procedure Split_RGB_Channels
+     (Bytes      :     Byte_Array;
+      Start      :     Natural;
+      Length     :     Natural;
+      Ch_R, Ch_G, Ch_B : out Channel_Slice;
+      Success    : out Boolean)
+    with SPARK_Mode => On;
+
+where Channel_Slice is a record holding a start index and length within Bytes. Split_RGB_Channels shall set Success to False if fewer than two '/' separators are found before the end of the relevant bytes.
+<<<
+COMMENT: >>>
+Separating prefix detection and channel splitting into distinct functions serves two purposes. First, each function has a focused contract that the SPARK prover can discharge independently — the prefix scanner's postcondition (Offset >= 4) ensures that Bytes(Bytes'First .. Offset - 1) safely covers the prefix bytes without going before the array start. Second, the design handles the rgba: variant correctly without requiring the caller to know about it: if a terminal returns "rgba:RRRR/GGGG/BBBB/AAAA" (uncommon but seen in some Wayland compositors), Find_RGB_Prefix locates the prefix and Split_RGB_Channels extracts only the three channels; the alpha is silently ignored because it is irrelevant to terminal appearance decisions. Returning Channel_Slice records (index + length) rather than copies of the channel bytes avoids any heap allocation and keeps the operation O(1) in space.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Hex Channel Parsing and 8-bit Normalisation
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-007
+STATEMENT: >>>
+The library shall provide a pure function that parses a single hexadecimal channel string — either 2-digit (e.g., "FF") or 4-digit (e.g., "FFFF") — and normalises the result to an 8-bit value in 0 .. 255. Its representative signature is:
+
+  function Parse_Hex_Channel
+     (Bytes  : Byte_Array;
+      Start  : Natural;
+      Length : Natural)
+      return Channel_Result
+    with SPARK_Mode => On,
+         Pre  => Length in 1 .. MAX_CHANNEL_LENGTH
+                 and Start + Length - 1 <= Bytes'Last,
+         Post => (if Parse_Hex_Channel'Result.Success
+                  then Parse_Hex_Channel'Result.Value in 0 .. 255);
+
+where Channel_Result is a discriminated record analogous to Parse_Result (FUNC-BGC-007) with a Success discriminant and a Value : Natural range 0 .. 255 field.
+
+The function shall normalise channel values as follows:
+  - 2-digit hex (Length = 2):  Value := hex_to_nat(Bytes(Start .. Start + 1))
+  - 4-digit hex (Length = 4):  Value := hex_to_nat(Bytes(Start .. Start + 1))
+                               (i.e., take only the most significant two hex digits, equivalent to dividing the 16-bit value by 256)
+  - Any other length:          return Channel_Result'(Success => False)
+
+Hex digit parsing shall accept both uppercase (A-F) and lowercase (a-f) hex digits. A byte that is not a valid hex digit shall cause the function to return Success => False.
+
+MAX_CHANNEL_LENGTH shall be at least 4.
+<<<
+COMMENT: >>>
+The X11 colour response format specifies that each channel is encoded as a 4-digit hex value (e.g., "FFFF" for full intensity, "8080" for half intensity). However, some terminals — particularly older xterm versions and VTE-based emulators — return only 2-digit values ("FF") for simplicity. The normalisation rule "take the first two hex digits of a 4-digit value" is equivalent to integer division by 256, which maps the full 16-bit range 0..65535 linearly to 0..255 with correct rounding semantics. Taking only the high byte is the standard approach used by termbg, termenv (Go), and other reference implementations (global synthesis §2.3). The SPARK postcondition that Value in 0..255 when Success is True is the key provable guarantee: it means that callers assembling an RGB record from three Parse_Hex_Channel results do not need their own range checks. The precondition Start + Length - 1 <= Bytes'Last is a bounds-safety contract that prevents out-of-bounds reads in the hex digit loop.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: OSC Response Prefix Stripping
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-007
+STATEMENT: >>>
+The library shall provide a pure function that strips the OSC response prefix from the raw bytes returned by Sentinel_Query before passing them to Parse_RGB_Response (FUNC-BGC-007). The function shall locate and remove the leading bytes that form the OSC response header:
+
+  - For background: ESC ] 1 1 ; (five bytes)
+  - For foreground: ESC ] 1 0 ; (five bytes)
+  - For either: an equivalent BEL-terminated form beginning with ESC ] and ending with the first ST (ESC \) or BEL (0x07) is also accepted
+
+Its representative signature is:
+
+  function Strip_OSC_Header
+     (Bytes  : Byte_Array;
+      Length : Natural;
+      Kind   : Query_Kind)
+      return Strip_Result
+    with SPARK_Mode => On,
+         Pre  => Length <= Bytes'Length;
+
+where Strip_Result is a discriminated record containing Success, an Offset into Bytes marking the first byte of the payload (after the header), and a Payload_Length. On failure (header not found, length too short), Success shall be False.
+
+The function shall not require the response to be NUL-terminated. It shall treat both ESC \ and BEL as valid OSC string terminators when scanning for the end of a sequence that follows the header.
+<<<
+COMMENT: >>>
+Sentinel_Query returns the raw bytes that preceded the DA1 response, which includes the full OSC response string from the terminal: ESC ] 11 ; rgb:... ESC \. Parse_RGB_Response (FUNC-BGC-007) focuses on parsing the rgb: payload, so it needs the raw OSC framing stripped first. Separating the header-stripping step into its own SPARK function means that both steps have focused, independently verifiable contracts. Strip_OSC_Header's postcondition (Offset >= 5 when Success is True) gives Parse_RGB_Response a safe starting index. Accepting both ESC \ and BEL terminators is necessary for compatibility: the VTE library (used by GNOME Terminal) historically used BEL-terminated OSC responses, and while most modern terminals use ST, a library intended for cross-terminal compatibility must handle both. The Kind parameter is used to verify that the response prefix matches the query that was sent (OSC 11 response to an OSC 11 query), which prevents silently accepting a stale response from a different query cycle.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: COLORFGBG Environment Variable Fallback
+
+[REQUIREMENT]
+UID: FUNC-BGC-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: COLORFGBG String Parsing
+STATEMENT: >>>
+The library shall provide a pure function that parses the value of the COLORFGBG environment variable and extracts the foreground and background ANSI colour indices. The COLORFGBG format is a semicolon-delimited string of the form "fg;bg" or "fg;extra;bg" where fg and bg are decimal integers in the range 0..15:
+
+  - Foreground index: the first semicolon-delimited field.
+  - Background index: the last semicolon-delimited field.
+
+Its representative signature is:
+
+  function Parse_Colorfgbg
+     (Value  : String)
+      return Colorfgbg_Result
+    with SPARK_Mode => On,
+         Pre  => Value'Length <= MAX_COLORFGBG_LENGTH;
+
+where Colorfgbg_Result is a record:
+
+  type Colorfgbg_Result is record
+     Success    : Boolean;
+     Foreground : Natural range 0 .. 15;
+     Background : Natural range 0 .. 15;
+  end record;
+
+The function shall:
+  1. Find the first ';' in Value. Parse the digits before it as a decimal integer. If it is not in 0..15, set Success to False.
+  2. Find the last ';' in Value. Parse the digits after it as a decimal integer. If it is not in 0..15, set Success to False.
+  3. If Value contains no ';' separator, set Success to False.
+  4. If all parses succeed and both indices are in 0..15, set Success to True.
+
+MAX_COLORFGBG_LENGTH shall be at least 32.
+
+The function shall carry a postcondition:
+  Post => (if Parse_Colorfgbg'Result.Success
+           then Parse_Colorfgbg'Result.Foreground in 0 .. 15
+                and Parse_Colorfgbg'Result.Background in 0 .. 15)
+<<<
+COMMENT: >>>
+COLORFGBG is a long-standing environment variable originally introduced by rxvt. It encodes the user's configured foreground and background colour as ANSI indices (0-15), providing a low-cost fallback for terminals that do not support OSC 10/11 queries. The format is nominally "fg;bg" but some shells set it to "fg;extra;bg" (three fields with a middle field of unknown significance); using "first field" for foreground and "last field" for background is robust to both variants. Restricting the range to 0..15 is correct: values outside this range are not valid ANSI colour indices and would index outside the ANSI colour table (FUNC-BGC-012). The SPARK precondition bounding Value'Length prevents an unbounded scan on an untrusted environment variable string. The postcondition propagates the component bounds into the caller's proof context, allowing the ANSI table lookup in FUNC-BGC-012 to be range-check-free.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: ANSI Color Index to RGB Mapping
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-011
+STATEMENT: >>>
+The library shall provide a constant array and a pure function that map a standard ANSI 4-bit colour index (0..15) to an RGB value using the canonical xterm/VT100 colour table:
+
+  ANSI_COLOR_TABLE : constant array (0 .. 15) of RGB := (
+     0  => (  0,   0,   0),   --  Black
+     1  => (128,   0,   0),   --  Dark Red
+     2  => (  0, 128,   0),   --  Dark Green
+     3  => (128, 128,   0),   --  Dark Yellow (Olive)
+     4  => (  0,   0, 128),   --  Dark Blue
+     5  => (128,   0, 128),   --  Dark Magenta
+     6  => (  0, 128, 128),   --  Dark Cyan
+     7  => (192, 192, 192),   --  Light Grey
+     8  => (128, 128, 128),   --  Dark Grey
+     9  => (255,   0,   0),   --  Bright Red
+    10  => (  0, 255,   0),   --  Bright Green
+    11  => (255, 255,   0),   --  Bright Yellow
+    12  => (  0,   0, 255),   --  Bright Blue
+    13  => (255,   0, 255),   --  Bright Magenta
+    14  => (  0, 255, 255),   --  Bright Cyan
+    15  => (255, 255, 255)    --  White
+  );
+
+  function Ansi_To_RGB (Index : Natural range 0 .. 15) return RGB
+    with SPARK_Mode => On,
+         Post => Ansi_To_RGB'Result.Red   in 0 .. 255
+                 and Ansi_To_RGB'Result.Green in 0 .. 255
+                 and Ansi_To_RGB'Result.Blue  in 0 .. 255;
+
+The function body shall be a single array lookup: return ANSI_COLOR_TABLE (Index). The array shall be declared with SPARK_Mode => On so that the lookup is provable without aliasing concerns.
+<<<
+COMMENT: >>>
+The ANSI_COLOR_TABLE constant represents the canonical 16-colour palette defined by the VT100 / xterm standard. Using a constant array rather than a case statement or series of if-then expressions enables the SPARK prover to trivially verify the postcondition: every element of the constant is already in 0..255, so the array lookup can only produce values satisfying the postcondition. The RGB values chosen follow the most widely adopted xterm defaults; some terminals (e.g., PuTTY, Windows Terminal) use slightly different values, but these are the values reported by the reference synthesis (§2.3) as the default mapping for COLORFGBG interpretation. Constraining the parameter to range 0..15 (rather than Natural) means the array index is always valid — no bounds check is needed and the SPARK prover does not need to verify an index-out-of-range precondition at every call site. The constant array shall use ALL_CAPS naming per the Termicap coding standard.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: High-Level Detection API
+
+[REQUIREMENT]
+UID: FUNC-BGC-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detect_Background_Color with COLORFGBG Fallback
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-006
+- TYPE: Parent
+  VALUE: FUNC-BGC-007
+- TYPE: Parent
+  VALUE: FUNC-BGC-011
+- TYPE: Parent
+  VALUE: FUNC-BGC-012
+STATEMENT: >>>
+The library shall provide a high-level function that detects the terminal background colour, attempting OSC 11 first and falling back to the COLORFGBG environment variable. Its representative signature is:
+
+  function Detect_Background_Color
+     (Timeout_Ms : Natural := 1000)
+      return Result_RGB;
+
+where Result_RGB is a Result type (from the `functional` dependency) that is either Ok(RGB) or Err(Detect_Error), and Detect_Error is an enumeration:
+
+  type Detect_Error is
+     (Not_A_Terminal, Not_Foreground, Query_Timeout, Parse_Failed, No_Fallback);
+
+The function shall execute the following detection algorithm:
+
+  1. Call Query_Color (FUNC-BGC-006) with Kind = Background and Timeout_Ms.
+  2. If Resp_Length > 0 and Timed_Out = False:
+     a. Call Strip_OSC_Header (FUNC-BGC-010) on the response bytes.
+     b. If stripping succeeds, call Parse_RGB_Response (FUNC-BGC-007) on the payload.
+     c. If parsing succeeds, return Ok(parsed RGB value).
+  3. If step 2 fails for any reason (timeout, strip failure, parse failure):
+     a. Read the COLORFGBG environment variable via Termicap.Environment.
+     b. If the variable is set, call Parse_Colorfgbg (FUNC-BGC-011) on its value.
+     c. If parsing succeeds, call Ansi_To_RGB (FUNC-BGC-012) with the Background index.
+     d. Return Ok(ANSI_COLOR_TABLE(bg_index)).
+  4. If all steps fail, return Err(No_Fallback).
+
+The function shall not raise an exception. SPARK_Mode shall be Off because it calls Query_Color (I/O).
+<<<
+COMMENT: >>>
+The two-level detection cascade (OSC query then COLORFGBG) matches the canonical algorithm described in the global synthesis (§2.3) and implemented by termbg (Go). The default timeout of 1000 ms is the value recommended by most reference implementations for local terminals; callers on high-latency connections can increase it. Using the functional Result type (Ok/Err) rather than a Boolean success flag or an exception is consistent with the Termicap error-handling convention and allows callers to use pattern-matching idioms. Returning Err(No_Fallback) rather than Ok(DEFAULT_BACKGROUND) leaves the decision of whether to substitute a default to the caller — some callers (e.g., colour-scheme auto-detection) want to know that the background is genuinely unknown rather than being given a default that may be wrong. The SPARK_Mode => Off annotation is required because the function calls Query_Color, which manages a Probe_Session (Ada controlled type, outside the SPARK subset).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detect_Foreground_Color with COLORFGBG Fallback
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-006
+- TYPE: Parent
+  VALUE: FUNC-BGC-007
+- TYPE: Parent
+  VALUE: FUNC-BGC-011
+- TYPE: Parent
+  VALUE: FUNC-BGC-012
+STATEMENT: >>>
+The library shall provide a high-level function that detects the terminal foreground colour, symmetric with Detect_Background_Color (FUNC-BGC-013) but using OSC 10 and the foreground field of COLORFGBG. Its representative signature is:
+
+  function Detect_Foreground_Color
+     (Timeout_Ms : Natural := 1000)
+      return Result_RGB;
+
+The function shall execute the detection algorithm with the following differences from FUNC-BGC-013:
+  - Step 1 uses Kind = Foreground (OSC 10 query via FUNC-BGC-006).
+  - Step 2a calls Strip_OSC_Header (FUNC-BGC-010) with Kind = Foreground.
+  - Step 3c uses the Foreground index from Parse_Colorfgbg (FUNC-BGC-011) rather than Background.
+  - The Detect_Error values and Result_RGB type are identical to those in FUNC-BGC-013.
+
+The function shall not raise an exception. SPARK_Mode shall be Off for the same reasons as FUNC-BGC-013.
+<<<
+COMMENT: >>>
+Providing a dedicated Detect_Foreground_Color function rather than a single Detect_Color(Kind) function has two advantages. First, the API is more discoverable for callers who want only one of the two values. Second, the two functions are independently callable: a caller who only needs the background colour (by far the more common use case, for dark/light mode detection) does not pay the overhead of a foreground query. The symmetric design means both functions share the same helper chain (Query_Color, Strip_OSC_Header, Parse_RGB_Response, Parse_Colorfgbg, Ansi_To_RGB) with only the Kind parameter differing, so there is no code duplication at the specification level.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-015
+STATUS: Approved
+PRIORITY: Should
+TITLE: Configurable Query Timeout
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-013
+- TYPE: Parent
+  VALUE: FUNC-BGC-014
+STATEMENT: >>>
+The Detect_Background_Color (FUNC-BGC-013) and Detect_Foreground_Color (FUNC-BGC-014) functions shall accept a Timeout_Ms parameter of type Natural that controls the maximum time spent waiting for an OSC response. The parameter shall have a default value of 1000 (one second).
+
+The valid range for Timeout_Ms shall be 0 .. 30_000 (0 to 30 seconds). A value of 0 shall cause the query to be skipped entirely (Timed_Out = True immediately), proceeding directly to the COLORFGBG fallback. Values above 30_000 are implementation-defined but should be clamped to 30_000 to prevent accidental indefinite blocking.
+
+The timeout shall be passed through unchanged to Sentinel_Query (FUNC-OSC-006, via Query_Color FUNC-BGC-006), which implements the actual select()-based timeout enforcement.
+<<<
+COMMENT: >>>
+A default of 1000 ms is appropriate for most local terminal emulators, which respond to OSC queries within a few milliseconds. The upper bound of 30 seconds prevents accidents where a caller passes a value in microseconds (e.g., 30_000_000) and the application appears to hang. Zero-timeout is a useful mode for library users who have already determined that OSC probing is unlikely to work (for example, when running in a CI environment that is known to have a non-responsive terminal) and want to proceed directly to the environment variable fallback without any wait. The timeout parameter is separate from the retry option (FUNC-OSC-013): if retry is enabled (a decision made by the Probe_Session layer), the actual wall-clock wait can be up to 2 * Timeout_Ms, which is within the user's expectation because they set a per-attempt budget.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: Multiplexer-Aware Color Query
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-006
+- TYPE: Parent
+  VALUE: FUNC-OSC-014
+STATEMENT: >>>
+The Detect_Background_Color (FUNC-BGC-013) and Detect_Foreground_Color (FUNC-BGC-014) functions shall correctly handle detection when the process is running inside a terminal multiplexer (tmux or GNU screen). This shall be achieved via the multiplexer passthrough logic already implemented in Query_Color (FUNC-BGC-006):
+
+  1. If Terminal_Identity.Passthrough_Mode = Tmux:
+     The OSC query shall be wrapped using the tmux DCS passthrough format (ESC P tmux ; ESC <query> ESC \) before being sent to the terminal. This forwards the query through tmux to the outer terminal.
+
+  2. If Terminal_Identity.Passthrough_Mode = Screen:
+     The OSC query shall be wrapped using the screen DCS passthrough format (ESC P <query> ESC \).
+
+  3. If Terminal_Identity.Passthrough_Mode = None:
+     The OSC query shall be sent unwrapped.
+
+The passthrough wrapping shall use Wrap_For_Passthrough (FUNC-OSC-014). The high-level detect functions (FUNC-BGC-013, FUNC-BGC-014) shall not contain any multiplexer-specific logic themselves; they delegate entirely to Query_Color (FUNC-BGC-006).
+
+When running inside tmux or screen, the COLORFGBG fallback (FUNC-BGC-011) shall still be attempted on query failure, as the outer terminal's colour may be reflected in the environment variable set by the user's shell profile.
+<<<
+COMMENT: >>>
+Multiplexer passthrough is a prerequisite for correct colour detection in modern terminal workflows, where many users run tmux persistently inside iTerm2, WezTerm, or kitty. Without passthrough, the OSC 11 query would reach tmux's internal xterm-256color emulation, which returns a fixed dark background colour regardless of the outer terminal's actual theme. The passthrough wrapping transforms the query so that tmux forwards it verbatim to its outer terminal; the response travels back through the same DCS channel. The design keeps multiplexer awareness entirely in Query_Color (the I/O layer, SPARK_Mode => Off) so that the pure parsing functions remain multiplexer-agnostic. The COLORFGBG fallback remains useful even inside multiplexers because some users set COLORFGBG explicitly in their shell configuration files (e.g., .zshrc) to reflect their outer terminal's background colour when the outer terminal does not support dynamic reporting.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK and FFI Boundaries
+
+[REQUIREMENT]
+UID: FUNC-BGC-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver for Parsing Functions
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-007
+- TYPE: Parent
+  VALUE: FUNC-BGC-008
+- TYPE: Parent
+  VALUE: FUNC-BGC-009
+- TYPE: Parent
+  VALUE: FUNC-BGC-010
+- TYPE: Parent
+  VALUE: FUNC-BGC-011
+- TYPE: Parent
+  VALUE: FUNC-BGC-012
+STATEMENT: >>>
+All pure parsing and mapping functions in the BG-COLOR feature shall be declared and implemented with SPARK_Mode => On, targeting SPARK Silver level provability:
+
+  SPARK-provable functions (SPARK_Mode => On):
+    - Parse_RGB_Response     (FUNC-BGC-007)
+    - Find_RGB_Prefix        (FUNC-BGC-008)
+    - Split_RGB_Channels     (FUNC-BGC-008)
+    - Parse_Hex_Channel      (FUNC-BGC-009)
+    - Strip_OSC_Header       (FUNC-BGC-010)
+    - Parse_Colorfgbg        (FUNC-BGC-011)
+    - Ansi_To_RGB            (FUNC-BGC-012)
+    - Query_Sequence         (FUNC-BGC-005)
+
+  Not SPARK-provable (SPARK_Mode => Off):
+    - Query_Color            (FUNC-BGC-006) — uses Ada.Finalization controlled types
+    - Detect_Background_Color (FUNC-BGC-013) — calls Query_Color
+    - Detect_Foreground_Color (FUNC-BGC-014) — calls Query_Color
+
+Each SPARK-provable function shall carry at minimum the following contract elements:
+  - A precondition (Pre) bounding array index arguments relative to array bounds.
+  - A postcondition (Post) stating the key correctness property (e.g., output values within 0..255, or Success => specific component ranges hold).
+
+The ANSI_COLOR_TABLE constant (FUNC-BGC-012) shall be declared in a SPARK_Mode => On package so that the array lookup is provable without aliasing concerns.
+
+All SPARK-provable functions shall be placed in packages separate from any packages containing SPARK_Mode => Off code, following the boundary partitioning established in FUNC-OSC-015.
+<<<
+COMMENT: >>>
+The SPARK boundary placement follows the established Termicap pattern: OS calls and Ada controlled types are confined to SPARK_Mode => Off packages, and all pure logic above those packages is kept SPARK Silver-provable. In the BG-COLOR feature, the boundary falls precisely at Query_Color: below it (the parsing layer) is pure, above it (the detect functions) calls I/O. This is the ideal partition because the parsing logic — hex digit conversion, X11 format recognition, ANSI colour table lookup — is where the most subtle correctness bugs could hide, and machine-verified contracts eliminate whole classes of off-by-one and out-of-range errors. The SPARK_Mode => Off annotation on the detect functions does not reduce the overall assurance level because their bodies are thin orchestrators (call Query_Color, check success, call parser, return result) with no algorithmic complexity of their own. The precondition/postcondition requirement ensures that Silver-level provability is not merely nominal: functions must carry contracts with enough information for GNATprove to discharge the obligations without manual lemmas.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-018
+STATUS: Approved
+PRIORITY: Must
+TITLE: ANSI Color Table as Provable Constant Array
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-012
+- TYPE: Parent
+  VALUE: FUNC-BGC-017
+STATEMENT: >>>
+The ANSI_COLOR_TABLE constant (FUNC-BGC-012) shall be declared as a constant array of RGB records in a package with SPARK_Mode => On. The declaration shall use a named aggregate with explicit index associations (0 => ..., 1 => ..., ..., 15 => ...) rather than a positional aggregate, so that the mapping from index to colour is unambiguous and auditable. Each RGB record in the aggregate shall have its components expressed as decimal literals, not hex, to match the human-visible interpretation (e.g., (Red => 192, Green => 192, Blue => 192) for light grey).
+
+The array index type shall be Natural range 0 .. 15. The element type shall be RGB (FUNC-BGC-001). The array type shall be declared as:
+
+  type ANSI_Color_Array is array (Natural range 0 .. 15) of RGB;
+  ANSI_COLOR_TABLE : constant ANSI_Color_Array := ( ... );
+
+This allows the SPARK prover to verify, by inspection of the aggregate, that every element satisfies the RGB component constraints (0..255) and that any index in 0..15 produces a valid RGB value.
+<<<
+COMMENT: >>>
+Declaring ANSI_COLOR_TABLE as a named constant array in a SPARK-annotated package means GNATprove can treat the table as a provably correct mapping. For the Ansi_To_RGB function (FUNC-BGC-012), the prover can verify the postcondition (output in 0..255) without any loop invariant or manual proof: it inspects the aggregate literal, confirms that every element is within bounds, and concludes that a lookup at any valid index is safe. Named index associations (0 => ..., 15 => ...) prevent the silent index-shifting bug that occurs with positional aggregates when the array bounds do not start at 0 or when elements are reordered during maintenance. Decimal literals for RGB values (192 rather than 16#C0#) make the colour values immediately readable to a human auditor checking whether index 7 really is "light grey". The requirement belongs in this section because it specifically concerns SPARK provability requirements for the constant, not merely its functional value.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-BGC-019
+STATUS: Approved
+PRIORITY: Should
+TITLE: Package Structure and SPARK Boundary Enforcement
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-BGC-017
+- TYPE: Parent
+  VALUE: FUNC-OSC-015
+STATEMENT: >>>
+The BG-COLOR feature shall be implemented in the following package hierarchy, with SPARK_Mode annotations as specified:
+
+  Termicap.Color.BG_Query
+    -- SPARK_Mode => On
+    -- Contains: RGB type, Query_Kind, Parse_Result, Channel_Result,
+    --           Strip_Result, Colorfgbg_Result, ANSI_Color_Array,
+    --           ANSI_COLOR_TABLE, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND,
+    --           OSC_BG_QUERY, OSC_FG_QUERY constants.
+    --           Pure functions: Query_Sequence, Parse_RGB_Response,
+    --           Find_RGB_Prefix, Split_RGB_Channels, Parse_Hex_Channel,
+    --           Strip_OSC_Header, Parse_Colorfgbg, Ansi_To_RGB.
+
+  Termicap.Color.BG_Query.IO
+    -- SPARK_Mode => Off
+    -- Contains: Query_Color procedure (calls Probe_Session, Sentinel_Query,
+    --           Wrap_For_Passthrough, Terminal_Identity access).
+
+  Termicap.Color.Detection
+    -- SPARK_Mode => Off
+    -- Contains: Detect_Background_Color, Detect_Foreground_Color.
+    --           Imports BG_Query (for parsers) and BG_Query.IO (for Query_Color).
+    --           Imports Termicap.Environment (for COLORFGBG variable).
+
+Each package spec shall carry a comment block identifying its SPARK_Mode and the requirements it satisfies (using @relation tags per the coding standard). Packages with SPARK_Mode => Off shall include a comment stating: "This package is an I/O boundary and does not carry SPARK Silver provability."
+<<<
+COMMENT: >>>
+The three-package decomposition enforces the SPARK boundary at the architectural level, not just at the subprogram level. By placing all pure parsing code in Termicap.Color.BG_Query (SPARK_Mode => On) and all I/O in child packages with SPARK_Mode => Off, the Ada compiler itself prevents accidental introduction of I/O calls into the provable layer: a with-clause for Termicap.Color.BG_Query.IO would be rejected by GNATprove at the spec level of the parent. Separating IO from Detection into two packages also clarifies the dependency graph: Detection depends on both the pure parsers and the I/O layer, but the IO package has no dependency on Detection. The @relation tags in package comments enable the trace-matrix skill to generate a bidirectional requirements-to-code traceability report without any manual annotation, following the pattern established in the existing OSC infrastructure packages.
+<<<
+
+[/SECTION]
