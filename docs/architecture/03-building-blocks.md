@@ -16,10 +16,12 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Sigwinch             [SPARK_Mode => Off] — SIGWINCH resize notification, self-pipe, protected object
 ├── Termicap.Unicode              [SPARK Silver] — Unicode support level detection (5-step cascade)
 ├── Termicap.Terminal_Id          [spec: SPARK, body: SPARK_Mode => Off] — terminal identity detection (8-step cascade)
+├── Termicap.OSC                  [SPARK_Mode => Off] — probe session lifecycle, terminal I/O, FFI boundary
+│   └── Termicap.OSC.Parsing      [SPARK Silver] — pure DA1 sentinel detection, response parsing, passthrough wrapping
 └── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
-`Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. `Termicap.Capabilities` sits at the top of the dependency graph: it depends on all Tier 1 and Tier 2 packages (`Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id`) and orchestrates them into a single `Terminal_Capabilities` record. The root package remains a namespace-only package.
+`Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. `Termicap.Capabilities` sits at the top of the dependency graph: it depends on all Tier 1 and Tier 2 packages (`Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id`) and orchestrates them into a single `Terminal_Capabilities` record. The root package remains a namespace-only package. `Termicap.OSC` is the FFI boundary for active terminal probing; it depends on `Ada.Finalization` and `Interfaces.C` and calls nine C helper functions via `termicap_osc.c`. Its child package `Termicap.OSC.Parsing` is a pure SPARK Silver leaf that depends only on the `Byte` and `Byte_Array` types from the parent package.
 
 ## Level 2: Package Descriptions
 
@@ -558,6 +560,107 @@ Both `Detect` and `Get` accept a `Stream : Termicap.TTY.Stream_Kind` parameter w
 
 ---
 
+---
+
+### `Termicap.OSC`
+
+**Responsibility:** Provides the probe session type and all low-level terminal I/O operations required to send OSC/DCS/CSI escape sequence queries and read back responses. This package is the sole FFI boundary for active terminal probing.
+
+It encapsulates the full open / raw-mode / query / restore / close lifecycle in `Probe_Session`, a `Limited_Controlled` type whose `Finalize` unconditionally restores termios and closes `/dev/tty` on scope exit or exception propagation. Before opening, the foreground process group is checked via `ioctl(TIOCGPGRP)` to avoid sending queries from background jobs. Only one `Probe_Session` may be open at a time; a concurrent `Open` call returns `Session_Already_Active`.
+
+The sentinel-bounded query pattern (`Sentinel_Query`) writes the user query followed by the DA1 sentinel (`ESC [ c`) and accumulates response bytes until the DA1 response (`ESC [ ? … c`) is detected or the timeout expires. Pure parsing and detection logic is isolated in the SPARK Silver child package `Termicap.OSC.Parsing`.
+
+All termios manipulation is delegated to a C helper (`src/c/termicap_osc.c`) which exposes nine fixed-signature functions, avoiding the need to map the platform-specific `struct termios` layout in Ada. The `select()` timed-read path uses the same C helper to avoid the `FD_SET`/`FD_ZERO` macro problem.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-osc.ads`, `src/termicap-osc.adb`, `src/c/termicap_osc.c` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Ada.Finalization`, `Interfaces.C`, `Termicap.OSC.Parsing` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `File_Descriptor` | Distinct integer type derived from `Interfaces.C.int`. Prevents confusion with other integer quantities. Constant `INVALID_FD = -1`. |
+| `Byte` | Subtype of `Interfaces.C.unsigned_char`. Matches the C unsigned char type used throughout the C helper interface. |
+| `Byte_Array` | Unconstrained array of `Byte` over a `Positive` range. Used for both query sequences sent to the terminal and response bytes accumulated from it. |
+| `Termios_State` | Limited record holding an opaque 128-byte buffer (`Data`) and the actual platform `sizeof(struct termios)` (`Size`). The C helper fills and restores this buffer; Ada code treats it as opaque. |
+| `Session_Status` | Enumeration reporting the outcome of `Open`: `Session_OK`, `Session_Not_Foreground`, `Session_No_Terminal`, `Session_Save_Failed`, `Session_Raw_Failed`, `Session_Already_Active`. |
+| `Response_Buffer` | Constrained subtype of `Byte_Array (1 .. MAX_RESPONSE_SIZE)` where `MAX_RESPONSE_SIZE = 4096`. Stack-allocated; no heap allocation during probing. |
+| `Probe_Session` | `Limited_Controlled` record holding an `FD : File_Descriptor`, `Saved_State : Termios_State`, and `Is_Raw : Boolean`. The `Is_Raw` flag also acts as the single-session guard. |
+
+#### Public Operations
+
+| Subprogram | Kind | Requirements |
+|-----------|------|--------------|
+| `Open` | Procedure | FUNC-OSC-001, FUNC-OSC-002, FUNC-OSC-003, FUNC-OSC-007, FUNC-OSC-008, FUNC-OSC-011, FUNC-OSC-012 |
+| `Is_Open` | Function | FUNC-OSC-008 |
+| `Close` | Procedure | FUNC-OSC-008 |
+| `Sentinel_Query` | Procedure | FUNC-OSC-006, FUNC-OSC-009, FUNC-OSC-013 |
+| `Write_Query` | Procedure | FUNC-OSC-005 |
+| `Timed_Read` | Procedure | FUNC-OSC-004 |
+| `Is_Foreground_Process` | Function | FUNC-OSC-007 |
+| `Open_Terminal` | Function | FUNC-OSC-001 |
+| `Close_Terminal` | Procedure | FUNC-OSC-001 |
+| `Save_Termios` | Procedure | FUNC-OSC-002 |
+| `Restore_Termios` | Procedure | FUNC-OSC-002 |
+| `Set_Raw_Mode` | Procedure | FUNC-OSC-003 |
+| `Drain_Input` | Procedure | FUNC-OSC-011 |
+
+#### C Helper: `termicap_osc.c`
+
+A thin C translation unit (`src/c/termicap_osc.c`) exposes nine functions called from the package body via `pragma Import (C, …)`:
+
+| C Function | Purpose |
+|-----------|---------|
+| `termicap_osc_open_tty` | `open("/dev/tty", O_RDWR)` |
+| `termicap_osc_close_fd` | `close(fd)` |
+| `termicap_osc_termios_size` | Returns `sizeof(struct termios)` for this platform |
+| `termicap_osc_save_termios` | `tcgetattr` → copies struct into caller-supplied buffer |
+| `termicap_osc_restore_termios` | Copies buffer → `tcsetattr(TCSANOW)` |
+| `termicap_osc_set_raw` | Derives raw mode from saved state → `tcsetattr(TCSANOW)` |
+| `termicap_osc_select_read` | `select()` + `read()` with millisecond timeout |
+| `termicap_osc_write` | `write()` with full-buffer retry |
+| `termicap_osc_is_foreground` | `ioctl(TIOCGPGRP)` + `getpgrp()` comparison |
+
+---
+
+### `Termicap.OSC.Parsing`
+
+**Responsibility:** Pure SPARK functions for DA1 sentinel detection, response parsing, and multiplexer passthrough query wrapping. Contains no side effects, no OS calls, and no global state; it is a leaf in the dependency graph.
+
+All subprograms operate solely on `Byte_Array` values inherited from `Termicap.OSC`. SPARK contracts are verifiable at Silver level without manual lemmas. This package is the provable complement to the FFI-boundary parent.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-osc-parsing.ads`, `src/termicap-osc-parsing.adb` |
+| SPARK_Mode | On (spec and body) — **Silver level** |
+| Dependencies | `Termicap.OSC` (for `Byte`, `Byte_Array`, `MAX_RESPONSE_SIZE`) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `DA1_Value_Array` | Fixed-size array `(1 .. MAX_DA1_PARAMS)` of `Natural`. Only indices `1 .. Count` are meaningful; remaining elements are zero-initialised. `MAX_DA1_PARAMS = 16`. |
+| `DA1_Params` | Record with `Count : Natural range 0 .. MAX_DA1_PARAMS` and `Values : DA1_Value_Array`. `Count = 0` means no valid DA1 response was found. |
+| `Passthrough_Mode` | Enumeration: `No_Passthrough`, `Tmux_Passthrough`, `Screen_Passthrough`. Selects the DCS wrapping syntax applied by `Wrap_For_Passthrough`. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Contains_DA1_Response` | Function | `Pre => Length <= Bytes'Length` | FUNC-OSC-006 |
+| `DA1_Response_Start` | Function | `Pre => Length <= Bytes'Length`; `Post => result <= Length` | FUNC-OSC-006 |
+| `Parse_DA1_Response` | Function | `Pre => Length <= Bytes'Length and Length <= MAX_RESPONSE_SIZE`; `Post => result.Count <= MAX_DA1_PARAMS` | FUNC-OSC-010 |
+| `Wrap_For_Passthrough` | Function | Pure — no Pre/Post beyond type constraints | FUNC-OSC-014 |
+
+#### Relationship to Other Packages
+
+`Termicap.OSC.Parsing` is a pure child of `Termicap.OSC`. It has no knowledge of probe sessions, file descriptors, or termios state — it only processes `Byte_Array` values. `Sentinel_Query` in the parent package calls `Contains_DA1_Response` and `DA1_Response_Start` at runtime to determine response boundaries. Callers that need to inspect DA1 parameters (for feature detection) call `Parse_DA1_Response` on the response slice returned by `Sentinel_Query`.
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -700,10 +803,39 @@ Both `Detect` and `Get` accept a `Stream : Termicap.TTY.Stream_Kind` parameter w
 │   │  (Ada protected type + OS-calling sub-      │  │
 │   │    detectors — outside SPARK 2014 subset)   │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.OSC (spec + body)                        │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Probe_Session (Limited_Controlled)         │  │
+│   │  Open / Close / Is_Open / Finalize          │  │
+│   │  Sentinel_Query / Write_Query / Timed_Read  │  │
+│   │  Is_Foreground_Process                      │  │
+│   │  Open_Terminal / Close_Terminal             │  │
+│   │  Save_Termios / Restore_Termios / Set_Raw   │  │
+│   │  Drain_Input                                │  │
+│   │  C helper (termicap_osc.c): 9 functions     │  │
+│   │  (Limited_Controlled + POSIX syscalls —     │  │
+│   │    outside SPARK 2014 subset)               │  │
+│   └─────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────┐
+│             SPARK Silver Zone (child)                │
+│                                                     │
+│   Termicap.OSC.Parsing (spec + body)                │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  DA1_Value_Array, DA1_Params,               │  │
+│   │    Passthrough_Mode types                   │  │
+│   │  Contains_DA1_Response — Pre only           │  │
+│   │  DA1_Response_Start — Pre + Post            │  │
+│   │  Parse_DA1_Response — Pre + Post (Silver)   │  │
+│   │  Wrap_For_Passthrough — pure                │  │
+│   │  Global => null — no FFI, no state          │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, and the `Detect`/`Get` bodies of `Termicap.Capabilities` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` is the only package where both spec and body are wholly outside the SPARK zone: its protected object, interrupt handler, and C FFI cannot be expressed in SPARK 2014. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`.
 
 ## Related Documents
 
@@ -727,4 +859,5 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **ADR-0012** (`docs/adr/0012-capability-cache-design.md`): Rationale for the per-stream protected cache design
 - **ADR-0013** (`docs/adr/0013-spark-annotation-split-capabilities.md`): Rationale for the SPARK/Ada split in `Termicap.Capabilities`
 - **Tech Spec F10** (`docs/tech-specs/capability-record.md`): Capability record assembly design rationale
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014
+- **Tech Spec OSC** (`docs/tech-specs/osc-query-infra.md`): OSC query infrastructure design rationale, sentinel pattern, C helper design, and ADR-0014
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015

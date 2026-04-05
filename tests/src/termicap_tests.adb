@@ -15,6 +15,7 @@ with Test_Dimensions;
 with Test_Downsampling;
 with Test_Environment;
 with Test_Environment_Capture;
+with Test_OSC_Parsing;
 with Test_Override;
 with Test_Sigwinch;
 with Test_Terminal_Id;
@@ -39,6 +40,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_Downsampling.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Sigwinch.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Override.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_OSC_Parsing.Test_Case);
       return Result;
    end All_Tests;
 

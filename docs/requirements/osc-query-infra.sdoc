@@ -1,0 +1,432 @@
+[DOCUMENT]
+TITLE: OSC Query Infrastructure
+UID: REQ-OSC
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Terminal File Descriptor and Raw Mode
+
+[REQUIREMENT]
+UID: FUNC-OSC-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminal File Descriptor Acquisition via /dev/tty
+STATEMENT: >>>
+The library shall provide an operation to open /dev/tty for direct terminal I/O, returning a file descriptor (a non-negative integer on success). The operation shall open /dev/tty with both read and write access (O_RDWR) so that escape sequence queries can be written to and responses read from the same descriptor. A corresponding close operation shall release the file descriptor. The open and close operations shall be safe to call from a context where stdin, stdout, and stderr are all redirected to files or pipes.
+
+If /dev/tty cannot be opened (for example, when there is no controlling terminal), the operation shall return a distinguished error value rather than raising an exception.
+<<<
+COMMENT: >>>
+Direct /dev/tty access is the canonical POSIX idiom for programs that must communicate with the controlling terminal regardless of how their standard file descriptors are connected. Without /dev/tty, a program whose stdout is piped to another process cannot send escape sequences to the terminal and cannot read back terminal responses. Opening /dev/tty with O_RDWR gives a single descriptor that serves both directions, which is required for the sentinel-bounded query pattern (FUNC-OSC-006) where query and response use the same channel. Returning an error value rather than raising on failure follows the Termicap convention established throughout the library for OS call results, keeping the boundary clean for SPARK annotation at higher layers.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Termios State Save and Restore
+STATEMENT: >>>
+The library shall provide operations to save and restore terminal attributes using the POSIX termios interface:
+
+  Save:   Call tcgetattr(fd, termios_state) and store the result in a caller-supplied state variable. Shall return an error indicator if tcgetattr fails.
+
+  Restore: Call tcsetattr(fd, TCSANOW, termios_state) using a previously saved state. Shall return an error indicator if tcsetattr fails. Shall not raise an exception.
+
+The restore operation shall be callable from an exception handler or finalisation path so that the RAII pattern can be implemented by the caller: save on entry, restore unconditionally on exit regardless of whether the body raised an exception. The saved state type shall be an Ada record wrapping the C struct termios, declared in an FFI boundary package with SPARK_Mode => Off.
+<<<
+COMMENT: >>>
+Termios save/restore is the foundation of all raw-mode terminal I/O: the terminal must be returned to its original state regardless of what happens during probing, or the user's shell will be left in a broken state (no echo, no line editing). The requirement to support calling restore from an exception handler drives the design to use a value-typed state record rather than a hidden global, because a global would not be safe in the face of nested or concurrent sessions. Returning error indicators (rather than raising) from both save and restore is deliberate: if the terminal is already in an unexpected state when restore is called, raising a secondary exception inside a handler obscures the original fault. TCSANOW (apply immediately, do not wait for output drain) is the correct flag for restoring state after probing because the query-response cycle completes before restore is called.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Raw Mode Activation
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-002
+STATEMENT: >>>
+The library shall provide an operation to switch a terminal file descriptor into raw mode by modifying the terminal attributes as follows:
+
+  c_lflag: Clear ICANON (disable canonical line buffering), ECHO (disable character echo), and ISIG (disable signal generation from Ctrl-C / Ctrl-Z).
+  c_iflag: Clear IXON (disable XON/XOFF flow control), ICRNL (disable CR-to-NL translation), and BRKINT (disable break-to-SIGINT).
+  c_cc[VMIN]:  Set to 0 (non-blocking character reads).
+  c_cc[VTIME]: Set to 0 (no read timeout at the termios level; timeout is handled by select() in FUNC-OSC-004).
+
+The raw mode operation shall be applied via tcsetattr(fd, TCSANOW, modified_termios). It shall only be called after a successful save (FUNC-OSC-002) so that the original attributes are available for restore.
+
+The raw mode operation shall return an error indicator if tcsetattr fails and shall not modify the saved state.
+<<<
+COMMENT: >>>
+Raw mode is required because the terminal's line discipline would otherwise intercept and transform the byte sequences used in OSC/DCS/CSI queries and their responses. ICANON must be cleared so that bytes are delivered to the reading process immediately rather than being buffered until a newline. ECHO must be cleared so that the escape sequence bytes sent as queries are not echoed back and confused with response bytes. ISIG must be cleared to prevent Ctrl-C from terminating the probing process during a read. VMIN=0 and VTIME=0 together configure the terminal driver for pure non-blocking reads, delegating timeout management to select() (FUNC-OSC-004), which provides millisecond-level precision independent of the termios timer resolution. The restriction that raw mode is only applied after a successful save enforces the invariant that restore is always possible.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Timed I/O and Query Operations
+
+[REQUIREMENT]
+UID: FUNC-OSC-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Timed Read with select()
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-001
+STATEMENT: >>>
+The library shall provide an operation to read bytes from a terminal file descriptor with a configurable timeout expressed in milliseconds. The operation shall use the POSIX select() system call to wait for the file descriptor to become readable before issuing a read(). Its representative signature is:
+
+  procedure Timed_Read
+     (FD         :     File_Descriptor;
+      Buffer     : out Byte_Array;
+      Bytes_Read : out Natural;
+      Timeout_Ms :     Natural;
+      Timed_Out  : out Boolean);
+
+The operation shall:
+  1. Call select() with a timeval derived from Timeout_Ms (seconds = Timeout_Ms / 1000, microseconds = (Timeout_Ms mod 1000) * 1000).
+  2. If select() indicates the FD is readable, call read() and place the bytes into Buffer, setting Bytes_Read to the number of bytes received.
+  3. If select() times out (returns 0), set Timed_Out to True and Bytes_Read to 0 without calling read().
+  4. If select() or read() returns an error, return with Bytes_Read = 0 and Timed_Out = False; the caller shall inspect Bytes_Read to detect the error condition.
+
+The timeout precision shall be milliseconds. Recommended values for callers: 1000 ms for most OSC/DA queries; up to 5000 ms for slow remote terminals.
+<<<
+COMMENT: >>>
+Using select() rather than a blocking read() is the standard POSIX technique for implementing timeouts on terminal reads without tasking or signals. A blocking read() with no timeout would hang indefinitely if the terminal does not respond to a query (for example, a terminal emulator that silently ignores unknown OSC sequences), making the entire probing session stall. The select() call returns immediately if data is available, so there is no unnecessary delay for responsive terminals. Expressing timeout in milliseconds gives callers fine-grained control: a local xterm can be probed with a 100 ms timeout, while a terminal accessed over a high-latency SSH connection may need 2000 ms. The select() import is placed in the Ada FFI boundary package (SPARK_Mode => Off) because the C fd_set type and FD_SET/FD_ZERO macros have no direct Ada equivalent and require careful struct-layout matching.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Query Write to Terminal
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-001
+STATEMENT: >>>
+The library shall provide an operation to write an arbitrary byte sequence (escape sequence query) to a terminal file descriptor. Its representative signature is:
+
+  procedure Write_Query
+     (FD      :     File_Descriptor;
+      Query   :     Byte_Array;
+      Written : out Natural;
+      Success : out Boolean);
+
+The operation shall call write(fd, query'Address, query'Length) and report the number of bytes actually written. If write() returns fewer bytes than requested or returns an error, Success shall be set to False. The operation shall not retry partial writes automatically; callers requiring retry shall call Write_Query again with the unwritten suffix.
+
+The operation shall not raise an exception on write failure.
+<<<
+COMMENT: >>>
+A dedicated write operation is required rather than using Ada.Text_IO or Ada.Streams because the terminal file descriptor obtained from /dev/tty (FUNC-OSC-001) is a raw POSIX file descriptor, not an Ada stream. Ada.Text_IO operates on Ada.Text_IO.File_Type objects backed by C FILE* streams, which buffer output and may add newline translation that would corrupt escape sequences. Using write() directly ensures that the exact bytes of the escape sequence are sent to the terminal without buffering or transformation. Reporting partial writes (Written < Query'Length) rather than hiding them is important for correctness: a partial write of a multi-byte escape sequence leaves the terminal in an undefined parse state, so the caller must know that the query was not fully transmitted.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sentinel-Bounded Query
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-004
+- TYPE: Parent
+  VALUE: FUNC-OSC-005
+STATEMENT: >>>
+The library shall provide a high-level operation that sends a query escape sequence to the terminal followed immediately by a DA1 (Device Attributes) request (CSI c, i.e., the byte sequence ESC [ c), reads response bytes until the DA1 response (CSI ? ... c, matching the pattern ESC [ ? <params> c) is detected or the timeout expires, and returns the pre-sentinel response bytes (the bytes that arrived before the DA1 response). Its representative signature is:
+
+  procedure Sentinel_Query
+     (FD         :     File_Descriptor;
+      Query      :     Byte_Array;
+      Response   : out Byte_Array;
+      Resp_Length: out Natural;
+      Timeout_Ms :     Natural;
+      Timed_Out  : out Boolean);
+
+The operation shall:
+  1. Call Write_Query (FUNC-OSC-005) with Query, then call Write_Query with the DA1 sentinel bytes (ESC [ c).
+  2. Accumulate bytes from Timed_Read (FUNC-OSC-004) calls into an internal buffer (FUNC-OSC-009) until:
+     a. The DA1 response pattern (ESC [ ? ... c) is detected in the accumulated bytes, or
+     b. The total elapsed time exceeds Timeout_Ms.
+  3. On DA1 detection: set Response to the bytes preceding the DA1 response and set Resp_Length accordingly. Set Timed_Out to False.
+  4. On timeout: set Timed_Out to True and Resp_Length to 0.
+
+The DA1 sentinel byte sequence sent is CSI c (two bytes: 0x1B 0x5B 0x63). The DA1 response pattern matched is CSI ? followed by digits and semicolons and terminated by c (0x63). The matching shall not require the full DA1 response to be parsed; detection of the terminating c byte after CSI ? is sufficient for boundary detection.
+<<<
+COMMENT: >>>
+The sentinel pattern is the key technique that makes active terminal probing robust across heterogeneous terminals. Without a sentinel, the reader cannot know when a query response ends: some terminals send multi-byte responses, some send nothing (if they don't support the queried capability), and read() may return bytes in fragments. By appending DA1 (CSI c) after every query, the library guarantees that a responding terminal will eventually send the DA1 response (CSI ? ... c), which is universally supported and serves as a reliable end-of-response marker. If the terminal does not respond to the original query but does respond to DA1, the pre-sentinel response bytes are empty (Resp_Length = 0), which the caller correctly interprets as "capability not supported". If the terminal does not respond to DA1 either, the timeout prevents indefinite blocking. This pattern is used by termenv (Go), termbg, and blessed, and is cited in the global synthesis (§6.3) as the canonical approach for active terminal probing.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Session Safety and Foreground Guard
+
+[REQUIREMENT]
+UID: FUNC-OSC-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Foreground Process Group Check
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-001
+STATEMENT: >>>
+The library shall provide an operation that verifies whether the calling process is the foreground process group of the terminal before any query is sent. The check shall use the following POSIX calls:
+
+  1. ioctl(fd, TIOCGPGRP, &fg_pgrp) — Retrieve the foreground process group ID of the terminal associated with fd.
+  2. getpgrp() — Retrieve the process group ID of the calling process.
+  3. Compare: is_foreground := (fg_pgrp = getpgrp()).
+
+The operation shall return a Boolean result or a distinguished status value. It shall not raise an exception if ioctl fails; instead it shall return False (treat as not foreground) to err on the side of not sending queries. Its representative signature is:
+
+  function Is_Foreground_Process (FD : File_Descriptor) return Boolean;
+
+Callers (in particular FUNC-OSC-008) shall invoke Is_Foreground_Process before calling Sentinel_Query (FUNC-OSC-006) or Write_Query (FUNC-OSC-005) and shall refrain from sending any query if the result is False.
+<<<
+COMMENT: >>>
+A process running in the background (in a shell job-control sense) should not send escape sequences to the terminal because those bytes will appear as spurious output interleaved with the output of the foreground process, potentially corrupting its display or confusing its own terminal query/response cycle. The TIOCGPGRP ioctl is the POSIX mechanism for determining which process group currently owns the terminal. Comparing it with getpgrp() (not getpid()) is correct: job control operates at the process-group level, so any process in the foreground group is permitted to interact with the terminal. Returning False on ioctl failure is the safe default: if the terminal state cannot be determined, it is better to skip probing than to risk contaminating a foreground process's output. This check is performed by termenv and is cited as a required guard in the global synthesis (§6.1).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Probe Session Lifecycle
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-001
+- TYPE: Parent
+  VALUE: FUNC-OSC-002
+- TYPE: Parent
+  VALUE: FUNC-OSC-003
+- TYPE: Parent
+  VALUE: FUNC-OSC-007
+STATEMENT: >>>
+The library shall provide a high-level probe session abstraction that encapsulates the full lifecycle of active terminal probing. The session shall perform the following steps in order:
+
+  Open:
+    1. Verify foreground process group (FUNC-OSC-007). If not foreground, abort and return a Session_Not_Foreground error; do not proceed.
+    2. Open /dev/tty (FUNC-OSC-001). If open fails, return a Session_No_Terminal error.
+    3. Save termios state (FUNC-OSC-002). If save fails, close the FD and return a Session_Save_Failed error.
+    4. Activate raw mode (FUNC-OSC-003). If activation fails, restore termios and close the FD; return a Session_Raw_Failed error.
+    5. Drain stale input (FUNC-OSC-011, if implemented). On any failure, proceed; drain failure is non-fatal.
+
+  Query phase (after successful open):
+    6. Execute one or more Sentinel_Query calls (FUNC-OSC-006) using the session's FD.
+
+  Close (shall execute regardless of whether the query phase raised an exception):
+    7. Restore termios state (FUNC-OSC-002).
+    8. Close the /dev/tty file descriptor (FUNC-OSC-001).
+
+The session type shall be a limited Ada type so that it cannot be copied or assigned, enforcing single-owner semantics. An exception propagating out of the query phase shall not prevent steps 7 and 8 from executing.
+
+The session abstraction shall be implemented such that steps 7 and 8 are performed in the Finalize procedure of a controlled type or an equivalent Ada mechanism that guarantees execution on scope exit or exception propagation.
+<<<
+COMMENT: >>>
+The probe session is the user-facing entry point for Tier 3 active probing. Callers should not need to manage the open/save/raw/restore/close sequence manually; doing so correctly in the presence of exceptions requires careful use of exception handlers at every step, which is error-prone. Wrapping the lifecycle in a controlled type (Ada.Finalization.Limited_Controlled) provides an RAII guarantee: Finalize is called by the Ada runtime when the object goes out of scope or when an exception propagates past its declarative region, ensuring that the terminal is always restored even if a query raises Program_Error or Storage_Error. The limited type restriction prevents accidental copies of the session (which would lead to double-close of the FD). The foreground check as the first step of Open avoids opening /dev/tty at all when probing is not appropriate, minimising side effects for background processes.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Buffer Management and Response Parsing
+
+[REQUIREMENT]
+UID: FUNC-OSC-009
+STATUS: Approved
+PRIORITY: Should
+TITLE: Bounded Response Buffer
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-006
+STATEMENT: >>>
+The library shall maintain an internal accumulation buffer used by Sentinel_Query (FUNC-OSC-006) to collect response bytes across multiple Timed_Read calls. The buffer shall have a fixed maximum capacity of 4096 bytes. If the accumulated bytes reach the buffer capacity before the DA1 sentinel response is detected, the operation shall stop reading and treat the condition as if a timeout occurred (Timed_Out = True, Resp_Length = 0).
+
+The buffer shall be allocated as a fixed-size array on the stack (or within the probe session object) rather than on the heap. No dynamic memory allocation shall be performed during response accumulation.
+<<<
+COMMENT: >>>
+Bounding the response buffer at 4096 bytes prevents a misbehaving terminal from causing unbounded memory use by sending an arbitrarily long byte stream before the DA1 sentinel response. In practice, all known OSC and DCS responses (foreground/background color: ~20 bytes, window title: up to ~256 bytes, DA1: ~15 bytes) fit well within 4096 bytes. Stack allocation is preferred over heap allocation because it avoids the overhead and complexity of dynamic memory management in what is intended to be a lightweight library, and it is trivially provable for SPARK (no Storage_Error from heap exhaustion). Treating buffer overflow as a timeout-equivalent condition is conservative: the caller receives no partial response, which is correct because a response truncated mid-sequence cannot be reliably parsed.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-010
+STATUS: Approved
+PRIORITY: Should
+TITLE: DA1 Response Parsing
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-006
+STATEMENT: >>>
+The library shall provide a pure function that parses a DA1 response byte sequence (CSI ? Ps ; Ps ; ... c) and extracts the list of device attribute parameters as an array of non-negative integers. Its representative signature is:
+
+  function Parse_DA1_Response
+     (Bytes  : Byte_Array;
+      Length : Natural)
+      return DA1_Params;
+
+where DA1_Params is a record containing:
+
+  Count  : Natural range 0 .. MAX_DA1_PARAMS  -- number of parameters found
+  Values : array (1 .. MAX_DA1_PARAMS) of Natural  -- parameter values
+
+MAX_DA1_PARAMS shall be at least 16.
+
+The function shall:
+  1. Verify that the byte sequence matches the pattern: ESC [ ? <decimal-digit-or-semicolon>* c.
+  2. Split the parameter string on semicolons and parse each segment as a decimal integer.
+  3. Return Count = 0 if the sequence does not match the expected pattern or is empty.
+
+The function shall be declared with SPARK_Mode => On and carry a contract:
+  Post => Parse_DA1_Response'Result.Count <= MAX_DA1_PARAMS
+<<<
+COMMENT: >>>
+DA1 parsing serves two purposes. First, it enables sentinel detection in Sentinel_Query: the library must recognise the DA1 response bytes to know when to stop accumulating. Second, the DA1 parameters themselves encode terminal capabilities (for example, parameter 4 indicates sixel graphics support, parameter 28 indicates rectangular area operations). Making Parse_DA1_Response a pure function that takes only a byte array and returns a value record keeps it SPARK-provable at Silver level: it has no side effects, no global state, and its output is fully determined by its input. The postcondition that Count <= MAX_DA1_PARAMS is a simple overflow guard that the SPARK prover can discharge by inspection of the accumulation loop. The parameter limit of 16 exceeds the number of DA1 parameters defined by any known terminal (xterm lists 12 in its documentation).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Input Hygiene and Concurrency
+
+[REQUIREMENT]
+UID: FUNC-OSC-011
+STATUS: Approved
+PRIORITY: Should
+TITLE: Stale Input Drain Before Query
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-004
+STATEMENT: >>>
+The library shall provide an operation to drain any stale or buffered bytes from a terminal file descriptor before sending a query. The drain operation shall perform a series of non-blocking Timed_Read calls (FUNC-OSC-004) with a timeout of 0 milliseconds, discarding all received bytes, until a call returns 0 bytes read (indicating the input buffer is empty). The drain shall be bounded: it shall stop after at most MAX_DRAIN_ITERATIONS reads (recommended value: 16) regardless of whether bytes continue to arrive, to prevent an adversarial or broken terminal from causing an infinite loop.
+
+  procedure Drain_Input (FD : File_Descriptor);
+
+Drain_Input shall be called by the probe session open sequence (FUNC-OSC-008, step 5) as a non-fatal step.
+<<<
+COMMENT: >>>
+Stale input in the terminal's read buffer — for example, a response from a query sent by a previous program that was not fully consumed, or keyboard input typed by the user between the foreground check and the first query — can be mistaken for a response to the current query. This is particularly dangerous for the sentinel pattern (FUNC-OSC-006): if the stale input happens to contain the DA1 response pattern, Sentinel_Query will return an empty response immediately without waiting for the real response. Draining before the first query clears these stale bytes. Using 0 ms timeout reads is safe because VMIN=0 and VTIME=0 are set in raw mode; a 0 ms select() will return immediately if no bytes are available. The iteration bound prevents an infinite loop in the edge case where a terminal continuously streams bytes (e.g., a mouse with absolute position reporting enabled).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-012
+STATUS: Approved
+PRIORITY: Should
+TITLE: Single Concurrent Session Enforcement
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-008
+STATEMENT: >>>
+The library shall prevent more than one probe session from being active simultaneously on the same terminal file descriptor. When a second probe session attempts to open /dev/tty while an existing session is already open, the open step shall return a Session_Already_Active error and shall not proceed to save termios or enter raw mode.
+
+The active-session guard shall be implemented using a protected variable or equivalent Ada concurrent-safe mechanism. The guard shall be released automatically when the session is closed (step 8 of FUNC-OSC-008).
+
+Multiple probe sessions on different file descriptors (if applicable) shall be considered independent and shall not be blocked by this guard.
+<<<
+COMMENT: >>>
+Two concurrent probe sessions on the same terminal would produce interleaved byte sequences on the write side and a race condition on the read side: bytes from one session's response could be consumed by the other session's Sentinel_Query accumulation loop. The consequences include silent capability misdetection, which is worse than a clean error. Enforcing single-session concurrency is conservative and correct: capability detection is a startup-time operation in Termicap, and there is no valid use case for concurrent probing sessions within a single process. Using a protected variable for the guard ensures that the check-and-set is atomic across tasks, preventing a race where two tasks both pass the guard before either has incremented the active count.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Optional Enhancements
+
+[REQUIREMENT]
+UID: FUNC-OSC-013
+STATUS: Approved
+PRIORITY: Could
+TITLE: Query Retry on Timeout
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-006
+STATEMENT: >>>
+The library shall provide an optional retry parameter for Sentinel_Query (FUNC-OSC-006). When the retry option is enabled and the initial query times out, the operation shall resend the query (both the original sequence and the DA1 sentinel) and wait for a response with a timeout of twice the original Timeout_Ms value. The retry shall occur at most once; if the retry also times out, the operation shall return Timed_Out = True.
+
+The retry option shall default to disabled. Callers shall opt in by passing a Retry => True parameter.
+<<<
+COMMENT: >>>
+A single retry with a doubled timeout is useful for terminals accessed over high-latency connections (SSH with packet loss, serial terminals) where the first attempt may time out due to transient network conditions rather than a genuine lack of support for the queried capability. Limiting retries to one prevents the total blocking time from growing beyond 2 * Timeout_Ms per query, which keeps the worst-case probing overhead bounded. The default-off behaviour ensures that callers that do not need retry (local terminal emulators) pay no penalty. Doubling the timeout on retry is a common heuristic: if the first attempt at 1 s failed, the network round-trip time may simply exceed 1 s, and 2 s is usually sufficient for slow SSH connections.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-014
+STATUS: Approved
+PRIORITY: Could
+TITLE: Multiplexer Passthrough Query Wrapping
+STATEMENT: >>>
+The library shall provide a utility function that wraps a query byte sequence in the appropriate passthrough escape sequence for known terminal multiplexers. The supported wrapping formats shall be:
+
+  tmux:   DCS tmux ; ESC query ST
+          i.e.: ESC P tmux ; ESC <original-query> ESC \
+
+  screen: DCS <original-query> ST
+          i.e.: ESC P <original-query> ESC \
+
+The function shall accept a multiplexer kind parameter and return the wrapped byte sequence. Its representative signature is:
+
+  function Wrap_For_Passthrough
+     (Query       : Byte_Array;
+      Multiplexer : Multiplexer_Kind)
+      return Byte_Array;
+
+where Multiplexer_Kind is an enumeration: (None, Tmux, Screen). When Multiplexer = None, the function shall return the original Query unchanged.
+
+The Terminal_Identity result (Termicap.Terminal_Id) shall be used by the caller to determine the appropriate Multiplexer_Kind before calling Wrap_For_Passthrough.
+<<<
+COMMENT: >>>
+Terminal multiplexers such as tmux and screen intercept all terminal I/O and do not forward unknown escape sequences to the outer terminal by default. OSC and DCS queries sent from within a tmux session reach tmux, not the actual terminal emulator (e.g., iTerm2 or xterm). The passthrough wrapping syntax instructs the multiplexer to forward the wrapped sequence to the outer terminal unchanged. Without this wrapping, Termicap's active probing would query the multiplexer's internal terminal emulation rather than the outer terminal, producing results that reflect tmux's capabilities rather than the terminal the user is actually looking at. The design keeps wrapping as a pure transformation function rather than building it into Sentinel_Query, so that the wrapping logic is independently testable and SPARK-annotatable without interaction with I/O operations. The caller determines the multiplexer kind from the Terminal_Identity result (FUNC-TID-002), keeping the dependency explicit.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK and FFI Boundaries
+
+[REQUIREMENT]
+UID: FUNC-OSC-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Boundary Declaration for FFI Operations
+STATEMENT: >>>
+All operations in the OSC Query Infrastructure that directly invoke C/POSIX functions — including open(), close(), tcgetattr(), tcsetattr(), ioctl(), getpgrp(), select(), read(), and write() — shall be declared in one or more Ada FFI boundary packages compiled with SPARK_Mode => Off. A comment in each such package spec shall explicitly state that the package is an Ada FFI boundary and does not carry SPARK provability.
+
+The following operations shall be SPARK-annotatable (SPARK_Mode => On) because they are pure transformations on Ada values with no FFI:
+
+  - Parse_DA1_Response (FUNC-OSC-010): pure byte-array to record function.
+  - Wrap_For_Passthrough (FUNC-OSC-014): pure byte-array to byte-array function.
+  - The DA1 sentinel detection predicate used within Sentinel_Query to test whether accumulated bytes contain the DA1 response terminator.
+
+The probe session type (FUNC-OSC-008) shall be marked SPARK_Mode => Off because Ada.Finalization.Limited_Controlled is outside the SPARK 2014 language subset.
+<<<
+COMMENT: >>>
+The SPARK boundary placement follows the established Termicap convention: OS calls are isolated in FFI packages (SPARK_Mode => Off), and all pure logic above those packages is kept SPARK-provable at Silver level. The most important pure operations to keep in SPARK are Parse_DA1_Response and the DA1 detection predicate, because their correctness can be specified with precise contracts (the parser postcondition in FUNC-OSC-010; a terminator detection postcondition that the byte sequence ends with the DA1 pattern) and discharged by the SPARK prover without manual lemmas. The probe session type uses Ada.Finalization.Limited_Controlled for RAII, which requires the full Ada tasking and OOP model; GNATprove does not support controlled types at any SPARK level, so SPARK_Mode => Off at the session package level is unavoidable. This mirrors the pattern used by the SIGWINCH feature (FUNC-SWC-011).
+<<<
+
+[/SECTION]

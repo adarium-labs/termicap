@@ -16,6 +16,9 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Termicap.Downsampling](downsampling.md)**
   Color downsampling — `RGB`, `Color_Index_256`, `Color_Index_16`, `Downsampled_Color` types; `Downsample` dispatch functions; SPARK Gold
 
+- **[Termicap.OSC / Termicap.OSC.Parsing](osc.md)**
+  OSC probe session lifecycle — `Probe_Session` (RAII), `Sentinel_Query`, `Timed_Read`, DA1 parsing (`Parse_DA1_Response`), multiplexer passthrough wrapping (`Wrap_For_Passthrough`)
+
 - **[Termicap.Dimensions](termicap-dimensions.md)**
   Terminal dimensions detection — `Terminal_Size` type, `Get_Size` function, ioctl/env-var/default fallback chain
 

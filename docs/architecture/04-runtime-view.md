@@ -1063,6 +1063,133 @@ When `Termicap.Override.Set_Override` has been called before `Get` or `Detect`:
 
 ---
 
+## Scenario 18: OSC Probe Session — Query Lifecycle
+
+End-to-end scenario showing how `Termicap.OSC.Probe_Session` sends an OSC query, accumulates the response using the DA1 sentinel pattern, and guarantees terminal state restoration.
+
+### Phase A — Open: Foreground Check → /dev/tty → Raw Mode → Drain
+
+```
+Caller (active probing feature)
+  │
+  │  declare
+  │     Session : Probe_Session;
+  │     Status  : Session_Status;
+  │  begin
+  │     Open (Session, Status);
+  ▼
+Termicap.OSC.Open              [SPARK_Mode => Off]
+  │
+  │  Step 1: Is_Foreground_Process (any tty FD)  [FUNC-OSC-007]
+  │    → ioctl(TIOCGPGRP) + getpgrp() comparison via C helper
+  │    → if background: Status := Session_Not_Foreground; return
+  │
+  │  Step 2: Acquire single-session guard (Is_Raw flag)  [FUNC-OSC-012]
+  │    → if Is_Raw = True on any existing session:
+  │         Status := Session_Already_Active; return
+  │
+  │  Step 3: Open_Terminal  [FUNC-OSC-001]
+  │    → termicap_osc_open_tty(): open("/dev/tty", O_RDWR)
+  │    → if INVALID_FD: Status := Session_No_Terminal; return
+  │
+  │  Step 4: Save_Termios (FD, Saved_State, OK)  [FUNC-OSC-002]
+  │    → termicap_osc_save_termios(): tcgetattr() → buffer
+  │    → if not OK: Close_Terminal (FD);
+  │               Status := Session_Save_Failed; return
+  │
+  │  Step 5: Set_Raw_Mode (FD, Saved_State, OK)  [FUNC-OSC-003]
+  │    → termicap_osc_set_raw(): derive raw termios (clear ICANON,
+  │        ECHO, ISIG, IXON, ICRNL, BRKINT; VMIN=0, VTIME=0)
+  │    → tcsetattr(TCSANOW)
+  │    → if not OK: Restore_Termios; Close_Terminal;
+  │               Status := Session_Raw_Failed; return
+  │    → Is_Raw := True
+  │
+  │  Step 6: Drain_Input (FD)  [FUNC-OSC-011]
+  │    → non-blocking Timed_Read (Timeout_Ms = 0) loop
+  │    → discard all buffered stale bytes
+  │    → bounded to MAX_DRAIN_ITERATIONS; non-fatal
+  │
+  └──► Status := Session_OK; Session.FD valid; raw mode active
+```
+
+### Phase B — Query: Write + DA1 Sentinel → Accumulate → Detect Boundary
+
+```
+  │  Sentinel_Query (Session, Query, Response, Resp_Length,
+  │                  Timeout_Ms => 250, Timed_Out, Retry => True)
+  ▼
+Termicap.OSC.Sentinel_Query    [SPARK_Mode => Off]
+  │
+  │  Attempt 1:
+  │  │
+  │  │  Write_Query (Session, Query, Written, Success)  [FUNC-OSC-005]
+  │  │    → termicap_osc_write(): write() to Session.FD
+  │  │
+  │  │  Write DA1 sentinel (ESC [ c = 0x1B 0x5B 0x63)  [FUNC-OSC-006]
+  │  │    → Write_Query (Session, DA1_SENTINEL, ...)
+  │  │
+  │  │  Accumulation loop:
+  │  │  ┌──────────────────────────────────────────────────────────┐
+  │  │  │  Timed_Read (Session.FD, Chunk, Bytes_Read,             │
+  │  │  │              Timeout_Ms, Timed_Out)  [FUNC-OSC-004]     │
+  │  │  │    → termicap_osc_select_read(): select() + read()      │
+  │  │  │    → if select() timeout: Timed_Out := True; exit loop  │
+  │  │  │    → append Chunk(1..Bytes_Read) to accumulation buffer │
+  │  │  │    → if buffer length >= MAX_RESPONSE_SIZE: treat as    │
+  │  │  │        timeout (FUNC-OSC-009)                            │
+  │  │  │                                                          │
+  │  │  │  Contains_DA1_Response (Buffer, Length)  [SPARK Silver] │
+  │  │  │    → scan for ESC [ ? <digits/semicolons> c pattern     │
+  │  │  │    → if found: DA1 boundary detected; exit loop         │
+  │  │  └──────────────────────────────────────────────────────────┘
+  │  │
+  │  │  if Timed_Out and Retry:
+  │  │    → Attempt 2 with Timeout_Ms * 2 (FUNC-OSC-013)
+  │  │    → identical write + accumulation loop
+  │  │
+  │  │  if DA1 detected:
+  │  │    DA1_Response_Start (Buffer, Length)  [SPARK Silver]
+  │  │      → locate ESC byte starting the DA1 response
+  │  │    Response(1..Start-1) := pre-sentinel bytes
+  │  │    Resp_Length := Start - 1
+  │  │    Timed_Out := False
+  │  │
+  └──► Response populated; Timed_Out reflects final outcome
+```
+
+### Phase C — Close: Restore Termios → Close FD (guaranteed by Finalize)
+
+```
+  │  end;  -- declare block exits: Finalize called on Session
+  ▼
+Termicap.OSC.Finalize / Close  [SPARK_Mode => Off, Ada.Finalization]
+  │
+  │  if Is_Raw:
+  │  │
+  │  │  Restore_Termios (FD, Saved_State, OK)  [FUNC-OSC-002]
+  │  │    → termicap_osc_restore_termios(): copy buffer → tcsetattr(TCSANOW)
+  │  │    → non-fatal: Close_Terminal proceeds regardless of OK
+  │  │
+  │  │  Close_Terminal (FD)  [FUNC-OSC-001]
+  │  │    → termicap_osc_close_fd(): close(FD)
+  │  │    → FD := INVALID_FD
+  │  │
+  │  │  Is_Raw := False  -- releases single-session guard
+  │  │
+  └──► Terminal fully restored; /dev/tty closed; session reusable
+```
+
+**Key properties:**
+
+- `Finalize` is called unconditionally by the Ada runtime on scope exit, including during exception propagation. The terminal is always restored (FUNC-OSC-008).
+- The `Is_Raw` boolean in `Probe_Session` doubles as the single-session guard (FUNC-OSC-012). Setting it to `True` in `Open` and back to `False` in `Finalize`/`Close` prevents concurrent sessions on different scopes.
+- `Drain_Input` (step 6 of `Open`) discards stale bytes that arrived before the query, preventing them from polluting the response accumulation buffer (FUNC-OSC-011).
+- `Contains_DA1_Response` and `DA1_Response_Start` are SPARK Silver functions called from the non-SPARK accumulation loop. The SPARK-provable parsing logic is isolated in `Termicap.OSC.Parsing` while the loop and I/O remain in `SPARK_Mode => Off` (FUNC-OSC-015).
+- On timeout with `Retry => True`, the query and sentinel are resent and the timeout is doubled. This handles slow terminals without requiring the caller to implement retry logic (FUNC-OSC-013).
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1083,4 +1210,5 @@ When `Termicap.Override.Set_Override` has been called before `Get` or `Detect`:
 - **ADR-0012** (`docs/adr/0012-capability-cache-design.md`): Rationale for the per-stream protected cache design
 - **ADR-0013** (`docs/adr/0013-spark-annotation-split-capabilities.md`): Rationale for the SPARK/Ada split in `Termicap.Capabilities`
 - **Tech Spec F10** (`docs/tech-specs/capability-record.md`): Capability record assembly design rationale
+- **Tech Spec OSC** (`docs/tech-specs/osc-query-infra.md`): OSC query infrastructure design rationale — sentinel pattern, C helper design, session lifecycle
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014
