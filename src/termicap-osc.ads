@@ -229,6 +229,34 @@ package Termicap.OSC is
       Timed_Out   : out Boolean;
       Retry       : Boolean := False);
 
+   --  @summary Write a query and accumulate bytes until a DA1 response is found or timeout.
+   --  @description Timeout-only variant of Sentinel_Query for use when the DA1 response
+   --  IS the data being sought (FUNC-DA1-008, ADR-0017).  Unlike Sentinel_Query, no DA1
+   --  sentinel is appended after the query.  The read loop exits when
+   --  Contains_DA1_Response returns True for the accumulated bytes, or when the elapsed
+   --  time exceeds Timeout_Ms.
+   --
+   --  On DA1 detection, Response is populated with all accumulated bytes (including the
+   --  DA1 response itself) and Resp_Length is set to the byte count.  Timed_Out is False.
+   --
+   --  On timeout, Timed_Out is True and Resp_Length is 0.
+   --
+   --  The Session must be open (Is_Open returns True) before calling.
+   --  @param Session     The open probe session providing the terminal FD.
+   --  @param Query       The escape sequence bytes to write (e.g., DA1_QUERY).
+   --  @param Response    Buffer receiving the accumulated response bytes.
+   --  @param Resp_Length Number of valid bytes written into Response.
+   --  @param Timeout_Ms  Millisecond timeout for the read accumulation loop.
+   --  @param Timed_Out   True if no complete DA1 response was detected within Timeout_Ms.
+   --  @relation(FUNC-DA1-008): Timeout-only read loop for DA1 query
+   procedure Timeout_Query
+     (Session     : Probe_Session;
+      Query       : Byte_Array;
+      Response    : out Response_Buffer;
+      Resp_Length : out Natural;
+      Timeout_Ms  : Natural;
+      Timed_Out   : out Boolean);
+
    ---------------------------------------------------------------------------
    --  Low-Level I/O (FUNC-OSC-004, FUNC-OSC-005, FUNC-OSC-007)
    ---------------------------------------------------------------------------

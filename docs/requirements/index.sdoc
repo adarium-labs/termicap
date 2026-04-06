@@ -1,5 +1,6 @@
 [DOCUMENT]
 TITLE: Termicap Requirements
+UID: REQ-INDEX
 
 [GRAMMAR]
 ELEMENTS:
@@ -28,4 +29,42 @@ ELEMENTS:
     REQUIRED: False
   RELATIONS:
   - TYPE: Parent
+
+[SECTION]
+TITLE: Functional Feature Specifications
+
+[REQUIREMENT]
+UID: REQ-INDEX-001
+STATUS: Draft
+PRIORITY: Must
+TITLE: Feature Requirements Index
+STATEMENT: >>>
+This index lists the per-feature functional requirement documents that specify the detailed behaviour of each Termicap sub-system. Each document uses UID-prefixed FUNC-XXX-NNN identifiers and follows the StrictDoc GRAMMAR block format defined in this index.
+
+Feature documents:
+
+  functional/xtversion.sdoc  (REQ-XTV)  — Active terminal identification via XTVERSION (CSI > q / DCS >| ... ST)
+  functional/da1.sdoc        (REQ-DA1)  — DA1 Primary Device Attributes response parsing (CSI c / ESC [ ? Ps ; ... c)
+
+Top-level requirement documents at this level:
+
+  01-vision.sdoc             — Project vision, goals, and scope
+  02-functional.sdoc         — High-level functional requirements summary (REQ-FUNC)
+  03-non-functional.sdoc     — Non-functional requirements (performance, portability, SPARK provability)
+  osc-query-infra.sdoc       — OSC/DCS/CSI probe session and sentinel-bounded query infrastructure
+  bg-color-query.sdoc        — Background and foreground colour detection via OSC 10/11
+  dark-light.sdoc            — Dark/light theme classification via BT.601 luminance (REQ-DKL)
+  terminal-identification.sdoc — Passive terminal identification from environment variables
+  terminal-dimensions.sdoc   — Terminal dimensions detection via TIOCGWINSZ
+  unicode-support.sdoc       — Unicode support level detection
+  color-downsampling.sdoc    — Colour downsampling from TrueColor to 256/16 colour palettes
+  capability_record.sdoc     — Terminal_Capabilities aggregate record assembly
+  func-override.sdoc         — NO_COLOR / FORCE_COLOR / programmatic override
+  sigwinch.sdoc              — SIGWINCH handler for terminal resize notification
+<<<
+COMMENT: >>>
+This index document exists as a navigational aid and cross-reference hub for the full Termicap requirements corpus. StrictDoc discovers all .sdoc files in the docs/requirements/ directory tree automatically; this index does not need to enumerate every file for the tool to process them. Its value is human navigability: a reader opening the requirements directory can find this file first and use it to understand the scope and organisation of the specification before diving into individual feature documents.
+<<<
+
+[/SECTION]
 

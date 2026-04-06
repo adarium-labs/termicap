@@ -424,6 +424,66 @@ package body Termicap.OSC is
       Resp_Length := Out_Length;
    end Sentinel_Query;
 
+   procedure Timeout_Query
+     (Session     : Probe_Session;
+      Query       : Byte_Array;
+      Response    : out Response_Buffer;
+      Resp_Length : out Natural;
+      Timeout_Ms  : Natural;
+      Timed_Out   : out Boolean)
+   is
+      Buffer       : Response_Buffer := [others => 0];
+      Length       : Natural := 0;
+      Chunk        : Byte_Array (1 .. 512);
+      Chunk_Len    : Natural;
+      Chunk_Tout   : Boolean;
+      Written      : Natural;
+      Write_OK     : Boolean;
+      Start_Time   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+      Elapsed_Ms   : Natural;
+      Remaining_Ms : Natural;
+   begin
+      Response    := [others => 0];
+      Resp_Length := 0;
+      Timed_Out   := True;
+
+      --  Write the query (e.g., DA1_QUERY).
+      Write_Query (Session, Query, Written, Write_OK);
+      if not Write_OK then
+         return;
+      end if;
+
+      --  Accumulate bytes until Contains_DA1_Response or timeout.
+      loop
+         Elapsed_Ms :=
+           Natural
+             (Ada.Calendar."-" (Ada.Calendar.Clock, Start_Time) * 1_000.0);
+
+         exit when Elapsed_Ms >= Timeout_Ms;
+
+         Remaining_Ms := Timeout_Ms - Elapsed_Ms;
+
+         Timed_Read (Session.FD, Chunk, Chunk_Len, Remaining_Ms, Chunk_Tout);
+
+         exit when Chunk_Tout or else Chunk_Len = 0;
+
+         --  Overflow protection: treat overflow as timeout.
+         exit when Length + Chunk_Len > MAX_RESPONSE_SIZE;
+
+         for J in 1 .. Chunk_Len loop
+            Buffer (Length + J) := Chunk (J);
+         end loop;
+         Length := Length + Chunk_Len;
+
+         if Termicap.OSC.Parsing.Contains_DA1_Response (Buffer, Length) then
+            Response (1 .. Length) := Buffer (1 .. Length);
+            Resp_Length := Length;
+            Timed_Out := False;
+            return;
+         end if;
+      end loop;
+   end Timeout_Query;
+
    ---------------------------------------------------------------------------
    --  Session Lifecycle (FUNC-OSC-008)
    ---------------------------------------------------------------------------

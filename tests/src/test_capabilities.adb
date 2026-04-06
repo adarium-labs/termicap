@@ -12,6 +12,7 @@ with Ada.Strings.Unbounded;
 
 with Termicap.Capabilities; use Termicap.Capabilities;
 with Termicap.Color;
+with Termicap.DA1;
 with Termicap.Dimensions;
 with Termicap.Override;    use Termicap.Override;
 with Termicap.Terminal_Id;
@@ -48,6 +49,12 @@ package body Test_Capabilities is
       Program_Version => Ada.Strings.Unbounded.Null_Unbounded_String,
       Term_Value      => Ada.Strings.Unbounded.Null_Unbounded_String,
       Is_Multiplexer  => False);
+
+   --  Default DA1_Capabilities - no DA1 response received.
+   Default_DA1 : constant Termicap.DA1.DA1_Capabilities :=
+     (Supported => False,
+      Level     => Termicap.DA1.Unknown,
+      Flags     => [others => False]);
 
 
    overriding function Name (T : Test_Case) return AUnit.Message_String is
@@ -128,7 +135,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.True_Color,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps.Downsampling_Available,
@@ -148,7 +156,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.Extended_256,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps.Downsampling_Available,
@@ -168,7 +177,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.Basic_16,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (not Caps.Downsampling_Available,
@@ -188,7 +198,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (not Caps.Downsampling_Available,
@@ -213,7 +224,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
       Caps_False : constant Terminal_Capabilities :=
         Assemble
           (TTY_Stdin  => False,
@@ -222,7 +234,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps_True.TTY_Stdin,
@@ -245,7 +258,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
       Caps_False : constant Terminal_Capabilities :=
         Assemble
           (TTY_Stdin  => False,
@@ -254,7 +268,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps_True.TTY_Stdout,
@@ -277,7 +292,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
       Caps_False : constant Terminal_Capabilities :=
         Assemble
           (TTY_Stdin  => False,
@@ -286,7 +302,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps_True.TTY_Stderr,
@@ -309,7 +326,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.Extended_256,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps.Color = Termicap.Color.Extended_256,
@@ -334,7 +352,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Custom_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps.Size.Rows = 50,
@@ -363,7 +382,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Termicap.Unicode.Extended,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps.Unicode = Termicap.Unicode.Extended,
@@ -389,7 +409,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.Extended_256,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Xterm_Identity);
+           Identity   => Xterm_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps.Identity.Kind = Termicap.Terminal_Id.Xterm,
@@ -417,7 +438,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.Basic_16,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
       Caps_No_Tty : constant Terminal_Capabilities :=
         Assemble
           (TTY_Stdin  => False,
@@ -426,7 +448,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.None,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps_Tty.Color /= Caps_No_Tty.Color,
@@ -452,7 +475,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.True_Color,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
       Caps_B : constant Terminal_Capabilities :=
         Assemble
           (TTY_Stdin  => False,
@@ -461,7 +485,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.True_Color,
            Size       => Default_Size,
            Unicode    => Default_Unicode,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
    begin
       Assert
         (Caps_A.Color = Caps_B.Color,
@@ -617,7 +642,8 @@ package body Test_Capabilities is
            Color      => Termicap.Color.True_Color,
            Size       => Default_Size,
            Unicode    => Termicap.Unicode.Extended,
-           Identity   => Default_Identity);
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
 
       --  Make a mutable copy and modify several fields.
       Copy : Terminal_Capabilities := Original;

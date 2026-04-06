@@ -37,6 +37,7 @@
 --    - @relation(FUNC-CAP-014): Re-detection on explicit Detect call
 
 with Termicap.Color;
+with Termicap.DA1;
 with Termicap.Dimensions;
 with Termicap.Terminal_Id;
 with Termicap.TTY;
@@ -69,6 +70,7 @@ is
       Unicode                : Termicap.Unicode.Unicode_Level;
       Identity               : Termicap.Terminal_Id.Terminal_Identity;
       Downsampling_Available : Boolean;
+      DA1                    : Termicap.DA1.DA1_Capabilities;
    end record;
 
    ---------------------------------------------------------------------------
@@ -90,6 +92,8 @@ is
    --  @return A fully populated Terminal_Capabilities record.
    --  @relation(FUNC-CAP-012): SPARK Silver â Global => null, provable postcondition
    --  @relation(FUNC-CAP-013): No FFI â all inputs supplied as parameters
+   --  @param DA1        DA1 primary device attributes result.
+   --  @relation(FUNC-DA1-015): DA1 parameter added to Assemble
    function Assemble
      (TTY_Stdin  : Boolean;
       TTY_Stdout : Boolean;
@@ -97,7 +101,8 @@ is
       Color      : Termicap.Color.Color_Level;
       Size       : Termicap.Dimensions.Terminal_Size;
       Unicode    : Termicap.Unicode.Unicode_Level;
-      Identity   : Termicap.Terminal_Id.Terminal_Identity)
+      Identity   : Termicap.Terminal_Id.Terminal_Identity;
+      DA1        : Termicap.DA1.DA1_Capabilities)
       return Terminal_Capabilities
    with
      SPARK_Mode => On,

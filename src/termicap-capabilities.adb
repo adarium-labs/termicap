@@ -12,6 +12,7 @@
 --  (Global => null, Post) is declared in the spec; the prover verifies callers
 --  of Assemble against that contract.
 
+with Termicap.DA1.IO;
 with Termicap.Environment.Capture;
 
 package body Termicap.Capabilities
@@ -29,7 +30,8 @@ is
       Color      : Termicap.Color.Color_Level;
       Size       : Termicap.Dimensions.Terminal_Size;
       Unicode    : Termicap.Unicode.Unicode_Level;
-      Identity   : Termicap.Terminal_Id.Terminal_Identity)
+      Identity   : Termicap.Terminal_Id.Terminal_Identity;
+      DA1        : Termicap.DA1.DA1_Capabilities)
       return Terminal_Capabilities is
    begin
       return
@@ -41,7 +43,8 @@ is
            Size                   => Size,
            Unicode                => Unicode,
            Identity               => Identity,
-           Downsampling_Available => Color >= Termicap.Color.Extended_256);
+           Downsampling_Available => Color >= Termicap.Color.Extended_256,
+           DA1                    => DA1);
    end Assemble;
 
    ---------------------------------------------------------------------------
@@ -95,6 +98,7 @@ is
       Color             : Termicap.Color.Color_Level;
       Size              : Termicap.Dimensions.Terminal_Size;
       Uni               : Termicap.Unicode.Unicode_Level;
+      DA1_Caps          : Termicap.DA1.DA1_Capabilities;
    begin
       --  Step 1: Capture a single environment snapshot for this detection run.
       Termicap.Environment.Capture.Capture_Current (Env);
@@ -121,7 +125,10 @@ is
       --  Step 6: Detect Unicode support level.
       Uni := Termicap.Unicode.Detect_Unicode_Level (Env);
 
-      --  Steps 7 + 8: Derive Downsampling_Available and assemble the record.
+      --  Step 7: Detect DA1 primary device attributes (active probe).
+      DA1_Caps := Termicap.DA1.IO.Detect_DA1 (Timeout_Ms => 100);
+
+      --  Steps 8 + 9: Derive Downsampling_Available and assemble the record.
       return
         Assemble
           (TTY_Stdin  => TTY_All.Stdin,
@@ -130,7 +137,8 @@ is
            Color      => Color,
            Size       => Size,
            Unicode    => Uni,
-           Identity   => Id);
+           Identity   => Id,
+           DA1        => DA1_Caps);
    end Detect;
 
    ---------------------------------------------------------------------------

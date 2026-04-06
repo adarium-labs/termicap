@@ -1,0 +1,575 @@
+[DOCUMENT]
+TITLE: DA1 Primary Device Attributes Response Parsing
+UID: REQ-DA1
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Capability Types (SPARK Silver)
+
+[REQUIREMENT]
+UID: FUNC-DA1-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: DA1_Capability Enumeration
+STATEMENT: >>>
+The library shall define an enumeration type that names the subset of DA1 Ps parameter values most relevant to terminal capability detection:
+
+  type DA1_Capability is
+    (Printer,           --  Ps = 2:  Printer port
+     ReGIS_Graphics,    --  Ps = 3:  ReGIS graphics
+     Sixel_Graphics,    --  Ps = 4:  Sixel graphics
+     Selective_Erase,   --  Ps = 6:  Selective erase
+     User_Defined_Keys, --  Ps = 8:  User-defined keys (UDK)
+     Windowing,         --  Ps = 18: Windowing capability
+     ANSI_Color,        --  Ps = 22: ANSI colour (VT525)
+     Rectangular_Editing);  --  Ps = 28: Rectangular editing
+
+Each literal corresponds to a specific Ps value documented in xterm's primary device attributes response (ESC [ ? Ps ; Ps ; ... c). The enumeration is intentionally limited to capabilities that have practical relevance for terminal detection and feature selection: Sixel_Graphics signals that the terminal can render pixel graphics, ANSI_Color confirms colour support at the hardware-description level, and Windowing indicates resize-message capability.
+
+The type shall be declared in a package with SPARK_Mode => On so that all interpretation logic operating on DA1_Capability values is provable at Silver level.
+<<<
+COMMENT: >>>
+The enumeration is intentionally a curated subset of the full DA1 parameter space. The complete set of standardised Ps values documented by xterm includes obscure VT220/VT300 attributes (e.g., Ps = 7 DRCS soft character sets, Ps = 9 NRCS national replacement character sets, Ps = 12 Serbo-Croatian SCS, Ps = 15 Technical character set, Ps = 19 Session management, Ps = 21 Horizontal scrolling, Ps = 29 ANSI text locator) that have no bearing on decisions made by a modern terminal capability library. Including every known Ps literal would bloat the enumeration and complicate Has_Capability call sites without adding detection value. Callers that need raw parameter inspection can obtain the DA1_Params record directly via Parse_DA1_Response (FUNC-OSC-010) and examine the Values array. The named literals follow Mixed_Case style per the Termicap Ada coding standard rather than ALL_CAPS, because they are enumeration values rather than constants. The eight selected capabilities represent the most widely implemented and most commonly tested subset across the reference frameworks surveyed in the global synthesis.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: VT_Level Conformance Level Enumeration
+STATEMENT: >>>
+The library shall define an enumeration type that represents the VT conformance level communicated by the first parameter of a DA1 response:
+
+  type VT_Level is
+    (Unknown,  --  No DA1 response, or first Ps unrecognised
+     VT100,    --  Ps = 1 (inferred; no modern terminal sends Ps=1 as first param)
+     VT200,    --  Ps = 62
+     VT300,    --  Ps = 63
+     VT400,    --  Ps = 64
+     VT500);   --  Ps = 65
+
+The mapping from first Ps value to VT_Level shall be:
+  - Ps = 62 => VT200
+  - Ps = 63 => VT300
+  - Ps = 64 => VT400
+  - Ps = 65 => VT500
+  - Any other value (including 0 and 1) => Unknown
+
+The value VT100 is reserved in the enumeration for completeness but shall not be assigned by Interpret_DA1 (FUNC-DA1-004) from a first-parameter value, because no modern terminal emulator sends Ps = 1 as the service class parameter; terminals that are VT100-level typically respond with Ps = 62 (VT200 conformance) or higher for backwards compatibility.
+
+Unknown shall be used when Count = 0 (no DA1 response was received) or when the first parameter does not match any of the above Ps values.
+<<<
+COMMENT: >>>
+The first Ps value in a DA1 response is the "conformance class" or "service level" parameter. xterm documentation and DEC terminal manuals define the mapping: 62 = VT200 class, 63 = VT300 class, 64 = VT400 class, 65 = VT500 class. Virtually all modern terminal emulators that respond to DA1 report Ps = 62 at minimum, even when they also support VT300 or VT400 features, because 62 is the widest compatibility baseline. The VT100 literal is included in the enumeration to make it a complete closed set that covers the full conformance range documented by DEC and xterm, without creating a gap that would require an others branch in a case statement. Using Unknown for unrecognised first parameters is consistent with the XTVERSION approach of using a Timeout status rather than asserting a specific terminal version when the response is absent or ambiguous. The enumeration ordering (Unknown first, then ascending VT levels) follows Ada convention of placing the default or failure value first so that a zero-initialised DA1_Capabilities record has Unknown as its VT_Level, consistent with the Supported => False default.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: DA1_Capabilities Record
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-001
+- TYPE: Parent
+  VALUE: FUNC-DA1-002
+STATEMENT: >>>
+The library shall define a record type that aggregates the structured results of a DA1 response interpretation:
+
+  type Capability_Flags is
+    array (DA1_Capability) of Boolean;
+
+  type DA1_Capabilities is record
+     Supported  : Boolean         := False;
+     Level      : VT_Level        := Unknown;
+     Flags      : Capability_Flags := [others => False];
+  end record;
+
+The Supported field shall be False when no DA1 response was received (i.e., the response timed out or Interpret_DA1 was called with Count = 0). When Supported is False, Level shall be Unknown and all Flags entries shall be False.
+
+When Supported is True, Level shall hold the VT conformance level decoded from the first DA1 parameter and Flags shall hold True for each DA1_Capability whose corresponding Ps value appeared in the DA1 response.
+
+The type shall be declared in a package with SPARK_Mode => On. The Capability_Flags array type uses DA1_Capability as the index type, providing direct O(1) access to any individual capability flag without a search loop.
+<<<
+COMMENT: >>>
+Using a Boolean array indexed by DA1_Capability rather than a set of individual Boolean fields (e.g., Has_Sixel : Boolean, Has_ANSI_Color : Boolean) scales cleanly as the enumeration grows and enables iteration over all flags with a for loop. The Capability_Flags type name follows the pattern of similar aggregating arrays in the Termicap library. A default aggregate [others => False] for Flags ensures that any DA1_Capability literal added to the enumeration in the future will automatically default to False in an uninitialized DA1_Capabilities record, preventing a silent "capability present" default. The Supported field mirrors the Boolean discriminant pattern used in Theme_Result (FUNC-DKL-006) and provides a quick top-level guard: callers can check Caps.Supported before inspecting any other field, without needing to test Level = Unknown or all Flags = False individually. Keeping a plain (non-discriminated) record rather than a discriminated one is deliberate here: the DA1_Capabilities record does not have variant components, so a discriminated record would add syntactic overhead without adding type safety; instead, Supported acts as a semantic guard enforced by convention and documented here.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Interpretation Functions (SPARK Silver)
+
+[REQUIREMENT]
+UID: FUNC-DA1-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Interpret_DA1 Pure SPARK Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-001
+- TYPE: Parent
+  VALUE: FUNC-DA1-002
+- TYPE: Parent
+  VALUE: FUNC-DA1-003
+STATEMENT: >>>
+The library shall define a pure SPARK function that converts a DA1_Params record (from Termicap.OSC.Parsing, FUNC-OSC-010) into a DA1_Capabilities record:
+
+  function Interpret_DA1
+    (Params : Termicap.OSC.Parsing.DA1_Params) return DA1_Capabilities
+  with
+    SPARK_Mode => On,
+    Global     => null,
+    Post       =>
+      (if Params.Count = 0
+       then not Interpret_DA1'Result.Supported
+              and then Interpret_DA1'Result.Level = Unknown)
+      and then
+      (if Params.Count > 0
+       then Interpret_DA1'Result.Supported);
+
+The function shall execute the following algorithm:
+
+  1. If Params.Count = 0, return DA1_Capabilities'(Supported => False, Level => Unknown, Flags => [others => False]).
+
+  2. Set Supported := True.
+
+  3. Decode the first parameter (Params.Values(1)) as the VT conformance level:
+       62 => VT200
+       63 => VT300
+       64 => VT400
+       65 => VT500
+       all others => Unknown
+
+  4. Scan Params.Values(2 .. Params.Count) (the capability parameters). For each value V:
+       2  => set Flags(Printer)           := True
+       3  => set Flags(ReGIS_Graphics)    := True
+       4  => set Flags(Sixel_Graphics)    := True
+       6  => set Flags(Selective_Erase)   := True
+       8  => set Flags(User_Defined_Keys) := True
+       18 => set Flags(Windowing)         := True
+       22 => set Flags(ANSI_Color)        := True
+       28 => set Flags(Rectangular_Editing) := True
+       any other value => ignored (no error, no flag set)
+
+  5. Return DA1_Capabilities'(Supported => True, Level => <decoded level>, Flags => <populated flags>).
+
+All loops in the function body shall be bounded by Params.Count <= MAX_DA1_PARAMS (FUNC-OSC-010), ensuring that the SPARK prover can verify the absence of index-out-of-bounds errors without manual loop invariants.
+<<<
+COMMENT: >>>
+Interpret_DA1 is the pure computational core of the DA1 feature, directly analogous to Classify_Theme (FUNC-DKL-003) for the dark/light feature and Parse_XTVERSION_Response (FUNC-XTV-006) for the XTVERSION feature. Accepting a DA1_Params record (already extracted by the existing Parse_DA1_Response in FUNC-OSC-010) rather than a raw Byte_Array maintains the established separation of concerns: the OSC.Parsing package handles byte-level parsing, and the DA1-specific package handles semantic interpretation. The postcondition expresses the two fundamental invariants: Count = 0 implies Supported = False and Level = Unknown, and Count > 0 implies Supported = True. These are provable at Silver level because they follow directly from the algorithm structure. The "unknown Ps values ignored" behaviour (step 4) is intentional: terminals may advertise vendor-specific or future-standard capabilities that Termicap does not yet enumerate; silently ignoring them preserves forward compatibility and avoids classification errors. The loop bound by MAX_DA1_PARAMS (16) satisfies SPARK's requirement for finite loop iteration and allows GNATprove to discharge all array-index obligations.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Has_Capability Convenience Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-001
+- TYPE: Parent
+  VALUE: FUNC-DA1-003
+- TYPE: Parent
+  VALUE: FUNC-DA1-004
+STATEMENT: >>>
+The library shall define a pure SPARK convenience function for querying a specific capability flag from a DA1_Capabilities record:
+
+  function Has_Capability
+    (Caps : DA1_Capabilities; Cap : DA1_Capability) return Boolean
+  with
+    SPARK_Mode => On,
+    Global     => null,
+    Post       =>
+      Has_Capability'Result = (Caps.Supported and then Caps.Flags (Cap));
+
+The function shall return True if and only if Caps.Supported is True and Caps.Flags(Cap) is True. When Caps.Supported is False, Has_Capability shall always return False regardless of the Cap parameter value, even if a Flags entry happens to be True (which cannot occur by construction via Interpret_DA1, but is guarded for defensiveness).
+
+A representative implementation:
+
+  function Has_Capability
+    (Caps : DA1_Capabilities; Cap : DA1_Capability) return Boolean is
+    (Caps.Supported and then Caps.Flags (Cap));
+<<<
+COMMENT: >>>
+The short-circuit evaluation of Caps.Supported and then Caps.Flags(Cap) ensures that Has_Capability returns False when there was no DA1 response, even without the caller first testing Caps.Supported. This mirrors the Is_Dark / Is_Light pattern (FUNC-DKL-004) where a single Boolean function provides a clean call site with a machine-verifiable postcondition expressing the exact semantic equivalence. The postcondition Post => Has_Capability'Result = (Caps.Supported and then Caps.Flags(Cap)) can be discharged by the SPARK prover through simple expression rewriting when the function is implemented as an expression function. Providing Has_Capability as a named function rather than requiring callers to write Caps.Supported and then Caps.Flags(Sixel_Graphics) directly improves readability, enables uniform null-safety (Supported guard), and creates a single point for future extension (e.g., a logging callback or an overriding capability).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: VT_Level_Of Convenience Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-002
+- TYPE: Parent
+  VALUE: FUNC-DA1-003
+STATEMENT: >>>
+The library shall define a pure SPARK convenience function for extracting the VT conformance level from a DA1_Capabilities record:
+
+  function VT_Level_Of
+    (Caps : DA1_Capabilities) return VT_Level
+  with
+    SPARK_Mode => On,
+    Global     => null,
+    Post       =>
+      VT_Level_Of'Result = Caps.Level
+      and then (if not Caps.Supported
+                then VT_Level_Of'Result = Unknown);
+
+The function shall return Caps.Level directly. When Caps.Supported is False, this will always be Unknown (by the construction of Interpret_DA1, FUNC-DA1-004, and the default initialisation in FUNC-DA1-003).
+
+A representative implementation:
+
+  function VT_Level_Of
+    (Caps : DA1_Capabilities) return VT_Level is
+    (Caps.Level);
+<<<
+COMMENT: >>>
+VT_Level_Of is a minimal accessor function whose primary value is its postcondition. The contract (if not Caps.Supported then result = Unknown) gives SPARK-annotated callers a provable fact they can use in their own proofs: any call site that knows Caps.Supported = False may substitute Unknown directly. This completes the set of three semantic accessor operations for DA1_Capabilities: VT_Level_Of for the conformance level, Has_Capability for individual feature flags, and Caps.Supported for the top-level presence check. Providing VT_Level_Of as a named function rather than direct field access follows the same accessor pattern used throughout the Termicap library and allows the implementation to add pre-processing (e.g., clamping or override) in the future without changing call sites.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Query Constant and I/O (Ada FFI Boundary)
+
+[REQUIREMENT]
+UID: FUNC-DA1-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: DA1_QUERY Byte Constant
+STATEMENT: >>>
+The library shall define a named byte-array constant encoding the DA1 query escape sequence:
+
+  DA1_QUERY : constant Byte_Array :=
+    [16#1B#,                          --  ESC
+     16#5B#,                          --  [   (CSI introducer)
+     16#63#];                         --  c   (Primary Device Attributes)
+
+This sequence encodes the three-byte string ESC [ c (CSI c), which is the canonical Primary Device Attributes (DA1) request. The constant shall be defined in the types or parsing package (SPARK_Mode On) alongside the DA1_Capability and VT_Level types, so that it can be referenced by both the I/O layer and test code without crossing a SPARK_Mode boundary.
+
+Note on dual use: the same byte sequence ESC [ c is used elsewhere in Termicap as the DA1 sentinel appended after every OSC query (FUNC-OSC-006, Termicap.OSC.Sentinel_Query). In that context it is a boundary marker whose response terminates the read loop. In this feature, DA1_QUERY is the primary query, and the response is the capability advertisement rather than a boundary marker. The two uses are semantically distinct and handled by separate procedures.
+<<<
+COMMENT: >>>
+Defining DA1_QUERY as a named constant follows the pattern of CSI_XTVERSION_QUERY (FUNC-XTV-002) and OSC_BG_QUERY / OSC_FG_QUERY for background/foreground colour detection. A named constant is self-documenting, avoids silent byte-order mistakes in anonymous literals, and can be referenced in test assertions. The dual-use note is important context for maintainers: someone reading the OSC package might wonder why a "DA1 sentinel" constant is not used here. The answer is that the sentinel pattern sends CSI c as a suffix to another query, while DA1_QUERY is sent alone as the primary request. Defining both as named constants (potentially the same byte values) is harmless and clarifying.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Query_DA1 I/O Procedure
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-007
+STATEMENT: >>>
+The library shall provide an I/O boundary procedure compiled with SPARK_Mode => Off that sends the DA1 query to the active terminal and accumulates the response:
+
+  procedure Query_DA1
+    (Timeout_Ms  :     Natural;
+     Response    : out Byte_Array;
+     Resp_Length : out Natural;
+     Timed_Out   : out Boolean)
+  with Pre => Response'Length >= MAX_RESPONSE_SIZE;
+
+The procedure shall execute the following algorithm:
+
+  1. Determine the multiplexer passthrough mode from a live terminal identity snapshot (same mechanism as FUNC-XTV-008: call Detect_Terminal_Identity, inspect Is_Multiplexer and Kind).
+
+  2. If passthrough is required, wrap DA1_QUERY (FUNC-DA1-007) using Termicap.OSC.Parsing.Wrap_For_Passthrough (FUNC-OSC-014).
+
+  3. Open a Probe_Session (FUNC-OSC-008). If the session fails to open for any reason (Session_Not_Foreground, Session_No_Terminal, Session_Save_Failed, Session_Raw_Failed, Session_Already_Active), set Timed_Out := True, Resp_Length := 0, and return.
+
+  4. Write the (possibly wrapped) DA1_QUERY bytes to the terminal.
+
+  5. Enter a read loop: call Timed_Read in a loop, accumulating bytes into Response. After each read batch, call Contains_DA1_Response (FUNC-OSC-006) on the accumulated bytes. Exit the loop when Contains_DA1_Response returns True or when the elapsed time exceeds Timeout_Ms.
+
+  6. If Contains_DA1_Response returned True, set Resp_Length to the length of the accumulated bytes, set Timed_Out := False.
+
+  7. If the loop exited due to timeout, set Timed_Out := True, Resp_Length := 0.
+
+  8. Allow the Probe_Session to close unconditionally via RAII finalization.
+
+This procedure shall not raise an exception on any code path.
+
+Unlike OSC queries that use Sentinel_Query (which appends a second CSI c as a boundary marker), Query_DA1 must use a timeout-only termination approach with Contains_DA1_Response as the exit condition, because the DA1 response IS the response being sought. Appending a second DA1 sentinel would produce two overlapping DA1 responses in the accumulation buffer, making boundary detection ambiguous.
+<<<
+COMMENT: >>>
+The critical design difference between Query_DA1 and all other I/O procedures in the Termicap library is that Query_DA1 cannot use Sentinel_Query. Every other active probe (XTVERSION, background colour, foreground colour) works by sending "the real query" followed by CSI c (DA1 sentinel), and then waiting for the DA1 response to appear as a boundary. For the DA1 query itself, the DA1 response is what we are looking for — there is no natural "next thing" to use as a sentinel. Appending a second CSI c would create two consecutive DA1 requests, and the terminal might respond to both, making it impossible to know which response is the "real" one and which is the boundary. The timeout-only approach (read until Contains_DA1_Response detects a complete DA1 response or until Timeout_Ms expires) is therefore the correct design. This is also consistent with how tcell and notcurses handle direct DA1 queries: they use a wall-clock timeout and exit as soon as a complete response is detected. The 100 ms default (used by Detect_DA1, FUNC-DA1-009) is appropriate for local terminals; the Timeout_Ms parameter allows callers to adjust for slow links or highly loaded systems.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detect_DA1 Top-Level Convenience Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-003
+- TYPE: Parent
+  VALUE: FUNC-DA1-004
+- TYPE: Parent
+  VALUE: FUNC-DA1-008
+STATEMENT: >>>
+The library shall provide a top-level convenience function that combines Query_DA1, Parse_DA1_Response, and Interpret_DA1 into a single call:
+
+  function Detect_DA1
+    (Timeout_Ms : Natural := 100) return DA1_Capabilities;
+
+The function shall execute the following algorithm:
+
+  1. Declare a Response : Response_Buffer and Resp_Length : Natural.
+  2. Call Query_DA1 (Timeout_Ms, Response, Resp_Length, Timed_Out).
+  3. If Timed_Out is True, return DA1_Capabilities'(Supported => False, Level => Unknown, Flags => [others => False]).
+  4. Call Parse_DA1_Response (Response, Resp_Length) to obtain a DA1_Params record.
+  5. Call Interpret_DA1 (Params) to obtain a DA1_Capabilities record.
+  6. Return the DA1_Capabilities result.
+
+This function is an Ada FFI boundary (SPARK_Mode => Off) because it calls Query_DA1, which performs I/O. The default timeout of 100 milliseconds is consistent with Query_And_Identify (FUNC-XTV-013) and is appropriate for local terminal sessions. Callers requiring reduced latency (e.g., startup-time capability detection) may pass a smaller value; callers operating over high-latency links (SSH, serial) may pass a larger value.
+
+The function shall not raise an exception on any code path.
+<<<
+COMMENT: >>>
+Detect_DA1 follows the same "one-stop-shop" convenience function pattern as Query_And_Identify (FUNC-XTV-013) and Detect_Theme (FUNC-DKL-005). It eliminates the need for callers to manage a Response_Buffer, declare an intermediate DA1_Params, or handle the Timed_Out flag manually. Returning an empty DA1_Capabilities (Supported = False) on timeout is consistent with the library's convention of treating non-response as a clean, expected outcome rather than an error — terminals that do not respond to DA1 exist (some dumb terminals, restricted CI environments) and should not cause exception propagation in the calling application. The function name Detect_DA1 rather than Query_DA1_And_Parse follows the naming convention established by Detect_Background_Color (FUNC-BGC-013) and Detect_Theme (FUNC-DKL-005) for high-level, "do everything" entry points.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Safety Guards
+
+[REQUIREMENT]
+UID: FUNC-DA1-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Foreground Process Group Check
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-008
+STATEMENT: >>>
+The Query_DA1 procedure shall not send the DA1 query sequence if the calling process is not in the terminal's foreground process group. This guard is performed implicitly by the Probe_Session.Open call (FUNC-OSC-007 / FUNC-OSC-008): if Is_Foreground_Process returns False, Open returns Session_Not_Foreground without entering raw mode or writing any bytes to the terminal.
+
+Query_DA1 shall treat Session_Not_Foreground identically to any other session-open failure: set Timed_Out := True, Resp_Length := 0, and return without sending DA1_QUERY.
+
+No additional foreground-check logic is required in Query_DA1 beyond what Probe_Session.Open already provides.
+<<<
+COMMENT: >>>
+Sending escape sequence queries from a background job causes visible terminal corruption: the terminal processes the query bytes as user input while another program holds the foreground. Because the existing Probe_Session.Open already performs this check via Is_Foreground_Process (FUNC-OSC-007), Query_DA1 inherits the guard at no additional implementation cost. This requirement makes the dependency explicit so that future refactors of the session lifecycle do not accidentally omit the guard for DA1 queries. The pattern is identical to the XTVERSION guard (FUNC-XTV-010) and the background-colour guard (FUNC-BGC-006).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Not-a-TTY Guard
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-008
+STATEMENT: >>>
+The Query_DA1 procedure shall not send the DA1 query sequence when there is no controlling terminal available. This guard is performed implicitly by Probe_Session.Open (FUNC-OSC-001 / FUNC-OSC-008): if /dev/tty cannot be opened, Open returns Session_No_Terminal.
+
+Query_DA1 shall treat Session_No_Terminal identically to any other session-open failure: set Timed_Out := True, Resp_Length := 0, and return without sending DA1_QUERY.
+
+The procedure shall therefore return a clean "no response" result (DA1_Capabilities with Supported = False, via Detect_DA1 FUNC-DA1-009) rather than raising an exception or returning an error code when the process is running in a non-interactive context (e.g., inside a CI pipeline, under a shell script with no controlling terminal).
+<<<
+COMMENT: >>>
+Interactive terminal queries are meaningless when there is no terminal. The not-a-TTY case is the most common failure mode in CI environments and when programs are invoked from cron or as daemons. Returning Timed_Out := True in this case is consistent with Query_XTVERSION (FUNC-XTV-011) and Query_Color (FUNC-BGC-006), ensuring that callers can treat all non-success outcomes uniformly: a DA1_Capabilities record with Supported = False indicates "no DA1 information available" regardless of whether the cause was a timeout, a missing TTY, or a background process rejection.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Multiplexer Passthrough Awareness
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-007
+- TYPE: Parent
+  VALUE: FUNC-DA1-008
+STATEMENT: >>>
+When the active terminal session is running inside a terminal multiplexer (Is_Multiplexer = True in the Terminal_Identity returned by Detect_Terminal_Identity), the Query_DA1 procedure shall wrap DA1_QUERY using Termicap.OSC.Parsing.Wrap_For_Passthrough (FUNC-OSC-014) before writing the bytes to the terminal.
+
+For a tmux session (Passthrough_Mode = Tmux_Passthrough), the query shall be wrapped as:
+  ESC P tmux ; ESC ESC [ c ESC \
+
+For a GNU Screen session (Passthrough_Mode = Screen_Passthrough), the query shall be wrapped as:
+  ESC P ESC [ c ESC \
+
+When Is_Multiplexer = False (No_Passthrough), the DA1_QUERY shall be sent unwrapped.
+
+The multiplexer kind shall be determined from the Is_Multiplexer flag and the Kind field of Terminal_Identity using the same selection logic as FUNC-XTV-012: Kind = Tmux selects Tmux_Passthrough; Kind = Screen selects Screen_Passthrough; any other terminal with Is_Multiplexer = True shall use Tmux_Passthrough as a safe default.
+<<<
+COMMENT: >>>
+Without passthrough wrapping, tmux intercepts CSI c and responds on behalf of itself rather than forwarding the query to the outer terminal. The tmux DA1 response reports tmux's own capability level, not that of the underlying terminal emulator — which defeats the purpose of querying DA1. The passthrough mechanism (FUNC-OSC-014) is already implemented and tested in Termicap.OSC.Parsing; Query_DA1 selects the correct mode based on Terminal_Identity using the identical logic as Query_XTVERSION (FUNC-XTV-012). The passthrough-wrapped DA1 query reaches the outer terminal, which responds with its own DA1 parameters, providing accurate capability information even in multiplexed sessions. The Tmux_Passthrough default for ambiguous multiplexer cases (Is_Multiplexer = True but Kind is neither Tmux nor Screen) is conservative and consistent with the XTVERSION passthrough decision (FUNC-XTV-012).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK Provability and Testability
+
+[REQUIREMENT]
+UID: FUNC-DA1-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Boundary Partition
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-001
+- TYPE: Parent
+  VALUE: FUNC-DA1-002
+- TYPE: Parent
+  VALUE: FUNC-DA1-003
+- TYPE: Parent
+  VALUE: FUNC-DA1-004
+- TYPE: Parent
+  VALUE: FUNC-DA1-005
+- TYPE: Parent
+  VALUE: FUNC-DA1-006
+STATEMENT: >>>
+The DA1 feature shall be partitioned into two distinct compilation units according to SPARK_Mode:
+
+  SPARK_Mode => On (Silver target):
+    Package: Termicap.DA1 (or Termicap.DA1.Types)
+    Contains: DA1_Capability enumeration (FUNC-DA1-001), VT_Level enumeration
+    (FUNC-DA1-002), DA1_Capabilities record (FUNC-DA1-003), DA1_QUERY constant
+    (FUNC-DA1-007), Interpret_DA1 (FUNC-DA1-004), Has_Capability (FUNC-DA1-005),
+    VT_Level_Of (FUNC-DA1-006).
+
+  SPARK_Mode => Off (Ada FFI boundary):
+    Package: Termicap.DA1.IO (or Termicap.DA1.Query)
+    Contains: Query_DA1 (FUNC-DA1-008), Detect_DA1 (FUNC-DA1-009).
+
+All subprograms in the SPARK_Mode => On package shall carry Global => null contracts. No dynamic allocation, no OS calls, and no unbounded loops shall appear in the package body. The SPARK prover shall be able to discharge all proof obligations at Silver level (flow analysis + type safety + absence of runtime errors for bounded arithmetic) without manual lemmas.
+
+The SPARK_Mode => Off annotation on the I/O package specification (not merely the body) shall prevent SPARK-annotated callers from inadvertently calling I/O subprograms without a mode barrier.
+<<<
+COMMENT: >>>
+The SPARK Silver target (rather than Gold) is appropriate for Interpret_DA1 because it contains a loop over Params.Count iterations. Silver level requires termination (the loop bound is MAX_DA1_PARAMS = 16, a compile-time constant) and absence of array-index violations (the Values array is indexed 1..MAX_DA1_PARAMS, and the loop variable is bounded by Count <= MAX_DA1_PARAMS). Gold level additionally requires absence of overflow, which is trivially satisfied here because all operations are comparisons and Boolean assignments, but the Silver designation is sufficient for the feature's requirements. The two-package partition follows the boundary established for OSC.Parsing (FUNC-OSC-015) and XTVERSION (FUNC-XTV-007): SPARK-provable logic in a named sub-package, I/O in a separate child. This pattern allows the SPARK package to be analysed in isolation by GNATprove without dragging in Ada.Finalization, POSIX wrappers, or other SPARK-incompatible dependencies.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-DA1-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unit Testability of Interpretation Functions
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-004
+- TYPE: Parent
+  VALUE: FUNC-DA1-005
+- TYPE: Parent
+  VALUE: FUNC-DA1-006
+STATEMENT: >>>
+Each pure SPARK function in the DA1 types/interpretation package (Interpret_DA1, Has_Capability, VT_Level_Of) shall be independently testable by constructing DA1_Params values directly and asserting the expected DA1_Capabilities output. The test suite shall include at minimum the following cases:
+
+  1. Empty params (Count = 0):
+     Interpret_DA1 returns DA1_Capabilities with Supported = False,
+     Level = Unknown, all Flags = False.
+
+  2. Single-param VT200 response (Count = 1, Values(1) = 62):
+     Level = VT200, Supported = True, all Flags = False.
+
+  3. VT200 with Sixel (Count = 2, Values = [62, 4]):
+     Level = VT200, Flags(Sixel_Graphics) = True, all other Flags = False.
+
+  4. VT400 with multiple capabilities (Count = 4, Values = [64, 4, 22, 28]):
+     Level = VT400, Flags(Sixel_Graphics) = True, Flags(ANSI_Color) = True,
+     Flags(Rectangular_Editing) = True, Flags(Printer) = False.
+
+  5. Unknown first parameter (Count = 1, Values(1) = 99):
+     Supported = True, Level = Unknown.
+
+  6. VT500 response with unrecognised capability Ps values (Count = 3, Values = [65, 100, 200]):
+     Level = VT500, all Flags = False (unknown Ps values silently ignored).
+
+  7. Has_Capability: returns False when Supported = False, regardless of
+     any Cap argument.
+
+  8. Has_Capability: returns True for Sixel_Graphics in a VT200+Sixel result
+     (case 3 above).
+
+  9. VT_Level_Of: returns Unknown when Supported = False.
+
+  10. VT_Level_Of: returns VT400 for a VT400-level DA1_Capabilities.
+
+  11. Maximum-parameter response (Count = MAX_DA1_PARAMS, all values set):
+      Verify no constraint error, all recognised Ps values flagged correctly.
+
+All tests shall use programmatically constructed DA1_Params values and shall not require a live terminal. Tests shall be located in the tests/src/ directory and integrated into the existing Termicap test runner.
+<<<
+COMMENT: >>>
+Explicit testability requirements at specification time, rather than as an implementation afterthought, ensure that the test suite covers all semantically distinct input classes. The eleven test cases correspond directly to the branches and edge conditions in Interpret_DA1's algorithm (FUNC-DA1-004): the Count = 0 guard, each VT_Level mapping, individual capability flag settings, unrecognised Ps passthrough, and the MAX_DA1_PARAMS boundary. Test cases 7 and 9 verify that Has_Capability and VT_Level_Of correctly propagate the Supported = False guard. Test case 11 (full MAX_DA1_PARAMS) exercises the loop upper bound and guards against off-by-one errors in the parameter scan. The requirement to place tests in tests/src/ and integrate them into the existing runner follows the project testing standard described in CLAUDE.md.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with Terminal_Capabilities
+
+[REQUIREMENT]
+UID: FUNC-DA1-015
+STATUS: Approved
+PRIORITY: Should
+TITLE: DA1_Capabilities Field in Terminal_Capabilities Record
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-DA1-003
+- TYPE: Parent
+  VALUE: FUNC-DA1-009
+STATEMENT: >>>
+The Terminal_Capabilities record in Termicap.Capabilities (FUNC-CAP-001) should be extended with a DA1 field:
+
+  type Terminal_Capabilities is record
+     --  ... existing fields ...
+     TTY_Stdin              : Boolean;
+     TTY_Stdout             : Boolean;
+     TTY_Stderr             : Boolean;
+     Color                  : Termicap.Color.Color_Level;
+     Size                   : Termicap.Dimensions.Terminal_Size;
+     Unicode                : Termicap.Unicode.Unicode_Level;
+     Identity               : Termicap.Terminal_Id.Terminal_Identity;
+     Downsampling_Available : Boolean;
+     DA1                    : Termicap.DA1.DA1_Capabilities;  --  NEW
+  end record;
+
+The Assemble function (FUNC-CAP-012) should be extended with a corresponding DA1 parameter, and the Detect function (FUNC-CAP-004) should call Detect_DA1 (FUNC-DA1-009) with a default timeout of 100 ms to populate the DA1 field in the Terminal_Capabilities result.
+
+When Detect_DA1 returns DA1_Capabilities with Supported = False (timeout or no-TTY), the DA1 field in Terminal_Capabilities shall still be set to the returned DA1_Capabilities value (with Supported = False). This is not an error condition; it reflects a terminal that either does not respond to DA1 queries or was queried in a non-interactive context.
+
+Downsampling_Available and other derived fields in Terminal_Capabilities shall not be affected by the DA1 field.
+<<<
+COMMENT: >>>
+This requirement is priority Should rather than Must because it modifies the Terminal_Capabilities record, which is a public API type. Adding a field is a non-breaking change in Ada (existing record aggregates that do not use named notation would require updating, but the library's own code uses named notation throughout), but it represents a visible API extension that warrants the "Should" designation pending review of the full API surface impact. The DA1 field is valuable in Terminal_Capabilities because it gives callers a single record with all capability information, including hardware-level feature advertisements (Sixel, colour depth class, VT conformance level) that complement the higher-level Color_Level and Unicode_Level fields. For example, a caller could use Caps.DA1 to confirm Sixel support before attempting pixel-art rendering, alongside Caps.Color for the colour depth required by that rendering. Calling Detect_DA1 from within Detect adds one additional terminal round-trip (the DA1 query) to the full detection sequence; the 100 ms default timeout is acceptable given that Detect is typically called once at program startup and DA1 queries are short (3 bytes sent, ~15 bytes received on modern terminals).
+<<<
+
+[/SECTION]

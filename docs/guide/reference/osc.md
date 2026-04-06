@@ -221,6 +221,39 @@ The session must be open (`Is_Open = True`) before calling.
 
 ---
 
+#### `Timeout_Query`
+
+```ada
+procedure Timeout_Query
+  (Session     : Probe_Session;
+   Query       : Byte_Array;
+   Response    : out Response_Buffer;
+   Resp_Length : out Natural;
+   Timeout_Ms  : Natural;
+   Timed_Out   : out Boolean);
+```
+
+Write `Query` to the terminal and accumulate bytes until a DA1 response is detected or the timeout elapses. Unlike `Sentinel_Query`, no DA1 sentinel is appended after `Query`.
+
+| Parameter | Mode | Description |
+|-----------|------|-------------|
+| `Session` | in | Open probe session providing the terminal FD |
+| `Query` | in | Escape sequence bytes to send (e.g., `DA1_QUERY`) |
+| `Response` | out | Buffer receiving all accumulated response bytes (including the DA1 response itself) |
+| `Resp_Length` | out | Number of valid bytes written into `Response` |
+| `Timeout_Ms` | in | Millisecond timeout for the read accumulation loop |
+| `Timed_Out` | out | `True` if no complete DA1 response was detected within `Timeout_Ms` |
+
+The read loop calls `Contains_DA1_Response` after each `Timed_Read` batch and exits on detection. On DA1 detection, `Response(1 .. Resp_Length)` contains all accumulated bytes (including the DA1 response itself) and `Timed_Out = False`. On timeout, `Timed_Out = True` and `Resp_Length = 0`.
+
+Use this procedure instead of `Sentinel_Query` when the DA1 response **is** the data being sought (e.g., `Termicap.DA1.IO.Query_DA1`). Appending a sentinel in that case would produce two overlapping DA1 sequences in the buffer, making boundary detection ambiguous (ADR-0017).
+
+The session must be open (`Is_Open = True`) before calling.
+
+**Requirements:** FUNC-DA1-008
+
+---
+
 ### Low-Level I/O
 
 #### `Write_Query`

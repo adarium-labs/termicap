@@ -10,5 +10,6 @@ aggregate project Termicap_Examples is
                           "override_demo/override_demo.gpr",
                           "capabilities_demo/capabilities_demo.gpr",
                           "osc_probe_demo/osc_probe_demo.gpr",
-                          "xtversion_demo/xtversion_demo.gpr");
+                          "xtversion_demo/xtversion_demo.gpr",
+                          "da1_demo/da1_demo.gpr");
 end Termicap_Examples;

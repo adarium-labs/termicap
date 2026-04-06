@@ -25,6 +25,8 @@ Termicap                          (root namespace — no types or subprograms)
 │   └── Termicap.OSC.Parsing      [SPARK Silver] — pure DA1 sentinel detection, response parsing, passthrough wrapping
 ├── Termicap.XTVERSION            [SPARK Silver] — XTVERSION_Status/Result/Payload_Slice/Token_Pair types, CSI_XTVERSION_QUERY constant, pure DCS parsing functions
 │   └── Termicap.XTVERSION.IO     [SPARK_Mode => Off] — Query_XTVERSION I/O via Probe_Session, Query_And_Identify convenience function
+├── Termicap.DA1                  [SPARK Silver] — DA1_Capability/VT_Level/Capability_Flags/DA1_Capabilities types, DA1_QUERY constant, pure interpretation functions
+│   └── Termicap.DA1.IO           [SPARK_Mode => Off] — Query_DA1 timeout-only I/O via Probe_Session, Detect_DA1 convenience function
 └── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
@@ -543,13 +545,13 @@ The pure `Assemble` function is SPARK Silver-provable (`Global => null`) and car
 |----------|-------|
 | Files | `src/termicap-capabilities.ads`, `src/termicap-capabilities.adb` |
 | SPARK_Mode | On (spec and `Assemble` function); Off (protected cache, `Detect` and `Get` bodies) |
-| Dependencies | `Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, `Termicap.Terminal_Id` |
+| Dependencies | `Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, `Termicap.Terminal_Id`, `Termicap.DA1`, `Termicap.DA1.IO` |
 
 #### Key Types
 
 | Type | Description |
 |------|-------------|
-| `Terminal_Capabilities` | Plain Ada record with eight fields: `TTY_Stdin : Boolean`, `TTY_Stdout : Boolean`, `TTY_Stderr : Boolean`, `Color : Termicap.Color.Color_Level`, `Size : Termicap.Dimensions.Terminal_Size`, `Unicode : Termicap.Unicode.Unicode_Level`, `Identity : Termicap.Terminal_Id.Terminal_Identity`, and `Downsampling_Available : Boolean`. Value semantics — assignment produces an independent copy with no aliasing. |
+| `Terminal_Capabilities` | Plain Ada record with nine fields: `TTY_Stdin : Boolean`, `TTY_Stdout : Boolean`, `TTY_Stderr : Boolean`, `Color : Termicap.Color.Color_Level`, `Size : Termicap.Dimensions.Terminal_Size`, `Unicode : Termicap.Unicode.Unicode_Level`, `Identity : Termicap.Terminal_Id.Terminal_Identity`, `Downsampling_Available : Boolean`, and `DA1 : Termicap.DA1.DA1_Capabilities`. Value semantics — assignment produces an independent copy with no aliasing. |
 
 #### Public Operations
 
@@ -575,7 +577,7 @@ Both `Detect` and `Get` accept a `Stream : Termicap.TTY.Stream_Kind` parameter w
 
 It encapsulates the full open / raw-mode / query / restore / close lifecycle in `Probe_Session`, a `Limited_Controlled` type whose `Finalize` unconditionally restores termios and closes `/dev/tty` on scope exit or exception propagation. Before opening, the foreground process group is checked via `ioctl(TIOCGPGRP)` to avoid sending queries from background jobs. Only one `Probe_Session` may be open at a time; a concurrent `Open` call returns `Session_Already_Active`.
 
-The sentinel-bounded query pattern (`Sentinel_Query`) writes the user query followed by the DA1 sentinel (`ESC [ c`) and accumulates response bytes until the DA1 response (`ESC [ ? … c`) is detected or the timeout expires. Pure parsing and detection logic is isolated in the SPARK Silver child package `Termicap.OSC.Parsing`.
+The sentinel-bounded query pattern (`Sentinel_Query`) writes the user query followed by the DA1 sentinel (`ESC [ c`) and accumulates response bytes until the DA1 response (`ESC [ ? … c`) is detected or the timeout expires. A complementary `Timeout_Query` procedure provides a sentinel-free alternative for callers where the DA1 response itself is the data being sought (ADR-0017): it writes the query without appending a sentinel and exits the read loop when `Contains_DA1_Response` returns True or the timeout expires. Pure parsing and detection logic is isolated in the SPARK Silver child package `Termicap.OSC.Parsing`.
 
 All termios manipulation is delegated to a C helper (`src/c/termicap_osc.c`) which exposes nine fixed-signature functions, avoiding the need to map the platform-specific `struct termios` layout in Ada. The `select()` timed-read path uses the same C helper to avoid the `FD_SET`/`FD_ZERO` macro problem.
 
@@ -605,6 +607,7 @@ All termios manipulation is delegated to a C helper (`src/c/termicap_osc.c`) whi
 | `Is_Open` | Function | FUNC-OSC-008 |
 | `Close` | Procedure | FUNC-OSC-008 |
 | `Sentinel_Query` | Procedure | FUNC-OSC-006, FUNC-OSC-009, FUNC-OSC-013 |
+| `Timeout_Query` | Procedure | FUNC-DA1-008 |
 | `Write_Query` | Procedure | FUNC-OSC-005 |
 | `Timed_Read` | Procedure | FUNC-OSC-004 |
 | `Is_Foreground_Process` | Function | FUNC-OSC-007 |
@@ -907,6 +910,70 @@ Has `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlle
 
 ---
 
+### `Termicap.DA1`
+
+**Responsibility:** Pure SPARK types, constants, and interpretation functions for the DA1 Primary Device Attributes active terminal capability protocol (`CSI c` / `ESC [ ? Ps ; Ps ; ... c`). Provides all provable building blocks for interpreting a DA1 response: the `DA1_Capability` enumeration naming relevant `Ps` parameter values, the `VT_Level` enumeration for the VT conformance class encoded in the first `Ps` parameter, the `Capability_Flags` Boolean array and `DA1_Capabilities` aggregate record, the `DA1_QUERY` byte constant, and three pure interpretation functions. No I/O, no global state, no exceptions.
+
+Re-declares `Byte` and `Byte_Array` independently of `Termicap.OSC` (which is `SPARK_Mode => Off`) to remain fully SPARK-provable while preserving representation compatibility at the I/O boundary in the child package.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-da1.ads`, `src/termicap-da1.adb` |
+| SPARK_Mode | On (spec and body) — **Silver level** |
+| Dependencies | `Interfaces.C`, `Termicap.OSC.Parsing` (for `DA1_Params` type) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `DA1_Capability` | Eight-literal enumeration of the `Ps` parameter values most relevant to terminal capability detection: `Printer` (2), `ReGIS_Graphics` (3), `Sixel_Graphics` (4), `Selective_Erase` (6), `User_Defined_Keys` (8), `Windowing` (18), `ANSI_Color` (22), `Rectangular_Editing` (28). Unrecognised `Ps` values are silently ignored by `Interpret_DA1`. |
+| `VT_Level` | Six-literal enumeration: `Unknown` (no response or unrecognised first `Ps`), `VT100` (reserved), `VT200` (`Ps=62`), `VT300` (`Ps=63`), `VT400` (`Ps=64`), `VT500` (`Ps=65`). Default-initialised to `Unknown`. |
+| `Capability_Flags` | `array (DA1_Capability) of Boolean` — Boolean flag array indexed by the capability enumeration. Enables O(1) capability access and automatic defaulting of future enumeration additions to `False`. |
+| `DA1_Capabilities` | Plain record: `Supported : Boolean := False`, `Level : VT_Level := Unknown`, `Flags : Capability_Flags := [others => False]`. Default initialisation produces a safe "no DA1 response" value. |
+
+#### Key Constants
+
+| Constant | Description |
+|----------|-------------|
+| `DA1_QUERY` | Three-byte `Byte_Array` encoding `ESC [ c` (`0x1B 0x5B 0x63`). The canonical Primary Device Attributes request. Defined in the SPARK On package so both the I/O layer and test code can reference it without crossing a SPARK_Mode boundary. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Interpret_DA1` | Function | `Global => null`; `Post => Count = 0 implies not Supported; Count > 0 implies Supported` | FUNC-DA1-004 |
+| `Has_Capability` | Function (expression) | `Global => null`; `Post => Result = (Supported and Flags (Cap))` | FUNC-DA1-005 |
+| `VT_Level_Of` | Function (expression) | `Global => null`; `Post => Result = Level; not Supported implies Result = Unknown` | FUNC-DA1-006 |
+
+#### Relationship to Other Packages
+
+`Termicap.DA1` depends on `Termicap.OSC.Parsing` (SPARK Silver) for the `DA1_Params` type passed to `Interpret_DA1`. It does not depend on `Termicap.OSC` (SPARK Off), preserving SPARK provability. Its child `Termicap.DA1.IO` is the I/O boundary that bridges the two type systems. `Interpret_DA1` is called from `Detect_DA1` in the child package after `Query_DA1` delivers the raw response bytes and `Parse_DA1_Response` extracts the parameter array.
+
+---
+
+### `Termicap.DA1.IO`
+
+**Responsibility:** I/O boundary for the DA1 Primary Device Attributes feature. Sends a `CSI c` query to the terminal via a `Probe_Session`, using a timeout-only read loop (no DA1 sentinel appended, per ADR-0017), and returns interpreted `DA1_Capabilities`. `Detect_DA1` combines I/O, parsing, and interpretation into a single call.
+
+Has `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O — both outside the SPARK 2014 subset. All interpretation logic remains in the provable parent package `Termicap.DA1`.
+
+Unlike other active probes (`Termicap.XTVERSION.IO`, `Termicap.Color.BG_Query.IO`), this package calls `Timeout_Query` rather than `Sentinel_Query`. Appending a DA1 sentinel after the DA1 query would produce two overlapping DA1 responses in the accumulation buffer, making boundary detection ambiguous. `Timeout_Query` exits when `Contains_DA1_Response` returns True for the accumulated bytes or the timeout elapses.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-da1-io.ads`, `src/termicap-da1-io.adb` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Termicap.DA1`, `Termicap.OSC`, `Termicap.OSC.Parsing`, `Termicap.Environment.Capture`, `Termicap.Terminal_Id` |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Query_DA1` | Procedure | Detects terminal identity, optionally wraps `DA1_QUERY` for multiplexer passthrough, opens a `Probe_Session`, calls `Timeout_Query` (not `Sentinel_Query`), and returns raw response bytes with a timeout flag. Never raises. `Pre => Response'Length >= OSC.MAX_RESPONSE_SIZE`. | FUNC-DA1-008, FUNC-DA1-010, FUNC-DA1-011, FUNC-DA1-012 |
+| `Detect_DA1` | Function | Calls `Query_DA1`, maps `Timed_Out = True` to a default `DA1_Capabilities` record, then calls `Parse_DA1_Response` and `Interpret_DA1` and returns the result. `Timeout_Ms` defaults to 100 ms. Never raises. | FUNC-DA1-009 |
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -1116,6 +1183,17 @@ Has `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlle
 │   │    (Silver)                                 │  │
 │   │  Global => null — no FFI, no state          │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.DA1 (spec + body)                        │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  DA1_Capability, VT_Level enumerations      │  │
+│   │  Capability_Flags, DA1_Capabilities types   │  │
+│   │  DA1_QUERY constant                         │  │
+│   │  Interpret_DA1 — Pre + Post (Silver)        │  │
+│   │  Has_Capability — expression function       │  │
+│   │  VT_Level_Of — expression function          │  │
+│   │  Global => null — no FFI, no state          │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────┐
@@ -1165,10 +1243,23 @@ Has `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlle
 │   │  (Probe_Session Limited_Controlled +        │  │
 │   │    terminal I/O — outside SPARK 2014)       │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.DA1.IO (spec + body)                     │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Query_DA1 — opens Probe_Session, detects   │  │
+│   │    multiplexer, applies passthrough wrap,   │  │
+│   │    calls Timeout_Query (not Sentinel_Query) │  │
+│   │    — DA1 response IS the data sought        │  │
+│   │  Detect_DA1 — combines I/O, parsing         │  │
+│   │    (Parse_DA1_Response), and interpretation │  │
+│   │    (Interpret_DA1); default timeout 100 ms  │  │
+│   │  (Probe_Session Limited_Controlled +        │  │
+│   │    terminal I/O — outside SPARK 2014)       │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O. The XTVERSION subsystem applies the identical SPARK split: `Termicap.XTVERSION` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null`, no FFI, no global state; `Termicap.XTVERSION.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Like `Termicap.Color.BG_Query`, `Termicap.XTVERSION` re-declares `Byte`/`Byte_Array` independently of `Termicap.OSC` to avoid a SPARK mode boundary violation while preserving representation compatibility.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O. The XTVERSION subsystem applies the identical SPARK split: `Termicap.XTVERSION` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null`, no FFI, no global state; `Termicap.XTVERSION.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Like `Termicap.Color.BG_Query`, `Termicap.XTVERSION` re-declares `Byte`/`Byte_Array` independently of `Termicap.OSC` to avoid a SPARK mode boundary violation while preserving representation compatibility. The DA1 subsystem applies the same SPARK split: `Termicap.DA1` (both spec and body) is fully SPARK Silver — pure `Interpret_DA1`, `Has_Capability`, and `VT_Level_Of` functions with `Global => null`, no FFI, no global state; `Termicap.DA1.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` and performs terminal I/O via `Timeout_Query`. Unlike other active probes, `Termicap.DA1.IO` cannot use `Sentinel_Query` because the DA1 response is itself the data being sought; it calls `Timeout_Query` instead, a new public procedure added to `Termicap.OSC`. `Termicap.Capabilities` has been extended with a `DA1 : Termicap.DA1.DA1_Capabilities` field and now depends on `Termicap.DA1.IO` in its body.
 
 ## Related Documents
 
@@ -1195,4 +1286,6 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **Tech Spec OSC** (`docs/tech-specs/osc-query-infra.md`): OSC query infrastructure design rationale, sentinel pattern, C helper design, and ADR-0014
 - **Tech Spec DARK-LIGHT** (`docs/tech-specs/dark-light.md`): Dark/light theme classification design rationale — BT.601 integer luminance, SPARK Gold boundary, discriminated result type
 - **Tech Spec XTVERSION** (`docs/tech-specs/xtversion.md`): XTVERSION active terminal identification design rationale — DCS envelope recognition, name/version tokenisation formats, SPARK Silver boundary, multiplexer passthrough strategy
+- **Tech Spec DA1** (`docs/tech-specs/da1-response-parsing.md`): DA1 Primary Device Attributes design rationale — capability enumeration design, VT conformance level mapping, timeout-only read loop, SPARK Silver boundary
+- **ADR-0017** (`docs/adr/0017-da1-timeout-only-read-loop.md`): Rationale for the timeout-only read loop in DA1 queries (no sentinel appended)
 - **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007

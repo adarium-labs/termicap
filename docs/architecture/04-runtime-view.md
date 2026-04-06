@@ -1513,6 +1513,148 @@ Termicap.XTVERSION.IO.Query_XTVERSION      [SPARK_Mode => Off]
 
 ---
 
+## Scenario 22: DA1 Primary Device Attributes Query
+
+End-to-end scenario for `Detect_DA1`. Shows the timeout-only read loop pattern (no sentinel), the probe session lifecycle, and the SPARK Silver interpretation pipeline. Contrast with Scenario 21 (XTVERSION), which uses `Sentinel_Query`; here `Timeout_Query` is used because the DA1 response is itself the sought data.
+
+### Phase A — Multiplexer Check and Query Preparation
+
+```
+Caller (application or Termicap.Capabilities.Detect)
+  │
+  │  Detect_DA1 (Timeout_Ms => 100)
+  ▼
+Termicap.DA1.IO.Detect_DA1                         [SPARK_Mode => Off]
+  │
+  │  Query_DA1 (Timeout_Ms => 100, Response, Resp_Length, Timed_Out)
+  ▼
+Termicap.DA1.IO.Query_DA1                          [SPARK_Mode => Off]
+  │
+  │  Step 1: Capture_Current (Env)                 [SPARK_Mode => Off]
+  │    → OS environment variables captured into immutable snapshot
+  │
+  │  Step 2: Detect_Terminal_Identity (Env) → Identity
+  │    [Termicap.Terminal_Id — SPARK_Mode => Off body]
+  │    → 8-step cascade over TERM_PROGRAM, VTE_VERSION, etc.
+  │
+  │  Step 3: Multiplexer passthrough selection
+  │    if Identity.Is_Multiplexer then
+  │      case Identity.Kind is
+  │        when Tmux   → Mode := Tmux_Passthrough
+  │        when Screen → Mode := Screen_Passthrough
+  │        when others → Mode := Tmux_Passthrough   -- safe default
+  │      end case;
+  │      Effective_Query :=
+  │        Wrap_For_Passthrough (DA1_QUERY, Mode)
+  │        [Termicap.OSC.Parsing — SPARK Silver]
+  │    else
+  │      Effective_Query := DA1_QUERY              -- ESC [ c
+  │    end if
+  │
+  └──► Effective_Query ready; Env and Identity discarded
+```
+
+### Phase B — Probe Session and Timeout-Only Read Loop
+
+```
+  │
+  │  Open (Session, Status)                        [Termicap.OSC — SPARK_Mode => Off]
+  ▼
+  │  Step 4: Probe_Session.Open
+  │    → Foreground check (Is_Foreground_Process)  [FUNC-DA1-010]
+  │    → /dev/tty open                             [FUNC-DA1-011]
+  │    → Save termios, set raw mode, drain input
+  │
+  │  if Status /= Session_OK then
+  │    → Timed_Out := True; Resp_Length := 0; return  -- no exception
+  │  end if
+  │
+  │  Timeout_Query                                 [Termicap.OSC — SPARK_Mode => Off]
+  │  (Session, Effective_Query, Response, Resp_Length, Timeout_Ms, Timed_Out)
+  │
+  │  ┌──────────────────────────────────────────────────────────────┐
+  │  │  Write Effective_Query bytes to /dev/tty                    │
+  │  │  NOTE: no DA1 sentinel appended (ADR-0017)                  │
+  │  │  Reason: DA1 response IS the data; a second CSI c would     │
+  │  │  produce two overlapping DA1 responses, making boundary     │
+  │  │  detection ambiguous.                                        │
+  │  │                                                              │
+  │  │  Accumulation loop (Timeout_Ms = 100 ms):                   │
+  │  │    Timed_Read (/dev/tty) → append to Response buffer        │
+  │  │    Contains_DA1_Response (Response, Length)  [SPARK Silver] │
+  │  │      → scan for ESC [ ? <digits/semicolons> c pattern       │
+  │  │      → if found: record accumulated length; exit loop       │
+  │  │    if timeout or overflow: Timed_Out := True; exit loop     │
+  │  └──────────────────────────────────────────────────────────────┘
+  │
+  │  Probe_Session.Finalize (unconditional RAII)
+  │    → Restore_Termios, close /dev/tty, release single-session guard
+  │
+  └──► Response(1..Resp_Length) contains the full DA1 response bytes
+       Timed_Out reflects whether a complete DA1 response was received
+```
+
+### Phase C — Parse and Interpret Pipeline (SPARK Silver)
+
+```
+  │
+  │  Back in Detect_DA1:
+  │
+  │  if Timed_Out then
+  │    return DA1_Capabilities'(Supported => False,
+  │                             Level     => Unknown,
+  │                             Flags     => [others => False])
+  │  end if
+  │
+  │  Parse_DA1_Response (Response, Resp_Length) → Params
+  │    [Termicap.OSC.Parsing — SPARK Silver]
+  ▼
+  │
+  │  Step 5: Locate DA1_Response_Start in buffer
+  │    → scan for ESC [ ? prefix (0x1B 0x5B 0x3F)
+  │    → locate terminating c (0x63) byte
+  │    → Post: start index within buffer bounds
+  │
+  │  Step 6: Extract semicolon-separated decimal parameters
+  │    → Params.Values(1) = first Ps  (VT conformance level)
+  │    → Params.Values(2..N) = remaining Ps (capability flags)
+  │    → Params.Count = N; bounded by MAX_DA1_PARAMS = 16
+  │    → Post: Count <= MAX_DA1_PARAMS
+  │
+  │  Interpret_DA1 (Params) → Caps
+  │    [Termicap.DA1 — SPARK Silver]
+  │
+  │  Step 7: VT conformance level decode
+  │    → Params.Values(1) = 62 → VT200
+  │    → Params.Values(1) = 63 → VT300
+  │    → Params.Values(1) = 64 → VT400
+  │    → Params.Values(1) = 65 → VT500
+  │    → others              → Unknown
+  │
+  │  Step 8: Capability flags scan (Params.Values(2..Count))
+  │    →  4 → Flags(Sixel_Graphics)     := True
+  │    → 22 → Flags(ANSI_Color)         := True
+  │    → 28 → Flags(Rectangular_Editing) := True
+  │    → (other recognised values mapped similarly)
+  │    → unrecognised values silently ignored
+  │
+  │  Post (machine-verified):
+  │    Count = 0  → Supported = False ∧ Level = Unknown
+  │    Count > 0  → Supported = True
+  │
+  └──► DA1_Capabilities (Supported, Level, Flags)
+```
+
+**Key properties:**
+
+- `Query_DA1` uses `Timeout_Query` (not `Sentinel_Query`) because the DA1 response is the primary data, not a boundary marker. Appending a second `CSI c` sentinel would interleave two DA1 responses in the buffer, making `Contains_DA1_Response` ambiguous about which `c` terminates which response (ADR-0017).
+- `Probe_Session.Finalize` is called unconditionally. Terminal state is always restored regardless of whether the query succeeded, timed out, or the session failed to open.
+- `Parse_DA1_Response` and `Interpret_DA1` are both SPARK Silver functions with `Global => null`. They have no side effects and carry machine-verified preconditions/postconditions. The SPARK-provable logic is isolated in `Termicap.OSC.Parsing` and `Termicap.DA1` while the session management and I/O remain in `SPARK_Mode => Off` in `Termicap.DA1.IO`.
+- The multiplexer passthrough step (Phase A, Step 3) reuses `Termicap.OSC.Parsing.Wrap_For_Passthrough` — the same pure SPARK Silver function used by `Termicap.Color.BG_Query.IO` and `Termicap.XTVERSION.IO`. No new C wrappers or POSIX calls are introduced by the DA1 feature.
+- `Termicap.Capabilities.Detect` calls `Detect_DA1` as part of its sub-detector sequence and places the result in the `DA1` field of the `Terminal_Capabilities` record. The default timeout of 100 ms matches `Query_And_Identify` (XTVERSION).
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1538,4 +1680,6 @@ Termicap.XTVERSION.IO.Query_XTVERSION      [SPARK_Mode => Off]
 - **ADR-0016** (`docs/adr/0016-discriminated-record-for-bg-color-results.md`): Rationale for discriminated record result types in the BG-COLOR feature
 - **Tech Spec DARK-LIGHT** (`docs/tech-specs/dark-light.md`): Dark/light theme classification design rationale — BT.601 integer luminance, SPARK Gold boundary, framework survey
 - **Tech Spec XTVERSION** (`docs/tech-specs/xtversion.md`): XTVERSION active terminal identification design rationale — DCS envelope recognition, name/version tokenisation formats, SPARK Silver boundary, multiplexer passthrough strategy
+- **Tech Spec DA1** (`docs/tech-specs/da1-response-parsing.md`): DA1 Primary Device Attributes design rationale — capability enumeration design, VT conformance level mapping, timeout-only read loop, SPARK Silver boundary
+- **ADR-0017** (`docs/adr/0017-da1-timeout-only-read-loop.md`): Rationale for the timeout-only read loop in `Query_DA1` — why `Sentinel_Query` cannot be used when the DA1 response is the sought data
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007
