@@ -1,0 +1,443 @@
+[DOCUMENT]
+TITLE: Terminal Identification (Active: XTVERSION)
+UID: REQ-XTV
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Result Types
+
+[REQUIREMENT]
+UID: FUNC-XTV-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: XTVERSION_Result Discriminated Record Type
+STATEMENT: >>>
+The library shall define a discriminated record type that represents the outcome of an XTVERSION query. The type shall distinguish three cases via a discriminant:
+
+  type XTVERSION_Status is (Success, Timeout, Parse_Error);
+
+  type XTVERSION_Result (Status : XTVERSION_Status := Timeout) is record
+     case Status is
+        when Success =>
+           Terminal_Name    : Ada.Strings.Unbounded.Unbounded_String;
+           Terminal_Version : Ada.Strings.Unbounded.Unbounded_String;
+        when Timeout | Parse_Error =>
+           null;
+     end case;
+  end record;
+
+The Status discriminant shall prevent access to Terminal_Name and Terminal_Version without first checking that Status = Success. Terminal_Name shall hold the name token extracted from the DCS response (e.g., "xterm", "tmux"); Terminal_Version shall hold the version token (e.g., "388", "3.4"). Both strings shall be trimmed of leading and trailing whitespace. When Status = Timeout, the terminal did not respond within the allowed time. When Status = Parse_Error, a response was received but could not be parsed as a valid DCS XTVERSION response.
+<<<
+COMMENT: >>>
+A discriminated record prevents the classic C-style "check the error code, then read the result" misuse pattern. Ada discriminants enforce the check at compile time: accessing Terminal_Name when Status /= Success raises Constraint_Error. Using Unbounded_String for the name and version fields is necessary because terminal names and version strings are variable-length and cannot be bounded at compile time; for example, WezTerm versions use a date-hash format ("20231203-110809-5046fc22"). The three-way discriminant (Success / Timeout / Parse_Error) gives callers precise information: a timeout is an expected condition on terminals that do not implement XTVERSION, while a parse error signals either a malformed DCS response or a protocol violation that warrants a different fallback strategy.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: XTVERSION Query Byte Constant
+STATEMENT: >>>
+The library shall define a named byte-array constant encoding the XTVERSION query escape sequence:
+
+  CSI_XTVERSION_QUERY : constant Byte_Array :=
+    [16#1B#, 16#5B#,                       --  ESC [   (CSI introducer)
+     Character'Pos ('>'),                   --  >
+     Character'Pos ('q')];                  --  q
+
+This sequence encodes the four-byte string ESC [ > q, which is the canonical form of the XTVERSION request (XTVERSION: Primary Device Attributes extended version query). The constant shall be defined in the SPARK-On parsing/types package so that it can be referenced by both the I/O layer and any tests without introducing a SPARK_Mode boundary violation.
+<<<
+COMMENT: >>>
+Defining the query sequence as a named constant rather than a literal in the I/O procedure follows the same pattern as OSC_BG_QUERY and OSC_FG_QUERY in Termicap.Color.BG_Query (FUNC-BGC-003 / FUNC-BGC-004). A named constant is self-documenting, can be referenced in comments and tests, and prevents subtle byte-order mistakes that are hard to spot in anonymous array literals. The byte encoding ESC [ > q (0x1B 0x5B 0x3E 0x71) is consistent with the xterm documentation for XTVERSION and the tcell reference implementation.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Response Parsing
+
+[REQUIREMENT]
+UID: FUNC-XTV-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: DCS XTVERSION Response Format Recognition
+STATEMENT: >>>
+The library shall define a pure SPARK function that recognises a valid DCS XTVERSION response in a byte buffer. A well-formed XTVERSION response has the following structure:
+
+  DCS >| <payload> ST
+
+where:
+  - DCS (Device Control String introducer) is the two-byte sequence ESC P (0x1B 0x50).
+  - >| is the two literal ASCII bytes 0x3E 0x7C that distinguish XTVERSION responses from other DCS sequences.
+  - <payload> is a non-empty sequence of printable ASCII bytes containing the terminal name and version.
+  - ST (String Terminator) is the two-byte sequence ESC \ (0x1B 0x5C) or the single byte BEL (0x07).
+
+The recognition function shall return True if and only if Bytes(1..Length) begins with the four-byte prefix ESC P > | and contains a ST terminator after at least one payload byte. It shall return False for any shorter input, any byte sequence that does not start with ESC P > |, and any input that lacks a valid ST terminator.
+
+A representative signature is:
+
+  function Contains_XTVERSION_Response
+    (Bytes : Byte_Array; Length : Natural) return Boolean
+  with Pre => Length <= Bytes'Length;
+<<<
+COMMENT: >>>
+Isolating response recognition in a pure SPARK function makes it independently testable and provable. The four-byte ESC P > | prefix is the unambiguous discriminator: no other standard DCS sequence uses this prefix, so false positives against DA1 or other in-flight responses are impossible. Requiring at least one payload byte before ST prevents accepting the degenerate empty response DCS >| ST, which would yield empty name and version strings with Success status — a misleading result. The ST terminator check (ESC \ or BEL) matches the ECMA-48 and xterm specifications; both forms appear in practice across different terminal families.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: DCS Payload Extraction
+STATEMENT: >>>
+The library shall define a pure SPARK function that extracts the payload region from a byte buffer that has been confirmed to contain a valid DCS XTVERSION response. The payload region is the byte span between the end of the ESC P > | prefix and the start of the ST (or BEL) terminator.
+
+The function shall return a record identifying the offset and length of the payload within the buffer:
+
+  type Payload_Slice is record
+     Offset : Positive;
+     Length : Natural;
+  end record;
+
+  function Extract_XTV_Payload
+    (Bytes : Byte_Array; Length : Natural) return Payload_Slice
+  with
+    Pre  => Length <= Bytes'Length
+              and then Contains_XTVERSION_Response (Bytes, Length),
+    Post => Extract_XTV_Payload'Result.Length > 0
+              and then Extract_XTV_Payload'Result.Offset >= Bytes'First + 4
+              and then Extract_XTV_Payload'Result.Offset
+                         + Extract_XTV_Payload'Result.Length - 1
+                       < Bytes'First + Length;
+
+The precondition requires that Contains_XTVERSION_Response has already returned True, so the function need not handle invalid input. The postcondition guarantees a non-empty payload that lies entirely within the valid byte range.
+<<<
+COMMENT: >>>
+Separating recognition (FUNC-XTV-003) from extraction (this requirement) follows the Strip_OSC_Header / Parse_RGB_Response decomposition pattern in the BG-COLOR feature (FUNC-BGC-010 / FUNC-BGC-007). The precondition on Contains_XTVERSION_Response means the SPARK prover sees a known-valid buffer, allowing it to discharge bounds-check obligations without manual lemmas. Returning a (Offset, Length) slice record rather than a copy of the payload bytes avoids allocation and keeps the function representationally simple — callers that need a string can copy the slice, but the extraction itself is zero-copy.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Payload Name and Version Tokenisation
+STATEMENT: >>>
+The library shall define a pure SPARK function that splits the XTVERSION payload into a terminal name token and a version token. The function shall handle the two payload formats observed across major terminals:
+
+  Format A — space-separated: "<name> <version>"
+    Example: "tmux 3.4" -> Name = "tmux", Version = "3.4"
+    Example: "WezTerm 20231203-110809-5046fc22" -> Name = "WezTerm", Version = "20231203-110809-5046fc22"
+
+  Format B — name-only with version embedded in parentheses: "<name>(<version>)"
+    Example: "xterm(388)" -> Name = "xterm", Version = "388"
+    Example: "mlterm(3.9.1)" -> Name = "mlterm", Version = "3.9.1"
+
+If the payload contains a '(' character, the function shall apply Format B: Name is the bytes before '(', Version is the bytes between '(' and ')'. If no '(' is present but a space is present, the function shall apply Format A: Name is the bytes before the first space, Version is the remaining bytes after the space. If neither delimiter is present, the function shall treat the entire payload as the Name and return an empty Version string. In all cases, both tokens shall be trimmed of leading and trailing ASCII space bytes (0x20).
+
+The function shall return a record of two Unbounded_Strings:
+
+  type Token_Pair is record
+     Name    : Ada.Strings.Unbounded.Unbounded_String;
+     Version : Ada.Strings.Unbounded.Unbounded_String;
+  end record;
+
+  function Split_XTV_Payload
+    (Bytes  : Byte_Array;
+     Offset : Positive;
+     Length : Natural) return Token_Pair
+  with Pre => Length > 0 and then Offset >= Bytes'First
+                and then Offset + Length - 1 <= Bytes'Last;
+<<<
+COMMENT: >>>
+The two payload formats (parenthesised version vs. space-separated) are empirically documented from xterm, mlterm, foot (format B) and tmux, WezTerm, kitty (format A). Checking for '(' first before falling back to space-separation handles all known cases without ambiguity: no terminal uses both delimiters. The "name-only, no version" fallback handles hypothetical future terminals or malformed-but-not-outright-invalid responses gracefully — the caller receives a non-empty name and can treat the empty version string as "version unknown". Trimming whitespace from both tokens mirrors best practice in the tcell reference implementation and prevents spurious mismatches when a terminal includes extra spaces in its payload.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Parse_XTVERSION_Response Top-Level Parse Function
+STATEMENT: >>>
+The library shall define a pure SPARK function that orchestrates XTVERSION response parsing end-to-end:
+
+  function Parse_XTVERSION_Response
+    (Bytes  : Byte_Array;
+     Length : Natural) return XTVERSION_Result
+  with
+    Pre  => Length <= Bytes'Length and then Length <= MAX_RESPONSE_SIZE,
+    Post =>
+      (if Parse_XTVERSION_Response'Result.Status = Success
+       then Ada.Strings.Unbounded.Length
+              (Parse_XTVERSION_Response'Result.Terminal_Name) > 0);
+
+The function shall:
+  1. Return XTVERSION_Result (Status => Parse_Error) when Length = 0 or when Contains_XTVERSION_Response returns False.
+  2. Call Extract_XTV_Payload to obtain the payload slice.
+  3. Call Split_XTV_Payload on the payload slice to obtain the name and version tokens.
+  4. Return XTVERSION_Result (Status => Success, Terminal_Name => Name, Terminal_Version => Version) when the name token is non-empty.
+  5. Return XTVERSION_Result (Status => Parse_Error) when the name token is empty (degenerate payload after tokenisation).
+
+The postcondition shall guarantee that when Status = Success, the Terminal_Name string is non-empty.
+<<<
+COMMENT: >>>
+A single top-level parse function is the mirror of Parse_RGB_Response in the BG-COLOR feature (FUNC-BGC-007): the I/O layer calls it with the raw response buffer and receives a fully structured result without needing to know the internal parsing steps. The postcondition (Terminal_Name non-empty on Success) is a meaningful safety property: it prevents the Success case from being populated with an empty name that would mislead downstream consumers. Using Ada.Strings.Unbounded.Length in the postcondition is the idiomatic way to assert string non-emptiness in SPARK Silver contracts.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Provability for Parsing Package
+STATEMENT: >>>
+The package containing FUNC-XTV-002 through FUNC-XTV-006 (the query constant, response recognition, payload extraction, tokenisation, and top-level parse function) shall be compiled with SPARK_Mode => On. All subprograms in this package shall carry Global => null contracts. No dynamic allocation, no OS calls, and no unbounded loops shall appear in the package body. The SPARK prover shall be able to discharge all proof obligations at Silver level without manual lemmas.
+
+The package shall be named Termicap.XTVERSION (or a sub-child thereof) and shall be a distinct unit from the I/O boundary package described in FUNC-XTV-008 and FUNC-XTV-009. The SPARK_Mode => Off boundary shall appear only in the I/O child package.
+<<<
+COMMENT: >>>
+The parsing logic is a finite cascade of byte comparisons and index arithmetic — structurally identical to the OSC.Parsing package (FUNC-OSC-015) and the BG_Query types package (FUNC-BGC-007 through FUNC-BGC-012), both of which are SPARK Silver targets. Keeping I/O in a separate child package preserves this provability without requiring any SPARK boundary workaround. The requirement to avoid unbounded loops is satisfied naturally: the response buffer is bounded by MAX_RESPONSE_SIZE (4096 bytes, FUNC-OSC-009), so all scans over Bytes are bounded by a compile-time constant.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Query Construction and I/O Execution
+
+[REQUIREMENT]
+UID: FUNC-XTV-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: XTVERSION I/O Package and Query_XTVERSION Procedure
+STATEMENT: >>>
+The library shall provide an I/O boundary package compiled with SPARK_Mode => Off that exposes a single procedure for executing the XTVERSION query:
+
+  procedure Query_XTVERSION
+    (Timeout_Ms  :     Natural;
+     Response    : out Byte_Array;
+     Resp_Length : out Natural;
+     Timed_Out   : out Boolean)
+  with Pre => Response'Length >= MAX_RESPONSE_SIZE;
+
+The procedure shall:
+  1. Construct the query byte sequence: CSI_XTVERSION_QUERY (ESC [ > q) from FUNC-XTV-002.
+  2. Obtain the terminal identity from a live environment snapshot via Detect_Terminal_Identity (FUNC-TID-003) to determine whether a multiplexer passthrough wrapper is required.
+  3. If Is_Multiplexer is True, wrap the query using Termicap.OSC.Parsing.Wrap_For_Passthrough (FUNC-OSC-014) before sending.
+  4. Open a Probe_Session (FUNC-OSC-008). If the session fails to open for any reason (not foreground, /dev/tty unavailable, raw mode failure), set Timed_Out := True, Resp_Length := 0, and return.
+  5. Call Sentinel_Query (FUNC-OSC-006) with the (possibly wrapped) query sequence and Timeout_Ms.
+  6. Allow the Probe_Session to close unconditionally via RAII finalization.
+  7. Populate Response with the pre-sentinel response bytes, Resp_Length with the valid byte count, and Timed_Out with the sentinel-detection outcome.
+
+This procedure shall not raise an exception on any code path.
+<<<
+COMMENT: >>>
+The procedure mirrors Query_Color in Termicap.Color.BG_Query.IO (FUNC-BGC-006) precisely: same session lifecycle, same passthrough-detection pattern, same out-parameter contract. Reusing the Probe_Session infrastructure means the XTVERSION I/O layer introduces no new C wrappers or system calls. The multiplexer passthrough step is essential: when the terminal session is hosted inside tmux or GNU Screen, the CSI > q sequence must be wrapped in the DCS passthrough syntax to reach the outer terminal emulator. Without this step, tmux would silently discard the XTVERSION query and the caller would always see a timeout for multiplexed sessions that do support XTVERSION on the underlying terminal.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sentinel-Bounded Query with DA1 Boundary Marker
+STATEMENT: >>>
+The Query_XTVERSION procedure (FUNC-XTV-008) shall use the existing Sentinel_Query infrastructure (FUNC-OSC-006) without modification. Specifically, after writing the CSI > q query bytes, Sentinel_Query shall automatically append the DA1 sentinel (CSI c, i.e., ESC [ c). Response bytes shall be accumulated until the DA1 response (ESC [ ? ... c) is detected or Timeout_Ms expires.
+
+The Timeout_Ms parameter passed to Sentinel_Query shall be the same Timeout_Ms received by Query_XTVERSION. The Retry parameter of Sentinel_Query shall be False (no automatic retry). The pre-sentinel bytes — those preceding the DA1 response — shall be returned to the caller as the raw XTVERSION response for subsequent parsing.
+
+The maximum response buffer capacity (MAX_RESPONSE_SIZE, 4096 bytes) is sufficient for all known XTVERSION responses; no terminal is known to produce an XTVERSION DCS payload exceeding 256 bytes.
+<<<
+COMMENT: >>>
+The DA1 sentinel pattern is the established boundary mechanism for all active terminal probing in Termicap (FUNC-OSC-006). Using DA1 as a sentinel for XTVERSION is consistent with the approach used by tcell and documented in the global synthesis (§4.3). The pattern guarantees that response accumulation terminates even when the terminal's XTVERSION response is slow or when an intermediate multiplexer introduces buffering latency. Not adding a Retry is a deliberate simplification: XTVERSION is a diagnostic query, and a second attempt under doubled timeout is not warranted by typical XTVERSION use cases; callers that need higher reliability can call Query_XTVERSION twice.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Safety and Pre-Query Guards
+
+[REQUIREMENT]
+UID: FUNC-XTV-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Foreground Process Group Check Before Query
+STATEMENT: >>>
+The Query_XTVERSION procedure shall not send the XTVERSION query sequence if the calling process is not in the terminal's foreground process group. This check is performed implicitly by the Probe_Session.Open call (FUNC-OSC-007 / FUNC-OSC-008): if Is_Foreground_Process returns False, Open returns Session_Not_Foreground without entering raw mode or writing any bytes to the terminal. Query_XTVERSION shall treat Session_Not_Foreground identically to any other session-open failure: set Timed_Out := True, Resp_Length := 0, and return without sending the query.
+
+No additional foreground check logic is required in Query_XTVERSION beyond what Probe_Session.Open already provides.
+<<<
+COMMENT: >>>
+Sending escape sequence queries from a background job causes visible terminal corruption: the terminal processes the query bytes as user input while another program holds the terminal foreground. The foreground check is not optional. Because the existing Probe_Session.Open already performs this check via Is_Foreground_Process (FUNC-OSC-007), Query_XTVERSION inherits the guard at no additional cost. This requirement makes the dependency explicit so that future refactors of the session lifecycle do not accidentally remove the guard for XTVERSION queries.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Not-a-TTY Guard
+STATEMENT: >>>
+The Query_XTVERSION procedure shall not send the XTVERSION query sequence when there is no controlling terminal available. This guard is performed implicitly by Probe_Session.Open (FUNC-OSC-001 / FUNC-OSC-008): if /dev/tty cannot be opened, Open returns Session_No_Terminal. Query_XTVERSION shall treat Session_No_Terminal identically to any other session-open failure: set Timed_Out := True, Resp_Length := 0, and return without sending the query.
+
+The procedure shall therefore return a clean "no response" result rather than raising an exception or returning an error code when the process is running in a non-interactive context (e.g., inside a CI pipeline, under a shell script with no controlling terminal).
+<<<
+COMMENT: >>>
+Interactive terminal queries are meaningless when there is no terminal. The not-a-TTY case is the most common failure mode in CI environments and when programs are invoked from cron or as daemons. Returning Timed_Out => True in this case is consistent with the Query_Color behavior (FUNC-BGC-006) and ensures that callers can treat all non-success outcomes uniformly: check Timed_Out, then decide whether to fall back to passive env-var identification.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Multiplexer Passthrough Awareness
+STATEMENT: >>>
+When the active terminal session is running inside a terminal multiplexer (Is_Multiplexer = True in the Terminal_Identity returned by Detect_Terminal_Identity), the Query_XTVERSION procedure shall wrap the CSI > q query using Termicap.OSC.Parsing.Wrap_For_Passthrough (FUNC-OSC-014) before passing it to Sentinel_Query.
+
+For a tmux session (Passthrough_Mode = Tmux_Passthrough), the query shall be wrapped as:
+  ESC P tmux ; ESC CSI > q ESC \
+
+For a GNU Screen session (Passthrough_Mode = Screen_Passthrough), the query shall be wrapped as:
+  ESC P CSI > q ESC \
+
+When Is_Multiplexer = False (No_Passthrough), the query shall be sent unwrapped.
+
+The multiplexer kind shall be determined from the Is_Multiplexer flag and the Kind field of Terminal_Identity: Kind = Tmux selects Tmux_Passthrough; Kind = Screen selects Screen_Passthrough; any other terminal with Is_Multiplexer = True shall use Tmux_Passthrough as a safe default, since tmux is far more prevalent than other multiplexers that might set the TMUX variable.
+<<<
+COMMENT: >>>
+Without passthrough wrapping, tmux silently absorbs CSI > q because it does not implement XTVERSION itself and does not forward unknown CSI sequences to the outer terminal by default. The passthrough wrapping mechanism is already implemented and tested in Termicap.OSC.Parsing (FUNC-OSC-014); Query_XTVERSION simply selects the correct mode based on Terminal_Identity. Choosing Tmux_Passthrough as the default for ambiguous multiplexer cases (Is_Multiplexer = True but Kind != Screen) is conservative: tmux's DCS passthrough syntax is a strict superset of the bare query, and most shells that set TMUX are indeed running under tmux.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with Terminal_Identity
+
+[REQUIREMENT]
+UID: FUNC-XTV-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Query_And_Identify Top-Level Convenience Function
+STATEMENT: >>>
+The library shall provide a top-level convenience function that combines passive terminal identification (FUNC-TID-003) with an active XTVERSION query and returns a unified result:
+
+  function Query_And_Identify
+    (Timeout_Ms : Natural := 100) return XTVERSION_Result;
+
+The function shall:
+  1. Call Query_XTVERSION with Timeout_Ms to obtain raw response bytes.
+  2. If Timed_Out is True, return XTVERSION_Result (Status => Timeout).
+  3. If Timed_Out is False, call Parse_XTVERSION_Response on the response buffer.
+  4. Return the Parse_XTVERSION_Response result directly (Success or Parse_Error).
+
+The default value of 100 milliseconds is chosen as a balance between responsiveness and giving slow terminals sufficient time to respond. Callers that require lower latency (e.g., startup-time detection in a TUI application) may pass a smaller timeout; callers with relaxed timing requirements may pass a larger one.
+
+This function is an Ada boundary (SPARK_Mode Off) because it calls Query_XTVERSION which performs I/O.
+<<<
+COMMENT: >>>
+A single top-level entry point lowers the barrier for callers: most consumers want "give me the XTVERSION result" without manually coordinating the I/O and parsing steps. The default 100 ms timeout is consistent with the recommendation in the notcurses reference implementation and is safe for local terminals; over SSH, users may need to increase it. Returning XTVERSION_Result directly (rather than augmenting Terminal_Identity in-place) keeps the two identification paths orthogonal, allowing callers to combine them as needed (see FUNC-XTV-014).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-014
+STATUS: Approved
+PRIORITY: Should
+TITLE: XTVERSION Result as Augmentation of Passive Terminal_Identity
+STATEMENT: >>>
+When an XTVERSION query returns Status = Success, the Terminal_Name field of the XTVERSION_Result should be used by downstream consumers to refine or confirm the Terminal_Kind classification obtained from passive identification (FUNC-TID-003). Specifically:
+
+  - If passive identification yielded Kind = Unknown and the XTVERSION Terminal_Name matches a known terminal (case-insensitive comparison against the Terminal_Kind literals), the downstream consumer should update Kind to the matched value.
+  - If passive identification yielded a specific Kind and the XTVERSION Terminal_Name is inconsistent with that Kind (e.g., passive = WezTerm but XTVERSION name = "xterm"), the XTVERSION result takes precedence, as it is a direct, active response from the terminal itself.
+  - The XTVERSION Terminal_Version string should be stored alongside the passive identification data so that callers performing version-specific capability decisions have access to both the env-var version (Program_Version from Terminal_Identity) and the XTVERSION version.
+
+This requirement does not mandate a specific data structure for the combined result; the mechanism (an augmented record, a wrapper type, or an overloaded function) shall be determined at the Ada specification stage. It establishes the intended semantics that XTVERSION active data takes precedence over passive env-var data when the two are available and inconsistent.
+<<<
+COMMENT: >>>
+XTVERSION is architecturally a Layer 5 identification method (§2.13 of the global synthesis), explicitly above the env-var layers 1-4. When it yields a result, it should be authoritative. The precedence rule is conservative: passive identification is preserved when XTVERSION is silent (timeout) or ambiguous, and overrides passive only when an explicit contradiction is present. The "Should" priority reflects that this integration is an architectural recommendation rather than a hard correctness constraint for v1; v1 may expose the two identification results as independent values and leave the reconciliation to the caller.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Error Handling and Testability
+
+[REQUIREMENT]
+UID: FUNC-XTV-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Timeout Error Handling
+STATEMENT: >>>
+When the XTVERSION query times out (the DA1 sentinel response is not detected within Timeout_Ms milliseconds), Query_XTVERSION shall set Timed_Out := True and Resp_Length := 0. The caller (or Query_And_Identify, FUNC-XTV-013) shall propagate this as XTVERSION_Result (Status => Timeout).
+
+A timeout is not an error condition: it is the expected outcome for terminals that do not implement XTVERSION (including all legacy terminals, dumb terminals, Linux virtual consoles, and many terminal emulators that predate XTVERSION standardisation). The caller shall be able to distinguish a timeout from a parse error by inspecting the Status discriminant, and shall proceed to passive identification fallback (FUNC-TID-003) without treating a timeout as a failure requiring logging or reporting.
+<<<
+COMMENT: >>>
+Terminals that do not support XTVERSION are common — the Linux kernel virtual console, screen, and many older xterm-compatible terminals all produce no DCS response to CSI > q. Treating timeout as an expected non-error path is essential for library usability: if every XTVERSION timeout triggered a warning log or exception, the library would be unusable in the common case where the terminal is identified correctly through passive means. The Status discriminant makes the distinction between Timeout (no response) and Parse_Error (bad response) machine-checkable without relying on caller discipline.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: Parse Error Handling for Malformed DCS Responses
+STATEMENT: >>>
+When the terminal responds to the XTVERSION query but the response does not conform to the DCS >| <payload> ST format (FUNC-XTV-003), Parse_XTVERSION_Response shall return XTVERSION_Result (Status => Parse_Error). Specific malformed cases that shall be handled without raising an exception include:
+
+  - The response begins with DCS (ESC P) but lacks the >| discriminator bytes.
+  - The response begins with ESC P > | but contains no ST (ESC \ or BEL) terminator within Resp_Length bytes.
+  - The response is a valid DCS >| ... ST envelope but the payload between >| and ST is empty or contains only whitespace.
+  - The response buffer contains bytes that are not a DCS sequence at all (e.g., an unexpected OSC response in flight).
+
+In all parse-error cases, Status = Parse_Error shall be returned and no partial name or version data shall be accessible (enforced by the discriminant). The parse error shall not be reported as a timeout (Timed_Out = False and Resp_Length > 0 at the I/O level).
+<<<
+COMMENT: >>>
+Parse errors are rare but real: they can occur when a terminal implements a non-standard variant of the DCS >| response, when a multiplexer partially corrupts the sequence, or when stale bytes from a previous query remain in the buffer. Distinguishing Parse_Error from Timeout allows callers to implement appropriate logging strategies: a Timeout in a production application is normal and silent, but a Parse_Error might warrant a debug log entry. The requirement that partial data is inaccessible (enforced by the discriminant) prevents callers from inadvertently using garbage name or version strings in their capability decisions.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-XTV-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unit Testability of Parsing Functions
+STATEMENT: >>>
+Each pure SPARK parsing function in the XTVERSION parsing package (Contains_XTVERSION_Response, Extract_XTV_Payload, Split_XTV_Payload, Parse_XTVERSION_Response) shall be independently testable by constructing a Byte_Array from known byte values and asserting the expected output. The test suite shall include at minimum the following cases:
+
+  1. Well-formed xterm format B response: ESC P > | x t e r m ( 3 8 8 ) ESC \ -> Name = "xterm", Version = "388".
+  2. Well-formed tmux format A response: ESC P > | t m u x SP 3 . 4 ESC \ -> Name = "tmux", Version = "3.4".
+  3. Well-formed WezTerm format A response with date-hash version: Name = "WezTerm", Version = "20231203-110809-5046fc22".
+  4. BEL-terminated response (ST = 0x07): same name/version as ESC \ terminated equivalent.
+  5. Empty input (Length = 0): Status = Parse_Error.
+  6. Response with ESC P but wrong discriminator (ESC P < | instead of ESC P > |): Status = Parse_Error.
+  7. Response with ESC P > | but no ST terminator: Status = Parse_Error.
+  8. Response with valid envelope but empty payload (ESC P > | ESC \): Status = Parse_Error.
+  9. Response with payload that has no space and no parenthesis: Name = full payload, Version = "".
+
+All tests shall use programmatically constructed Byte_Array values and shall not require a live terminal.
+<<<
+COMMENT: >>>
+Explicit testability is a first-class requirement rather than an implementation note, matching the pattern of FUNC-TID-012 for passive terminal identification. The nine test cases cover both format variants, the BEL alternative terminator, and every malformed-input path enumerated in FUNC-XTV-016. Case 9 (name-only payload) exercises the graceful fallback in Split_XTV_Payload (FUNC-XTV-005). All tests are constructable without a live terminal because the parsing functions are pure and accept a Byte_Array — the same design constraint that makes the BG-COLOR parsing tests (FUNC-BGC-007) fully offline.
+<<<
+
+[/SECTION]

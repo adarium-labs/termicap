@@ -1375,6 +1375,144 @@ Termicap.Color.Dark_Light.Detect            [SPARK_Mode => Off]
 
 ---
 
+## Scenario 21: Active Terminal Identification via XTVERSION
+
+End-to-end scenario for `Query_And_Identify`. Shows the multiplexer-detection → passthrough-wrap decision, the probe session lifecycle, sentinel-bounded accumulation, and the SPARK Silver parse pipeline.
+
+### Phase A — Multiplexer Check and Query Preparation
+
+```
+Caller (application)
+  │
+  │  Query_And_Identify (Timeout_Ms => 100)
+  ▼
+Termicap.XTVERSION.IO.Query_And_Identify   [SPARK_Mode => Off]
+  │
+  │  Query_XTVERSION (Timeout_Ms => 100, Response, Resp_Length, Timed_Out)
+  ▼
+Termicap.XTVERSION.IO.Query_XTVERSION      [SPARK_Mode => Off]
+  │
+  │  Step 1: Capture_Current (Env)          [SPARK_Mode => Off]
+  │    → OS environment variables captured into immutable snapshot
+  │
+  │  Step 2: Detect_Terminal_Identity (Env) → Identity
+  │    [Termicap.Terminal_Id — SPARK_Mode => Off body]
+  │    → 8-step cascade over TERM_PROGRAM, VTE_VERSION, etc.
+  │
+  │  Step 3: Multiplexer passthrough selection
+  │    if Identity.Is_Multiplexer then
+  │      case Identity.Kind is
+  │        when Tmux   → Mode := Tmux_Passthrough
+  │        when Screen → Mode := Screen_Passthrough
+  │        when others → Mode := Tmux_Passthrough   -- safe default
+  │      end case;
+  │      Effective_Query :=
+  │        Wrap_For_Passthrough (CSI_XTVERSION_QUERY, Mode)
+  │        [Termicap.OSC.Parsing — SPARK Silver]
+  │    else
+  │      Effective_Query := CSI_XTVERSION_QUERY   -- ESC [ > q
+  │    end if
+  │
+  └──► Effective_Query ready; Env and Identity discarded
+```
+
+### Phase B — Probe Session and Sentinel Query
+
+```
+  │
+  │  Open (Session, Status)               [Termicap.OSC — SPARK_Mode => Off]
+  ▼
+  │  Step 4: Probe_Session.Open
+  │    → Foreground check (Is_Foreground_Process)  [FUNC-XTV-010]
+  │    → /dev/tty open                             [FUNC-XTV-011]
+  │    → Save termios, set raw mode, drain input
+  │
+  │  if Status /= Session_OK then
+  │    → Timed_Out := True; Resp_Length := 0; return  -- no exception
+  │  end if
+  │
+  │  Sentinel_Query                        [Termicap.OSC — SPARK_Mode => Off]
+  │  (Session, Effective_Query, Response, Resp_Length,
+  │   Timeout_Ms => 100, Timed_Out, Retry => False)   [FUNC-XTV-009]
+  │
+  │  ┌──────────────────────────────────────────────────────────────┐
+  │  │  Write Effective_Query bytes to /dev/tty                    │
+  │  │  Write DA1 sentinel (ESC [ c = 0x1B 0x5B 0x63)             │
+  │  │                                                              │
+  │  │  Accumulation loop (Timeout_Ms = 100 ms):                   │
+  │  │    Timed_Read (/dev/tty) → append to Response buffer        │
+  │  │    Contains_DA1_Response (Response, Length)  [SPARK Silver] │
+  │  │      → scan for ESC [ ? <digits/semicolons> c pattern       │
+  │  │      → if found: record pre-sentinel length; exit loop      │
+  │  │    if timeout or overflow: Timed_Out := True; exit loop     │
+  │  └──────────────────────────────────────────────────────────────┘
+  │
+  │  Probe_Session.Finalize (unconditional RAII)
+  │    → Restore_Termios, close /dev/tty, release single-session guard
+  │
+  └──► Response(1..Resp_Length) contains pre-DA1 bytes
+       Timed_Out reflects whether DA1 was received
+```
+
+### Phase C — Parse Pipeline (SPARK Silver)
+
+```
+  │
+  │  Back in Query_And_Identify:
+  │
+  │  if Timed_Out then
+  │    return XTVERSION_Result'(Status => Timeout)
+  │  end if
+  │
+  │  Parse_XTVERSION_Response (Response, Resp_Length)
+  │    [Termicap.XTVERSION — SPARK Silver]
+  ▼
+  │
+  │  Step 5: Contains_XTVERSION_Response (Response, Resp_Length)
+  │    → check prefix ESC P > | (0x1B 0x50 0x3E 0x7C)
+  │    → check ST (ESC \) or BEL terminator
+  │    → minimum 6 bytes (4-byte prefix + 1 payload byte + terminator)
+  │    → if False: return (Status => Parse_Error)
+  │
+  │  Step 6: Extract_XTV_Payload (Response, Resp_Length) → Slice
+  │    → Slice.Offset := index of first byte after ESC P > | prefix
+  │    → Slice.Length := bytes before ST/BEL terminator
+  │    → Post: Slice.Length > 0; Slice.Offset in valid range
+  │
+  │  Step 7: Split_XTV_Payload (Response, Slice.Offset, Slice.Length)
+  │    → Pair.Name, Pair.Version
+  │    Format B (parenthesised, xterm/mlterm/foot):
+  │      "xterm(388)" → Name = "xterm", Version = "388"
+  │      '(' found → split at '(', strip trailing ')'
+  │    Format A (space-separated, tmux/WezTerm/kitty):
+  │      "WezTerm 20240203" → Name = "WezTerm", Version = "20240203"
+  │      ' ' found → split at first space
+  │    Name-only (no delimiter):
+  │      "SomeTerminal" → Name = "SomeTerminal", Version = ""
+  │    All tokens trimmed of leading/trailing ASCII space (0x20)
+  │
+  │  Step 8: if Length (Pair.Name) > 0 then
+  │    return (Status          => Success,
+  │            Terminal_Name    => Pair.Name,
+  │            Terminal_Version => Pair.Version)
+  │    Post: Terminal_Name'Length > 0   -- machine-verified by GNATprove
+  │  else
+  │    return (Status => Parse_Error)
+  │  end if
+  │
+  └──► XTVERSION_Result (Success | Timeout | Parse_Error)
+```
+
+**Key properties:**
+
+- `Query_XTVERSION` uses `Retry => False` (no automatic retry, FUNC-XTV-009). The 100 ms default timeout balances latency against multiplexed terminal roundtrip time; callers requiring lower latency may pass a smaller value.
+- `Probe_Session.Finalize` is called unconditionally by the Ada runtime. Terminal state is always restored regardless of whether the query succeeded, timed out, or the session failed to open.
+- `Contains_XTVERSION_Response`, `Extract_XTV_Payload`, `Split_XTV_Payload`, and `Parse_XTVERSION_Response` are all SPARK Silver functions with `Global => null`. They have no side effects and carry machine-verified preconditions/postconditions. The SPARK-provable parsing logic is isolated in `Termicap.XTVERSION` while the session management and I/O remain in `SPARK_Mode => Off` in `Termicap.XTVERSION.IO`.
+- The multiplexer passthrough step (Phase A, Step 3) reuses `Termicap.OSC.Parsing.Wrap_For_Passthrough` — the same pure SPARK Silver function used by `Termicap.Color.BG_Query.IO`. No new C wrappers or POSIX calls are introduced by the XTVERSION feature.
+- `Parse_XTVERSION_Response` handles all malformed-input cases (zero-length buffer, missing DCS prefix, no ST/BEL terminator, empty name token) by returning `Status => Parse_Error` without raising an exception (FUNC-XTV-016).
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1399,4 +1537,5 @@ Termicap.Color.Dark_Light.Detect            [SPARK_Mode => Off]
 - **Tech Spec BG-COLOR** (`docs/tech-specs/bg-color-query.md`): Background/foreground color detection design rationale — SPARK split, discriminated result types, COLORFGBG fallback, multiplexer passthrough
 - **ADR-0016** (`docs/adr/0016-discriminated-record-for-bg-color-results.md`): Rationale for discriminated record result types in the BG-COLOR feature
 - **Tech Spec DARK-LIGHT** (`docs/tech-specs/dark-light.md`): Dark/light theme classification design rationale — BT.601 integer luminance, SPARK Gold boundary, framework survey
+- **Tech Spec XTVERSION** (`docs/tech-specs/xtversion.md`): XTVERSION active terminal identification design rationale — DCS envelope recognition, name/version tokenisation formats, SPARK Silver boundary, multiplexer passthrough strategy
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007

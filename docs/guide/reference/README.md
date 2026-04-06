@@ -19,6 +19,9 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Termicap.OSC / Termicap.OSC.Parsing](osc.md)**
   OSC probe session lifecycle — `Probe_Session` (RAII), `Sentinel_Query`, `Timed_Read`, DA1 parsing (`Parse_DA1_Response`), multiplexer passthrough wrapping (`Wrap_For_Passthrough`)
 
+- **[Termicap.XTVERSION / Termicap.XTVERSION.IO](xtversion.md)**
+  Active terminal identification via XTVERSION — `XTVERSION_Result` discriminated record, `CSI_XTVERSION_QUERY` constant, DCS response parsing (`Parse_XTVERSION_Response`), I/O procedure (`Query_XTVERSION`), convenience function (`Query_And_Identify`)
+
 - **[Termicap.Dimensions](termicap-dimensions.md)**
   Terminal dimensions detection — `Terminal_Size` type, `Get_Size` function, ioctl/env-var/default fallback chain
 

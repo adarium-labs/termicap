@@ -9,5 +9,6 @@ aggregate project Termicap_Examples is
                           "sigwinch_demo/sigwinch_demo.gpr",
                           "override_demo/override_demo.gpr",
                           "capabilities_demo/capabilities_demo.gpr",
-                          "osc_probe_demo/osc_probe_demo.gpr");
+                          "osc_probe_demo/osc_probe_demo.gpr",
+                          "xtversion_demo/xtversion_demo.gpr");
 end Termicap_Examples;

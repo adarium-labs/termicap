@@ -23,6 +23,7 @@ with Test_Sigwinch;
 with Test_Terminal_Id;
 with Test_TTY;
 with Test_Unicode;
+with Test_XTVERSION;
 
 procedure Termicap_Tests is
 
@@ -45,6 +46,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_OSC_Parsing.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_BG_Query.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Dark_Light.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_XTVERSION.Test_Case);
       return Result;
    end All_Tests;
 

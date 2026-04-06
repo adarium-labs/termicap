@@ -23,6 +23,8 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Terminal_Id          [spec: SPARK, body: SPARK_Mode => Off] — terminal identity detection (8-step cascade)
 ├── Termicap.OSC                  [SPARK_Mode => Off] — probe session lifecycle, terminal I/O, FFI boundary
 │   └── Termicap.OSC.Parsing      [SPARK Silver] — pure DA1 sentinel detection, response parsing, passthrough wrapping
+├── Termicap.XTVERSION            [SPARK Silver] — XTVERSION_Status/Result/Payload_Slice/Token_Pair types, CSI_XTVERSION_QUERY constant, pure DCS parsing functions
+│   └── Termicap.XTVERSION.IO     [SPARK_Mode => Off] — Query_XTVERSION I/O via Probe_Session, Query_And_Identify convenience function
 └── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
@@ -841,6 +843,70 @@ This package is the SPARK Off boundary for the DARK-LIGHT feature, mirroring the
 
 ---
 
+### `Termicap.XTVERSION`
+
+**Responsibility:** Pure SPARK types, constants, and parsing functions for the XTVERSION active terminal identification protocol. Provides all provable building blocks for recognising a `DCS >| <payload> ST` response, extracting its payload span, tokenising the name/version pair, and orchestrating the parse end-to-end. No I/O, no global state, no exceptions.
+
+Re-declares `Byte` and `Byte_Array` independently of `Termicap.OSC` (which is `SPARK_Mode => Off`) to remain fully SPARK-provable while remaining representation-compatible at the I/O boundary in the child package.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-xtversion.ads`, `src/termicap-xtversion.adb` |
+| SPARK_Mode | On (spec and body) — **Silver level** |
+| Dependencies | `Interfaces.C` (Ada standard library), `Ada.Strings.Unbounded` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `XTVERSION_Status` | Three-literal enumeration: `Success` (valid name and version extracted), `Timeout` (no response received), `Parse_Error` (response received but malformed). Default discriminant for `XTVERSION_Result`. |
+| `XTVERSION_Result` | Discriminated record: `Status = Success` carries `Terminal_Name` and `Terminal_Version` (`Unbounded_String`); `Status = Timeout \| Parse_Error` carries no data. Default discriminant is `Timeout`. |
+| `Payload_Slice` | Record with `Offset : Positive` and `Length : Natural` — a zero-copy positional reference into the raw response buffer identifying the DCS payload span. |
+| `Token_Pair` | Record with `Name : Unbounded_String` and `Version : Unbounded_String` — intermediate tokenisation result from `Split_XTV_Payload`. `Version` may be empty for name-only payloads. |
+
+#### Key Constants
+
+| Constant | Description |
+|----------|-------------|
+| `MAX_RESPONSE_SIZE` | `4_096` — maximum bytes accumulated by `Query_XTVERSION`. Matches `Termicap.OSC.MAX_RESPONSE_SIZE`. Used in preconditions to bound all parsing loops. |
+| `CSI_XTVERSION_QUERY` | Four-byte `Byte_Array` encoding `ESC [ > q` (`0x1B 0x5B 0x3E 0x71`). The canonical XTVERSION query as used by xterm, WezTerm, and tcell. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Contains_XTVERSION_Response` | Function | `Global => null`; `Pre => Length <= Bytes'Length` | FUNC-XTV-003 |
+| `Extract_XTV_Payload` | Function | `Global => null`; `Pre` requires `Contains_XTVERSION_Response`; `Post` bounds `Offset` and `Length` | FUNC-XTV-004 |
+| `Split_XTV_Payload` | Function | `Global => null`; `Pre => Length > 0 and Offset in bounds` | FUNC-XTV-005 |
+| `Parse_XTVERSION_Response` | Function | `Global => null`; `Pre => Length <= MAX_RESPONSE_SIZE`; `Post => if Success then Terminal_Name non-empty` | FUNC-XTV-006 |
+
+#### Relationship to Other Packages
+
+`Termicap.XTVERSION` is a peer of `Termicap.Color.BG_Query` in the SPARK zone: it re-declares `Byte`/`Byte_Array` from `Interfaces.C.unsigned_char` rather than depending on `Termicap.OSC` (which is `SPARK_Mode => Off`). Its child `Termicap.XTVERSION.IO` is the I/O boundary that bridges the two type systems. `Parse_XTVERSION_Response` is called from `Query_And_Identify` in the child package after `Query_XTVERSION` delivers the raw response bytes.
+
+---
+
+### `Termicap.XTVERSION.IO`
+
+**Responsibility:** I/O boundary for the XTVERSION feature. Sends a `CSI > q` query to the terminal via a `Probe_Session`, with optional multiplexer passthrough wrapping, and returns the raw pre-sentinel response bytes. `Query_And_Identify` combines I/O and parsing into a single call delivering a fully structured `XTVERSION_Result`.
+
+Has `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O — both outside the SPARK 2014 subset. All parsing logic remains in the provable parent package `Termicap.XTVERSION`.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-xtversion-io.ads`, `src/termicap-xtversion-io.adb` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Termicap.XTVERSION`, `Termicap.OSC`, `Termicap.OSC.Parsing`, `Termicap.Environment.Capture`, `Termicap.Terminal_Id` |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Query_XTVERSION` | Procedure | Detects terminal identity, optionally wraps `CSI_XTVERSION_QUERY` for multiplexer passthrough, opens a `Probe_Session`, calls `Sentinel_Query` with `Retry => False`, and returns raw response bytes with a timeout flag. Never raises. `Pre => Response'Length >= XTVERSION.MAX_RESPONSE_SIZE`. | FUNC-XTV-008, FUNC-XTV-009, FUNC-XTV-010, FUNC-XTV-011, FUNC-XTV-012 |
+| `Query_And_Identify` | Function | Calls `Query_XTVERSION`, maps `Timed_Out = True` to `XTVERSION_Result'(Status => Timeout)`, then calls `Parse_XTVERSION_Response` and returns the result. `Timeout_Ms` defaults to 100 ms. Never raises. | FUNC-XTV-013, FUNC-XTV-015 |
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -1036,6 +1102,20 @@ This package is the SPARK Off boundary for the DARK-LIGHT feature, mirroring the
 │   │  Is_Dark / Is_Light — expression functions  │  │
 │   │  Global => null — pure arithmetic, no I/O   │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.XTVERSION (spec + body)                  │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  XTVERSION_Status, XTVERSION_Result,        │  │
+│   │    Payload_Slice, Token_Pair types          │  │
+│   │  CSI_XTVERSION_QUERY constant               │  │
+│   │  MAX_RESPONSE_SIZE : constant := 4_096      │  │
+│   │  Contains_XTVERSION_Response — Pre only     │  │
+│   │  Extract_XTV_Payload — Pre + Post           │  │
+│   │  Split_XTV_Payload — Pre only               │  │
+│   │  Parse_XTVERSION_Response — Pre + Post      │  │
+│   │    (Silver)                                 │  │
+│   │  Global => null — no FFI, no state          │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────┐
@@ -1070,10 +1150,25 @@ This package is the SPARK Off boundary for the DARK-LIGHT feature, mirroring the
 │   │  (calls Detect_Background_Color —           │  │
 │   │    outside SPARK 2014 subset)               │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.XTVERSION.IO (spec + body)               │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Query_XTVERSION — opens Probe_Session,     │  │
+│   │    detects multiplexer via                  │  │
+│   │    Detect_Terminal_Identity, applies        │  │
+│   │    Wrap_For_Passthrough, calls              │  │
+│   │    Sentinel_Query (Retry => False),         │  │
+│   │    returns bytes                            │  │
+│   │  Query_And_Identify — combines I/O with     │  │
+│   │    Parse_XTVERSION_Response; default        │  │
+│   │    timeout 100 ms                           │  │
+│   │  (Probe_Session Limited_Controlled +        │  │
+│   │    terminal I/O — outside SPARK 2014)       │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O. The XTVERSION subsystem applies the identical SPARK split: `Termicap.XTVERSION` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null`, no FFI, no global state; `Termicap.XTVERSION.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Like `Termicap.Color.BG_Query`, `Termicap.XTVERSION` re-declares `Byte`/`Byte_Array` independently of `Termicap.OSC` to avoid a SPARK mode boundary violation while preserving representation compatibility.
 
 ## Related Documents
 
@@ -1099,4 +1194,5 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **Tech Spec F10** (`docs/tech-specs/capability-record.md`): Capability record assembly design rationale
 - **Tech Spec OSC** (`docs/tech-specs/osc-query-infra.md`): OSC query infrastructure design rationale, sentinel pattern, C helper design, and ADR-0014
 - **Tech Spec DARK-LIGHT** (`docs/tech-specs/dark-light.md`): Dark/light theme classification design rationale — BT.601 integer luminance, SPARK Gold boundary, discriminated result type
+- **Tech Spec XTVERSION** (`docs/tech-specs/xtversion.md`): XTVERSION active terminal identification design rationale — DCS envelope recognition, name/version tokenisation formats, SPARK Silver boundary, multiplexer passthrough strategy
 - **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007
