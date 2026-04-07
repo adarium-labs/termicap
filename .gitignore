@@ -35,6 +35,7 @@ coverage/
 .claude/
 existing/
 CLAUDE.md
+.ai
 
 # Project-specific
 /obj/
