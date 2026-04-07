@@ -12,6 +12,7 @@ with AUnit.Test_Suites;
 with Test_BG_Query;
 with Test_Capabilities;
 with Test_DA1;
+with Test_DECRPM;
 with Test_Dark_Light;
 with Test_Color;
 with Test_Dimensions;
@@ -47,6 +48,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_OSC_Parsing.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_BG_Query.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_DA1.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_DECRPM.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Dark_Light.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_XTVERSION.Test_Case);
       return Result;

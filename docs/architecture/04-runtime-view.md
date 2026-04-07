@@ -1655,6 +1655,151 @@ Termicap.DA1.IO.Query_DA1                          [SPARK_Mode => Off]
 
 ---
 
+## Scenario 23: DECRPM DEC Private Mode Query
+
+End-to-end scenario for `Detect_Mode`. Shows the sentinel-bounded read loop pattern, the probe session lifecycle, and the SPARK Silver parsing pipeline. Contrast with Scenario 22 (DA1), which uses `Timeout_Query`; here `Sentinel_Query` is used because DECRPM responses (`CSI ? Ps ; Pm $ y`) are structurally distinct from the DA1 sentinel (`ESC [ c`), so the sentinel pattern safely bounds the accumulation loop.
+
+### Phase A — Multiplexer Check and Query Preparation
+
+```
+Caller (application)
+  │
+  │  Detect_Mode (Mode => MODE_BRACKETED_PASTE, Timeout_Ms => 100)
+  ▼
+Termicap.DECRPM.IO.Detect_Mode                     [SPARK_Mode => Off]
+  │
+  │  Query_Mode (Mode, Timeout_Ms, Response, Resp_Length, Timed_Out)
+  ▼
+Termicap.DECRPM.IO.Query_Mode                      [SPARK_Mode => Off]
+  │
+  │  Step 1: Capture_Current (Env)                 [SPARK_Mode => Off]
+  │    → OS environment variables captured into immutable snapshot
+  │
+  │  Step 2: Detect_Terminal_Identity (Env) → Identity
+  │    [Termicap.Terminal_Id — SPARK_Mode => Off body]
+  │    → 8-step cascade over TERM_PROGRAM, VTE_VERSION, etc.
+  │
+  │  Step 3: Multiplexer passthrough selection
+  │    if Identity.Is_Multiplexer then
+  │      case Identity.Kind is
+  │        when Tmux   → Mode := Tmux_Passthrough
+  │        when Screen → Mode := Screen_Passthrough
+  │        when others → Mode := Tmux_Passthrough   -- safe default
+  │      end case;
+  │      Effective_Query :=
+  │        Wrap_For_Passthrough (DECRPM_Query (Mode), Passthrough_Mode)
+  │        [Termicap.OSC.Parsing — SPARK Silver]
+  │    else
+  │      Effective_Query := DECRPM_Query (Mode)
+  │        [Termicap.DECRPM — SPARK Silver]
+  │        -- e.g. Mode = 2004: ESC [ ? 2 0 0 4 $ p (8 bytes)
+  │    end if
+  │
+  └──► Effective_Query ready; Env and Identity discarded
+```
+
+### Phase B — Probe Session and Sentinel-Bounded Read Loop
+
+```
+  │
+  │  Open (Session, Status)                        [Termicap.OSC — SPARK_Mode => Off]
+  ▼
+  │  Step 4: Probe_Session.Open
+  │    → Foreground check (Is_Foreground_Process)
+  │    → /dev/tty open
+  │    → Save termios, set raw mode, drain input
+  │
+  │  if Status /= Session_OK then
+  │    → Timed_Out := True; Resp_Length := 0; return  -- no exception
+  │  end if
+  │
+  │  Sentinel_Query                                [Termicap.OSC — SPARK_Mode => Off]
+  │  (Session, Effective_Query, Response, Resp_Length, Timeout_Ms,
+  │   Timed_Out, Retry => False)
+  │
+  │  ┌──────────────────────────────────────────────────────────────┐
+  │  │  Write Effective_Query bytes to /dev/tty                    │
+  │  │  Write DA1 sentinel (ESC [ c) to /dev/tty                   │
+  │  │  NOTE: unlike DA1, DECRPM uses Sentinel_Query.              │
+  │  │  Reason: DECRPM response (CSI ? Ps ; Pm $ y) is distinct    │
+  │  │  from the DA1 sentinel (ESC [ c), so the sentinel safely    │
+  │  │  marks the end of the DECRPM response in the buffer.        │
+  │  │                                                              │
+  │  │  Accumulation loop (Timeout_Ms = 100 ms):                   │
+  │  │    Timed_Read (/dev/tty) → append to Response buffer        │
+  │  │    Contains_DA1_Response (Response, Length)  [SPARK Silver] │
+  │  │      → scan for ESC [ ? <digits/semicolons> c pattern       │
+  │  │      → if found: record pre-sentinel length; exit loop      │
+  │  │    if timeout or overflow: Timed_Out := True; exit loop     │
+  │  └──────────────────────────────────────────────────────────────┘
+  │
+  │  Probe_Session.Finalize (unconditional RAII)
+  │    → Restore_Termios, close /dev/tty, release single-session guard
+  │
+  └──► Response(1..Resp_Length) contains the pre-sentinel bytes
+       (the DECRPM response, if received before the DA1 sentinel)
+       Timed_Out reflects whether the DA1 sentinel was detected
+```
+
+### Phase C — Parse Pipeline (SPARK Silver)
+
+```
+  │
+  │  Back in Detect_Mode:
+  │
+  │  if Timed_Out then
+  │    return Mode_Query_Result'(Success => False, Error => Query_Timeout)
+  │  end if
+  │
+  │  Parse_DECRPM_Response (Response, Resp_Length) → Report
+  │    [Termicap.DECRPM — SPARK Silver]
+  ▼
+  │
+  │  Step 5: Contains_DECRPM_Response (Response, Resp_Length)
+  │    → check prefix ESC [ ? (0x1B 0x5B 0x3F)
+  │    → check at least one decimal digit after ?
+  │    → check semicolon (0x3B) separator
+  │    → check at least one decimal digit after ;
+  │    → check suffix $ y (0x24 0x79)
+  │    → minimum 7 bytes (ESC [ ? d ; d $ y)
+  │    → if False: return Mode_Report'(Mode => 0, Status => Not_Recognized)
+  │
+  │  Step 6: Extract decimal Ps (mode number) from position 4
+  │    → accumulate ASCII digits (0x30..0x39) until semicolon
+  │    → Ps = 2004  (for bracketed paste mode query)
+  │
+  │  Step 7: Extract decimal Pm (status code) after semicolon
+  │    → accumulate ASCII digits until $
+  │    → Map Pm to Mode_Status:
+  │        0 → Not_Recognized   (mode not implemented)
+  │        1 → Set              (mode currently enabled)
+  │        2 → Reset            (mode currently disabled)
+  │        3 → Permanently_Set  (mode always enabled)
+  │        4 → Permanently_Reset (mode always disabled)
+  │        others → Not_Recognized
+  │
+  │  Post (machine-verified):
+  │    Contains_DECRPM_Response = True → Report.Mode > 0
+  │
+  │  if Report.Mode = 0 then   -- parse failure
+  │    return Mode_Query_Result'(Success => False, Error => Parse_Failed)
+  │  end if
+  │
+  └──► Mode_Query_Result'(Success => True,
+                           Report  => (Mode => 2004, Status => Set))
+         -- bracketed paste is currently enabled
+```
+
+**Key properties:**
+
+- `Query_Mode` uses `Sentinel_Query` with `Retry => False`. DECRPM responses (`CSI ? Ps ; Pm $ y`) are structurally distinct from the DA1 sentinel (`ESC [ c`), making the sentinel-based boundary detection unambiguous.
+- `Probe_Session.Finalize` is called unconditionally. Terminal state is always restored regardless of whether the query succeeded, timed out, or the session failed to open.
+- `Contains_DECRPM_Response` and `Parse_DECRPM_Response` are both SPARK Silver functions with `Global => null`. They carry machine-verified preconditions and postconditions. The SPARK-provable parsing logic is isolated in `Termicap.DECRPM` while the session management and I/O remain in `SPARK_Mode => Off` in `Termicap.DECRPM.IO`.
+- The multiplexer passthrough step (Phase A, Step 3) reuses `Termicap.OSC.Parsing.Wrap_For_Passthrough` — the same pure SPARK Silver function used by `Termicap.Color.BG_Query.IO`, `Termicap.XTVERSION.IO`, and `Termicap.DA1.IO`. No new C wrappers or POSIX calls are introduced by the DECRPM feature.
+- For batch queries, `Detect_Modes` opens a single `Probe_Session` and calls `Sentinel_Query` once per mode in `Modes(1..Count)`. Per-mode timeout is `max(50, Timeout_Ms / Count)`. Modes that time out individually receive `Status => Not_Recognized` without failing the entire batch.
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1682,4 +1827,5 @@ Termicap.DA1.IO.Query_DA1                          [SPARK_Mode => Off]
 - **Tech Spec XTVERSION** (`docs/tech-specs/xtversion.md`): XTVERSION active terminal identification design rationale — DCS envelope recognition, name/version tokenisation formats, SPARK Silver boundary, multiplexer passthrough strategy
 - **Tech Spec DA1** (`docs/tech-specs/da1-response-parsing.md`): DA1 Primary Device Attributes design rationale — capability enumeration design, VT conformance level mapping, timeout-only read loop, SPARK Silver boundary
 - **ADR-0017** (`docs/adr/0017-da1-timeout-only-read-loop.md`): Rationale for the timeout-only read loop in `Query_DA1` — why `Sentinel_Query` cannot be used when the DA1 response is the sought data
+- **Tech Spec DECRPM** (`docs/tech-specs/decrpm.md`): DECRPM DEC Private Mode Report design rationale — Mode_Status enumeration design, sentinel vs. timeout strategy, batch query pattern, SPARK Silver boundary
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007

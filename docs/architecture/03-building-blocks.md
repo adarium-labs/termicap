@@ -27,6 +27,8 @@ Termicap                          (root namespace — no types or subprograms)
 │   └── Termicap.XTVERSION.IO     [SPARK_Mode => Off] — Query_XTVERSION I/O via Probe_Session, Query_And_Identify convenience function
 ├── Termicap.DA1                  [SPARK Silver] — DA1_Capability/VT_Level/Capability_Flags/DA1_Capabilities types, DA1_QUERY constant, pure interpretation functions
 │   └── Termicap.DA1.IO           [SPARK_Mode => Off] — Query_DA1 timeout-only I/O via Probe_Session, Detect_DA1 convenience function
+├── Termicap.DECRPM               [SPARK Silver] — Mode_Id/Mode_Status/Mode_Report/Mode_Id_Array/Mode_Report_Array types, MODE_* named constants, DECRPM_Query construction function, pure response recognition and parsing functions
+│   └── Termicap.DECRPM.IO        [SPARK_Mode => Off] — Query_Mode/Detect_Mode/Detect_Modes I/O via Probe_Session; Query_Error/Mode_Query_Result/Batch_Query_Result types
 └── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
@@ -974,6 +976,89 @@ Unlike other active probes (`Termicap.XTVERSION.IO`, `Termicap.Color.BG_Query.IO
 
 ---
 
+### `Termicap.DECRPM`
+
+**Responsibility:** Pure SPARK types, constants, and parsing functions for the DECRPM (DEC Private Mode Report) active terminal mode query protocol (`CSI ? Ps $ p` / `CSI ? Ps ; Pm $ y`). Provides all provable building blocks: the `Mode_Id` subtype, six named mode constants, the `Mode_Status` enumeration mapping the five DECRPM response codes, the `Mode_Report` record pairing a mode number with its decoded status, fixed-size array types for batch queries, the `DECRPM_Query` construction function, and pure recognition and parsing functions for DECRPM responses. No I/O, no global state, no exceptions.
+
+Re-declares `Byte` and `Byte_Array` independently of `Termicap.OSC` (which is `SPARK_Mode => Off`) to remain fully SPARK-provable while preserving representation compatibility at the I/O boundary in the child package.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-decrpm.ads`, `src/termicap-decrpm.adb` |
+| SPARK_Mode | On (spec and body) — **Silver level** |
+| Dependencies | `Interfaces.C` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Byte` | Subtype of `Interfaces.C.unsigned_char` — single byte of terminal I/O. Representation-compatible with `Termicap.OSC.Byte`. |
+| `Byte_Array` | Unconstrained array of `Byte` — escape sequence data and response buffers. Representation-compatible with `Termicap.OSC.Byte_Array`. |
+| `Mode_Id` | Subtype of `Natural` — any non-negative DEC private mode number. Using a subtype (rather than a new type) allows callers to pass literal integers for vendor-specific modes without type conversion. |
+| `Mode_Status` | Five-literal enumeration mapping DECRPM response codes: `Not_Recognized` (Pm=0), `Set` (Pm=1), `Reset` (Pm=2), `Permanently_Set` (Pm=3), `Permanently_Reset` (Pm=4). `Not_Recognized` is first so that default-initialised values are safe. |
+| `Mode_Report` | Record pairing `Mode : Mode_Id := 0` with `Status : Mode_Status := Not_Recognized`. Default initialisation produces a clearly empty value (mode 0 is not a valid DEC private mode). |
+| `Mode_Id_Array` | `array (Positive range 1 .. MAX_BATCH_MODES) of Mode_Id` — fixed-size input array for batch queries. |
+| `Mode_Report_Array` | `array (Positive range 1 .. MAX_BATCH_MODES) of Mode_Report` — fixed-size output array for batch query results. |
+
+#### Key Constants
+
+| Constant | Description |
+|----------|-------------|
+| `MAX_RESPONSE_SIZE` | `4_096` — maximum bytes accumulated by `Query_Mode`. Matches `Termicap.OSC.MAX_RESPONSE_SIZE`; bounds parsing loops for SPARK provability. |
+| `MAX_BATCH_MODES` | `16` — maximum modes per batch query. Covers all six standard constants with headroom for vendor extensions. |
+| `MODE_CURSOR_VISIBILITY` | `25` — DECTCEM; cursor visible. |
+| `MODE_MOUSE_X11` | `1000` — X11 mouse button tracking. |
+| `MODE_MOUSE_SGR` | `1006` — SGR mouse coordinate encoding. |
+| `MODE_ALT_SCREEN` | `1049` — alternate screen buffer. |
+| `MODE_BRACKETED_PASTE` | `2004` — bracketed paste mode. |
+| `MODE_SYNC_OUTPUT` | `2026` — synchronized output. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `DECRPM_Query` | Function | `Global => null`; `Post => Result'Length >= 6` | FUNC-RPM-005 |
+| `Contains_DECRPM_Response` | Function | `Global => null`; `Pre => Length <= Bytes'Length` | FUNC-RPM-006 |
+| `Parse_DECRPM_Response` | Function | `Global => null`; `Pre => Length <= Bytes'Length and then Length <= MAX_RESPONSE_SIZE`; `Post => (if Contains_DECRPM_Response then Result.Mode > 0)` | FUNC-RPM-007 |
+
+#### Relationship to Other Packages
+
+`Termicap.DECRPM` depends only on `Interfaces.C`. It does not depend on `Termicap.OSC` (SPARK Off), preserving SPARK provability. Its child `Termicap.DECRPM.IO` is the I/O boundary that bridges the two type systems. `DECRPM_Query` constructs the query bytes consumed by `Query_Mode` in the child package; `Contains_DECRPM_Response` and `Parse_DECRPM_Response` are called from `Detect_Mode` and `Detect_Modes` after `Query_Mode` delivers the raw response bytes.
+
+---
+
+### `Termicap.DECRPM.IO`
+
+**Responsibility:** I/O boundary for the DECRPM DEC Private Mode Report feature. Sends `CSI ? Ps $ p` queries to the terminal via a `Probe_Session` and `Sentinel_Query` infrastructure, and returns structured `Mode_Query_Result` or `Batch_Query_Result` values. `Detect_Mode` combines I/O and parsing into a single call for single-mode queries; `Detect_Modes` performs a batch of queries within a single `Probe_Session` for lower overhead.
+
+Has `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O — both outside the SPARK 2014 subset. All parsing logic remains in the provable parent package `Termicap.DECRPM`.
+
+Unlike `Termicap.DA1.IO`, this package uses `Sentinel_Query` (not `Timeout_Query`): DECRPM responses (`CSI ? Ps ; Pm $ y`) are distinct from the DA1 sentinel (`ESC [ c`), so the DA1 sentinel pattern can safely bound the accumulation loop.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-decrpm-io.ads`, `src/termicap-decrpm-io.adb` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Termicap.DECRPM`, `Termicap.OSC`, `Termicap.Environment.Capture`, `Termicap.Terminal_Id` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Query_Error` | Four-literal enumeration: `Not_A_Terminal` (no controlling terminal), `Not_Foreground` (process not in terminal foreground), `Query_Timeout` (no response within timeout), `Parse_Failed` (response received but unparseable). |
+| `Mode_Query_Result` | Discriminated record. `Success = True`: `Report : Mode_Report`. `Success = False`: `Error : Query_Error`. Default discriminant `False` ensures uninitialised values are in the failure state. |
+| `Batch_Query_Result` | Discriminated record. `Success = True`: `Reports : Mode_Report_Array`, `Count : Positive`. `Success = False`: `Error : Query_Error`. |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Query_Mode` | Procedure | Detects terminal identity, optionally wraps the DECRPM query for multiplexer passthrough, opens a `Probe_Session`, calls `Sentinel_Query` with `Retry => False`, and returns raw response bytes with a timeout flag. `Pre => Timeout_Ms > 0`. Never raises. | FUNC-RPM-008 |
+| `Detect_Mode` | Function | Calls `Query_Mode`, maps `Timed_Out = True` to `Mode_Query_Result'(Success => False, Error => Query_Timeout)`, then calls `Parse_DECRPM_Response` and returns the typed result. `Timeout_Ms` defaults to 100 ms. Never raises. | FUNC-RPM-009 |
+| `Detect_Modes` | Function | Opens a single `Probe_Session` and queries `Modes(1..Count)` in sequence; per-mode timeout is `max(50, Timeout_Ms / Count)`. Modes that time out individually receive `Status => Not_Recognized`. `Pre => Count <= MAX_BATCH_MODES`. `Timeout_Ms` defaults to 200 ms. Never raises. | FUNC-RPM-011 |
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -1194,6 +1279,19 @@ Unlike other active probes (`Termicap.XTVERSION.IO`, `Termicap.Color.BG_Query.IO
 │   │  VT_Level_Of — expression function          │  │
 │   │  Global => null — no FFI, no state          │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.DECRPM (spec + body)                     │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Mode_Id subtype, Mode_Status enumeration   │  │
+│   │  Mode_Report, Mode_Id_Array,                │  │
+│   │    Mode_Report_Array types                  │  │
+│   │  MODE_* named constants (6)                 │  │
+│   │  MAX_RESPONSE_SIZE, MAX_BATCH_MODES         │  │
+│   │  DECRPM_Query — Post: Result'Length >= 6    │  │
+│   │  Contains_DECRPM_Response — Pre only        │  │
+│   │  Parse_DECRPM_Response — Pre + Post (Silver)│  │
+│   │  Global => null — no FFI, no state          │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────┐
@@ -1256,10 +1354,27 @@ Unlike other active probes (`Termicap.XTVERSION.IO`, `Termicap.Color.BG_Query.IO
 │   │  (Probe_Session Limited_Controlled +        │  │
 │   │    terminal I/O — outside SPARK 2014)       │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.DECRPM.IO (spec + body)                  │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Query_Error, Mode_Query_Result,            │  │
+│   │    Batch_Query_Result types                 │  │
+│   │  Query_Mode — opens Probe_Session,          │  │
+│   │    detects multiplexer, applies passthrough │  │
+│   │    wrap, calls Sentinel_Query (Retry=>False)│  │
+│   │    — DECRPM response is distinct from DA1   │  │
+│   │    sentinel, so Sentinel_Query is safe      │  │
+│   │  Detect_Mode — combines I/O with            │  │
+│   │    Parse_DECRPM_Response; default 100 ms    │  │
+│   │  Detect_Modes — batch query within a single │  │
+│   │    Probe_Session; default 200 ms total      │  │
+│   │  (Probe_Session Limited_Controlled +        │  │
+│   │    terminal I/O — outside SPARK 2014)       │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O. The XTVERSION subsystem applies the identical SPARK split: `Termicap.XTVERSION` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null`, no FFI, no global state; `Termicap.XTVERSION.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Like `Termicap.Color.BG_Query`, `Termicap.XTVERSION` re-declares `Byte`/`Byte_Array` independently of `Termicap.OSC` to avoid a SPARK mode boundary violation while preserving representation compatibility. The DA1 subsystem applies the same SPARK split: `Termicap.DA1` (both spec and body) is fully SPARK Silver — pure `Interpret_DA1`, `Has_Capability`, and `VT_Level_Of` functions with `Global => null`, no FFI, no global state; `Termicap.DA1.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` and performs terminal I/O via `Timeout_Query`. Unlike other active probes, `Termicap.DA1.IO` cannot use `Sentinel_Query` because the DA1 response is itself the data being sought; it calls `Timeout_Query` instead, a new public procedure added to `Termicap.OSC`. `Termicap.Capabilities` has been extended with a `DA1 : Termicap.DA1.DA1_Capabilities` field and now depends on `Termicap.DA1.IO` in its body.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O. The XTVERSION subsystem applies the identical SPARK split: `Termicap.XTVERSION` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null`, no FFI, no global state; `Termicap.XTVERSION.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Like `Termicap.Color.BG_Query`, `Termicap.XTVERSION` re-declares `Byte`/`Byte_Array` independently of `Termicap.OSC` to avoid a SPARK mode boundary violation while preserving representation compatibility. The DA1 subsystem applies the same SPARK split: `Termicap.DA1` (both spec and body) is fully SPARK Silver — pure `Interpret_DA1`, `Has_Capability`, and `VT_Level_Of` functions with `Global => null`, no FFI, no global state; `Termicap.DA1.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` and performs terminal I/O via `Timeout_Query`. Unlike other active probes, `Termicap.DA1.IO` cannot use `Sentinel_Query` because the DA1 response is itself the data being sought; it calls `Timeout_Query` instead, a new public procedure added to `Termicap.OSC`. `Termicap.Capabilities` has been extended with a `DA1 : Termicap.DA1.DA1_Capabilities` field and now depends on `Termicap.DA1.IO` in its body. The DECRPM subsystem applies the same SPARK split: `Termicap.DECRPM` (both spec and body) is fully SPARK Silver — `DECRPM_Query`, `Contains_DECRPM_Response`, and `Parse_DECRPM_Response` functions with `Global => null`, no FFI, no global state; `Termicap.DECRPM.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Unlike `Termicap.DA1.IO`, `Termicap.DECRPM.IO` uses `Sentinel_Query` (not `Timeout_Query`): DECRPM responses (`CSI ? Ps ; Pm $ y`) are structurally distinct from the DA1 sentinel (`ESC [ c`), so the sentinel pattern can safely bound the accumulation loop. Like all other active-probing SPARK packages, `Termicap.DECRPM` re-declares `Byte`/`Byte_Array` from `Interfaces.C.unsigned_char` independently of `Termicap.OSC` to preserve SPARK provability while maintaining representation compatibility at the I/O boundary.
 
 ## Related Documents
 
@@ -1288,4 +1403,5 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **Tech Spec XTVERSION** (`docs/tech-specs/xtversion.md`): XTVERSION active terminal identification design rationale — DCS envelope recognition, name/version tokenisation formats, SPARK Silver boundary, multiplexer passthrough strategy
 - **Tech Spec DA1** (`docs/tech-specs/da1-response-parsing.md`): DA1 Primary Device Attributes design rationale — capability enumeration design, VT conformance level mapping, timeout-only read loop, SPARK Silver boundary
 - **ADR-0017** (`docs/adr/0017-da1-timeout-only-read-loop.md`): Rationale for the timeout-only read loop in DA1 queries (no sentinel appended)
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007
+- **Tech Spec DECRPM** (`docs/tech-specs/decrpm.md`): DECRPM DEC Private Mode Report design rationale — Mode_Status enumeration design, sentinel vs. timeout strategy, batch query pattern, SPARK Silver boundary
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007, FUNC-RPM-001 through FUNC-RPM-017

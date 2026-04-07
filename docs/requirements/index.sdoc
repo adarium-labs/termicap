@@ -45,6 +45,7 @@ Feature documents:
 
   functional/xtversion.sdoc  (REQ-XTV)  — Active terminal identification via XTVERSION (CSI > q / DCS >| ... ST)
   functional/da1.sdoc        (REQ-DA1)  — DA1 Primary Device Attributes response parsing (CSI c / ESC [ ? Ps ; ... c)
+  functional/decrpm.sdoc     (REQ-RPM)  — DECRPM private mode queries (CSI ? Ps $ p / CSI ? Ps ; Pm $ y)
 
 Top-level requirement documents at this level:
 

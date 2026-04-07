@@ -1,0 +1,627 @@
+[DOCUMENT]
+TITLE: DECRPM Private Mode Queries
+UID: REQ-RPM
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Core Types (SPARK Silver)
+
+[REQUIREMENT]
+UID: FUNC-RPM-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Mode_Id Subtype
+STATEMENT: >>>
+The library shall define a subtype that represents a DEC private mode number as a Natural value:
+
+  subtype Mode_Id is Natural;
+
+The following named constants shall be defined for the mode numbers most relevant to terminal capability detection:
+
+  MODE_CURSOR_VISIBILITY   : constant Mode_Id := 25;    --  DECTCEM: cursor visible
+  MODE_MOUSE_X11           : constant Mode_Id := 1000;  --  X11 mouse button tracking
+  MODE_MOUSE_SGR           : constant Mode_Id := 1006;  --  SGR mouse coordinate encoding
+  MODE_ALT_SCREEN          : constant Mode_Id := 1049;  --  Alternate screen buffer
+  MODE_BRACKETED_PASTE     : constant Mode_Id := 2004;  --  Bracketed paste mode
+  MODE_SYNC_OUTPUT         : constant Mode_Id := 2026;  --  Synchronized output
+
+The subtype and all named constants shall be declared in a package with SPARK_Mode => On.
+<<<
+COMMENT: >>>
+Using a subtype of Natural rather than a new integer type for Mode_Id follows the principle of least restriction: DEC private mode numbers are simply non-negative integers, and callers may encounter mode numbers not listed in the named constants (vendor extensions, future standards). A subtype rather than a type alias preserves numeric operations and allows callers to pass literal integers without explicit type conversion, which is important when querying non-standard modes. The named constants use ALL_CAPS_WITH_UNDERSCORES per the Termicap Ada coding standard for constants. The six modes selected are those with the broadest practical impact on terminal UI libraries: cursor visibility (MODE_CURSOR_VISIBILITY) affects all cursor-drawing applications; X11 mouse tracking (MODE_MOUSE_X11) and SGR encoding (MODE_MOUSE_SGR) are the two primary mouse support modes queried by tcell, notcurses, and crossterm; the alternate screen buffer (MODE_ALT_SCREEN) is used by virtually every full-screen TUI; bracketed paste (MODE_BRACKETED_PASTE) prevents paste injection vulnerabilities; and synchronized output (MODE_SYNC_OUTPUT) is a modern protocol for flicker-free rendering used by WezTerm, kitty, and foot. Additional mode constants (e.g., MODE_MOUSE_BUTTON_EVENT = 1002, MODE_MOUSE_ANY_EVENT = 1003, MODE_MOUSE_SGR_PIXEL = 1016) may be added as named constants without changing the subtype definition.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Mode_Status Enumeration
+STATEMENT: >>>
+The library shall define an enumeration type that represents the five possible status codes returned in a DECRPM response:
+
+  type Mode_Status is
+    (Not_Recognized,    --  Ps = 0: mode not implemented by terminal
+     Set,               --  Ps = 1: mode is currently enabled
+     Reset,             --  Ps = 2: mode is currently disabled
+     Permanently_Set,   --  Ps = 3: mode is always enabled, cannot be changed
+     Permanently_Reset);  --  Ps = 4: mode is always disabled, cannot be changed
+
+The mapping from the DECRPM numeric status parameter Pm to the Mode_Status literal shall be:
+  - Pm = 0 => Not_Recognized
+  - Pm = 1 => Set
+  - Pm = 2 => Reset
+  - Pm = 3 => Permanently_Set
+  - Pm = 4 => Permanently_Reset
+  - Any other Pm value => Not_Recognized (treated as unrecognised)
+
+The enumeration shall be declared in a package with SPARK_Mode => On.
+<<<
+COMMENT: >>>
+The five status codes are specified in the ECMA-48 DEC extension and are documented by xterm. The mapping to an enumeration rather than a raw integer provides type safety: a caller cannot confuse "mode disabled" (Reset = 2) with "not implemented" (Not_Recognized = 0) without a named comparison, eliminating a class of silent logic errors. The literals are named Set and Reset rather than Enabled/Disabled or Active/Inactive to match the DEC documentation terminology (DECRPM = DEC Private Mode Report); a "set" mode is one that has been activated via DECSET. The distinction between Set (1) and Permanently_Set (3) is significant for certain modes: for example, on a terminal that does not allow the alternate screen to be disabled, a caller querying MODE_ALT_SCREEN would receive Permanently_Set rather than Set or Reset. The treatment of unknown Pm values as Not_Recognized is conservative and safe: an unrecognised status code from an extended or future terminal implementation cannot be worse than a mode that the terminal does not support. The enumeration ordering (Not_Recognized first) ensures that a zero-initialised Mode_Status defaults to Not_Recognized, which is the safest uninitialised value — it prevents a caller from treating an uninitialised status as a confirmed capability.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Mode_Report Record
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-001
+- TYPE: Parent
+  VALUE: FUNC-RPM-002
+STATEMENT: >>>
+The library shall define a record type that pairs a mode number with its reported status:
+
+  type Mode_Report is record
+     Mode   : Mode_Id     := 0;
+     Status : Mode_Status := Not_Recognized;
+  end record;
+
+The Mode field shall hold the DEC private mode number that was queried. The Status field shall hold the Mode_Status value decoded from the terminal's DECRPM response for that mode. When no response was received for a mode (timeout, not-a-terminal, or parse failure), the Mode_Report shall be initialised with Mode => <the queried mode number> and Status => Not_Recognized.
+
+The type shall be declared in the same package as Mode_Id and Mode_Status, with SPARK_Mode => On.
+<<<
+COMMENT: >>>
+Pairing the mode number with its status in a single record serves two purposes. First, it prevents confusion in batch queries (FUNC-RPM-009): when querying multiple modes simultaneously, the caller receives a collection of Mode_Report values and can identify which status corresponds to which mode without maintaining a parallel index. Second, it enables the caller to distinguish "status Not_Recognized because the terminal does not support the mode" from "status Not_Recognized because we never sent this query" by checking whether the Mode field matches the expected mode number. The default initialisation (Mode => 0, Status => Not_Recognized) produces a value that is syntactically valid and semantically safe: mode 0 is not a valid DEC private mode number, so a default-initialised record is clearly "empty" rather than "mode 0 is not recognised". Using a plain record (rather than a discriminated record as in XTVERSION_Result) is appropriate because both fields are always meaningful: Mode is always the queried number and Status is always the decoded or default status. A discriminated record would add the overhead of a discriminant check without adding type safety beyond what the Mode_Status enumeration already provides.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Mode_Query_Result Discriminated Record
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-003
+STATEMENT: >>>
+The library shall define a discriminated record type that represents the outcome of a single-mode DECRPM query:
+
+  type Query_Error is
+    (Not_A_Terminal, Not_Foreground, Query_Timeout, Parse_Failed);
+
+  type Mode_Query_Result (Success : Boolean := False) is record
+     case Success is
+        when True  =>
+           Report : Mode_Report;
+        when False =>
+           Error  : Query_Error;
+     end case;
+  end record;
+
+When Success is True, the Report component holds the Mode_Report (mode number plus decoded status) returned by the terminal. When Success is False, the Error component holds a Query_Error value indicating why the query could not be completed:
+
+  - Not_A_Terminal: the process has no controlling terminal (/dev/tty unavailable); no query was sent.
+  - Not_Foreground: the process is not in the terminal's foreground process group; no query was sent.
+  - Query_Timeout: the query was sent but neither the DECRPM response nor the DA1 sentinel was detected within the timeout.
+  - Parse_Failed: a response was received but could not be parsed as a valid DECRPM response.
+
+The default discriminant value of False ensures that an uninitialized Mode_Query_Result is always in the failure state.
+<<<
+COMMENT: >>>
+The discriminated record design mirrors the established Termicap pattern for query result types: Theme_Result (FUNC-DKL-006), XTVERSION_Result (FUNC-XTV-001), and the BG-COLOR query results all use the same idiom. The Ada discriminant enforces the check at compile time: accessing Report when Success is False raises Constraint_Error, preventing callers from silently using invalid data. The four Query_Error values cover the three physical reasons a query cannot produce a result (no terminal, wrong process group, timeout) plus the semantic reason (a response arrived but could not be interpreted). The Not_A_Terminal and Not_Foreground variants correspond directly to Session_No_Terminal and Session_Not_Foreground from the Probe_Session infrastructure (FUNC-OSC-008), keeping the error vocabulary consistent across all active probing features. Query_Timeout distinguishes a silent terminal (no DECRPM response within Timeout_Ms) from Parse_Failed (a response arrived but was malformed); this is the same Timeout vs. Parse_Error distinction used in XTVERSION_Result (FUNC-XTV-001) and allows callers to implement different fallback strategies: a timeout warrants a "terminal does not support this mode" assumption, while a parse failure warrants a debug log entry. Including the Mode_Report in the Success branch (rather than just Status) means the caller always has the queried mode number available without needing to remember what they queried.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Query Byte Constants (SPARK Silver)
+
+[REQUIREMENT]
+UID: FUNC-RPM-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: DECRPM Query Byte Sequence Construction
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-001
+STATEMENT: >>>
+The library shall define a pure SPARK function that constructs the DECRPM query byte sequence for a given mode number:
+
+  function DECRPM_Query (Mode : Mode_Id) return Byte_Array
+  with
+    SPARK_Mode => On,
+    Global     => null,
+    Post       => DECRPM_Query'Result'Length >= 6;
+
+The function shall produce the byte sequence encoding CSI ? Ps $ p, where Ps is the decimal ASCII representation of Mode. Specifically:
+
+  - Start with ESC (0x1B) and [ (0x5B), the two-byte CSI introducer.
+  - Append ? (0x3F), the DEC private parameter prefix.
+  - Append the decimal digits of Mode as ASCII characters (0x30..0x39), with no leading zeros, except that Mode = 0 shall produce the single digit '0'.
+  - Append $ (0x24) and p (0x70), the two-byte DECRPM command suffix.
+
+The minimum result length is 6 bytes (for a single-digit mode number, e.g., Mode = 25 as "25" gives 7 bytes total: ESC [ ? 2 5 $ p).
+
+The function shall be declared in the SPARK On parsing/types package alongside Mode_Id, Mode_Status, and Mode_Report.
+<<<
+COMMENT: >>>
+Constructing the query sequence as a function rather than a set of compile-time constants is necessary because mode numbers are variable: a caller querying MODE_MOUSE_X11 = 1000 requires a different byte sequence than a caller querying MODE_CURSOR_VISIBILITY = 25. The six named mode constants could each have a corresponding compile-time constant byte array, but this approach does not scale to caller-specified arbitrary mode numbers. A pure SPARK function with a bounded output satisfies the SPARK provability requirement: the output length is bounded by 3 (prefix) + digit_count(Mode) + 2 (suffix) = at most 3 + 10 + 2 = 15 bytes for the maximum Natural value, well within any reasonable stack or buffer limit. The postcondition (result length >= 6) is provable because Mode = 0 yields 1 digit and the fixed prefix/suffix bytes always contribute 5 bytes, giving a minimum of 6. Expressing the digit encoding as a pure function (rather than writing digits into a caller-supplied buffer) keeps the function side-effect-free, which is required by SPARK_Mode => On and Global => null. The decimal digit encoding follows standard ASCII: digit d is encoded as Character'Pos ('0') + d = 0x30 + d. No leading zeros are emitted because DECRPM mode numbers do not use leading-zero encoding in any known terminal implementation.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Response Parsing (SPARK Silver)
+
+[REQUIREMENT]
+UID: FUNC-RPM-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: DECRPM Response Recognition Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-002
+STATEMENT: >>>
+The library shall define a pure SPARK function that recognises a valid DECRPM response in a byte buffer. A well-formed DECRPM response has the following structure:
+
+  CSI ? Ps ; Pm $ y
+
+where:
+  - CSI is the two-byte sequence ESC [ (0x1B 0x5B).
+  - ? (0x3F) is the DEC private parameter prefix.
+  - Ps is one or more ASCII decimal digits (0x30..0x39) encoding the queried mode number.
+  - ; (0x3B) is the parameter separator.
+  - Pm is one or more ASCII decimal digits encoding the status code (0..4).
+  - $ (0x24) and y (0x79) are the two-byte DECRPM response suffix.
+
+The recognition function shall return True if and only if Bytes(1..Length) matches the structure above: begins with ESC [ ? and contains at least one digit before the semicolon, a semicolon, at least one digit after it, and ends with $ y. It shall return False for any shorter or malformed input.
+
+A representative signature is:
+
+  function Contains_DECRPM_Response
+    (Bytes : Byte_Array; Length : Natural) return Boolean
+  with
+    SPARK_Mode => On,
+    Global     => null,
+    Pre        => Length <= Bytes'Length;
+<<<
+COMMENT: >>>
+Isolating response recognition in a pure SPARK function follows the same decomposition used for XTVERSION (Contains_XTVERSION_Response, FUNC-XTV-003) and BG-COLOR (FUNC-BGC-007 through FUNC-BGC-010). The CSI ? ... $ y structure is unambiguous: the $ y suffix is not used by any other standard CSI sequence, and the ? prefix identifies it as a DEC private mode response rather than an ANSI mode report (which uses $ y without ?). The recognition function is intentionally conservative: requiring at least one digit before and after the semicolon prevents matching degenerate responses like ESC [ ? ; $ y (missing mode number) or ESC [ ? 1000 ; $ y (missing status). These degenerate cases indicate a malformed terminal implementation and should produce Parse_Failed rather than Not_Recognized. The SPARK postcondition is implicit in the return type (Boolean) and the precondition Length <= Bytes'Length is required to prevent GNATprove from generating an index-out-of-bounds obligation that cannot be discharged without knowing the relationship between Length and Bytes'Last.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: DECRPM Response Parsing Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-001
+- TYPE: Parent
+  VALUE: FUNC-RPM-002
+- TYPE: Parent
+  VALUE: FUNC-RPM-003
+- TYPE: Parent
+  VALUE: FUNC-RPM-006
+STATEMENT: >>>
+The library shall define a pure SPARK function that parses a byte buffer containing a confirmed DECRPM response into a Mode_Report record:
+
+  function Parse_DECRPM_Response
+    (Bytes  : Byte_Array;
+     Length : Natural) return Mode_Report
+  with
+    SPARK_Mode => On,
+    Global     => null,
+    Pre        => Length <= Bytes'Length
+                    and then Length <= MAX_RESPONSE_SIZE,
+    Post       =>
+      (if Contains_DECRPM_Response (Bytes, Length)
+       then Parse_DECRPM_Response'Result.Mode > 0);
+
+The function shall:
+  1. Return Mode_Report'(Mode => 0, Status => Not_Recognized) when Length = 0 or when Contains_DECRPM_Response (Bytes, Length) = False.
+  2. Scan Bytes(1..Length) starting after the ESC [ ? prefix to extract the decimal Ps value (mode number). Accumulate ASCII digits (0x30..0x39) until the semicolon (0x3B) is encountered.
+  3. Continue scanning after the semicolon to extract the decimal Pm value (status code). Accumulate digits until $ (0x24) is encountered.
+  4. Map Pm to Mode_Status:
+       0 => Not_Recognized
+       1 => Set
+       2 => Reset
+       3 => Permanently_Set
+       4 => Permanently_Reset
+       any other Pm => Not_Recognized
+  5. Return Mode_Report'(Mode => Ps, Status => <decoded status>).
+
+The MAX_RESPONSE_SIZE precondition is inherited from the OSC infrastructure (FUNC-OSC-009, 4096 bytes) and ensures that the loop over Bytes is bounded.
+
+The postcondition guarantees that when a valid DECRPM response is present, the parsed mode number is positive (Mode > 0), since no valid DEC private mode number is zero.
+<<<
+COMMENT: >>>
+Parse_DECRPM_Response is the pure computational core of the DECRPM feature, parallel to Parse_XTVERSION_Response (FUNC-XTV-006) and Interpret_DA1 (FUNC-DA1-004). Accepting a Byte_Array directly (rather than a pre-structured intermediate record) keeps the parsing pipeline flat and minimises the number of intermediate types: the I/O layer calls Parse_DECRPM_Response on the raw response buffer and immediately receives a Mode_Report. The two-pass scanning approach (mode number, then status) is robust against variable-length mode numbers: mode 25 uses two digits while mode 2026 uses four, and the semicolon delimiter unambiguously marks the boundary. The loop over ASCII digits is bounded by Length <= MAX_RESPONSE_SIZE (4096), ensuring the SPARK prover can verify termination without a manual loop invariant. The Pm-to-Mode_Status mapping delegates to the same semantic encoding as FUNC-RPM-002, ensuring consistency. The postcondition Mode > 0 on successful parse is provable because the parse succeeds only when Ps contains at least one digit, and a positive number with at least one digit is at least 1; mode 0 is excluded from the valid DEC private mode space and would have Contains_DECRPM_Response returning False. Returning the default Mode_Report for any unrecognised input (step 1) rather than raising an exception follows the Termicap library convention of exception-free error handling at SPARK boundaries.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Single-Mode Query API (Ada FFI Boundary)
+
+[REQUIREMENT]
+UID: FUNC-RPM-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Query_Mode I/O Procedure
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-001
+- TYPE: Parent
+  VALUE: FUNC-RPM-005
+- TYPE: Parent
+  VALUE: FUNC-RPM-007
+STATEMENT: >>>
+The library shall provide an I/O boundary procedure, compiled with SPARK_Mode => Off, that sends a single DECRPM query and reads the response:
+
+  procedure Query_Mode
+    (Mode        :     Mode_Id;
+     Timeout_Ms  :     Natural;
+     Response    : out Termicap.OSC.Response_Buffer;
+     Resp_Length : out Natural;
+     Timed_Out   : out Boolean)
+  with Pre => Timeout_Ms > 0;
+
+The procedure shall:
+  1. Construct the DECRPM query sequence via DECRPM_Query (FUNC-RPM-005): CSI ? <Mode> $ p.
+  2. Open a Probe_Session (FUNC-OSC-008). If the session fails to open for any reason (Session_No_Terminal, Session_Not_Foreground, Session_Save_Failed, Session_Raw_Failed, Session_Already_Active), set Timed_Out := True, Resp_Length := 0, and return.
+  3. Call Sentinel_Query (FUNC-OSC-006) with the query sequence and Timeout_Ms.
+  4. Allow the Probe_Session to close unconditionally via RAII finalization.
+  5. Populate Response with the pre-sentinel response bytes, Resp_Length with the valid byte count, and Timed_Out with the sentinel-detection outcome.
+
+The procedure shall not raise an exception on any code path.
+<<<
+COMMENT: >>>
+Query_Mode mirrors the I/O procedure structure of Query_XTVERSION (FUNC-XTV-008) and Query_Color (FUNC-BGC-006): all three use the same Probe_Session lifecycle, the same Sentinel_Query accumulation pattern, and the same out-parameter contract. Reusing the existing OSC infrastructure means Query_Mode introduces no new C wrappers or system calls beyond what is already present in the library. The session open/close lifecycle is handled by the RAII Probe_Session controlled type, which unconditionally restores terminal state even if an exception propagates during the query phase. The pre-condition Timeout_Ms > 0 prevents a zero-timeout call from producing a trivially-timed-out result that a caller might misinterpret as "mode not supported"; callers that want a non-blocking check should use a small but non-zero timeout. The multiplexer passthrough step (FUNC-XTV-008 step 3) is deliberately omitted from Query_Mode's specification: DECRPM queries use CSI (not DCS/OSC), and CSI sequences are generally forwarded by multiplexers without wrapping. If empirical testing with tmux and GNU Screen reveals that passthrough is needed for DECRPM, this requirement shall be amended in a future revision.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detect_Mode Top-Level Convenience Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-004
+- TYPE: Parent
+  VALUE: FUNC-RPM-007
+- TYPE: Parent
+  VALUE: FUNC-RPM-008
+STATEMENT: >>>
+The library shall provide a top-level convenience function that combines a DECRPM query with response parsing into a single call:
+
+  function Detect_Mode
+    (Mode       : Mode_Id;
+     Timeout_Ms : Natural := 100) return Mode_Query_Result;
+
+The function shall execute the following algorithm:
+
+  1. Call Query_Mode (FUNC-RPM-008) with Mode and Timeout_Ms, obtaining Response, Resp_Length, and Timed_Out.
+  2. If the session failed to open because there is no controlling terminal (identifiable by a Timed_Out = True result when the process is not interactive), return Mode_Query_Result'(Success => False, Error => Not_A_Terminal). Note: The precise session status is available only inside Query_Mode; the caller distinguishes Not_A_Terminal from Not_Foreground via the same Timed_Out = True path, which is sufficient for most use cases. An extended API with explicit session status propagation may be added in a future revision.
+  3. If Timed_Out is True (no DECRPM response and no DA1 sentinel within Timeout_Ms), return Mode_Query_Result'(Success => False, Error => Query_Timeout).
+  4. Call Parse_DECRPM_Response (FUNC-RPM-007) with Response and Resp_Length.
+  5. If Parse_DECRPM_Response returns a Mode_Report with Mode = 0 (parse failure indicator), return Mode_Query_Result'(Success => False, Error => Parse_Failed).
+  6. Return Mode_Query_Result'(Success => True, Report => <the parsed Mode_Report>).
+
+The default Timeout_Ms of 100 milliseconds is consistent with Query_And_Identify (FUNC-XTV-013) and is appropriate for local terminal sessions.
+
+This function is an Ada boundary (SPARK_Mode => Off) because it calls Query_Mode which performs I/O.
+<<<
+COMMENT: >>>
+Detect_Mode is the primary entry point for the common use case of querying a single DEC private mode. It parallels Query_And_Identify (FUNC-XTV-013) in structure: the I/O and parsing steps are orchestrated in one place, and the caller receives a typed result without manual coordination. The 100 ms default timeout matches the XTVERSION default and is empirically safe for local (non-SSH) terminals; users over high-latency connections or with multiplexers may need to increase it. The mode number is included in the Mode_Query_Result via Mode_Report.Mode (FUNC-RPM-003), so the caller always has the echoed mode number available for logging or debugging, without needing to remember what was queried. The Note in step 2 acknowledges a design simplification: Not_A_Terminal and Not_Foreground both arrive via the same Timed_Out = True path from Query_Mode, because the session status is not propagated back to the caller. This matches the behaviour of Query_And_Identify and Query_Color; a future higher-fidelity API could expose a Session_Status out-parameter, but for v1 the simplification is acceptable because both conditions (no terminal, not foreground) have the same caller response: fall back to passive detection.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Batch Query API (Ada FFI Boundary)
+
+[REQUIREMENT]
+UID: FUNC-RPM-010
+STATUS: Approved
+PRIORITY: Should
+TITLE: Mode_Id_Array Type and MAX_BATCH_MODES Constant
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-001
+STATEMENT: >>>
+The library shall define a constant bounding the number of modes that may be queried in a single batch, and a fixed-size array type for passing mode lists:
+
+  MAX_BATCH_MODES : constant := 16;
+
+  type Mode_Id_Array is
+    array (Positive range 1 .. MAX_BATCH_MODES) of Mode_Id;
+
+  type Mode_Report_Array is
+    array (Positive range 1 .. MAX_BATCH_MODES) of Mode_Report;
+
+The Mode_Id_Array type shall be used to pass the list of modes to query in a batch call (FUNC-RPM-011). The Mode_Report_Array type shall be used to return the corresponding list of reports. Both types shall be declared in the SPARK On package alongside Mode_Id and Mode_Report.
+<<<
+COMMENT: >>>
+A fixed-size array type (rather than an unconstrained array or an Ada.Containers.Vectors instance) is used for three reasons. First, SPARK Silver mode does not permit heap allocation, so a fixed-size stack-allocated type is required for any SPARK-On usage. Second, the batch size is naturally bounded: querying more than 16 modes in a single terminal probing session would require a long blocking read, which is unacceptable in a startup-time detection library. Third, a fixed-size type simplifies the I/O layer: Query_Modes (FUNC-RPM-011) can declare a Response_Buffer on the stack for each query without dynamic allocation. The bound of 16 is chosen to cover the six standard modes in FUNC-RPM-001 with significant headroom for vendor-specific modes, while remaining within a reasonable stack footprint (16 * sizeof(Mode_Id) = 16 * 4 bytes = 64 bytes). The Mode_Report_Array mirrors Mode_Id_Array for symmetry: the i-th element of the result array always corresponds to the i-th mode in the query array, regardless of whether a response was received for that mode.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-011
+STATUS: Approved
+PRIORITY: Should
+TITLE: Detect_Modes Batch Query Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-004
+- TYPE: Parent
+  VALUE: FUNC-RPM-007
+- TYPE: Parent
+  VALUE: FUNC-RPM-008
+- TYPE: Parent
+  VALUE: FUNC-RPM-010
+STATEMENT: >>>
+The library shall provide a batch convenience function that queries multiple DEC private modes within a single Probe_Session:
+
+  function Detect_Modes
+    (Modes      : Mode_Id_Array;
+     Count      : Positive;
+     Timeout_Ms : Natural := 200) return Mode_Query_Result
+  with Pre => Count <= MAX_BATCH_MODES;
+
+The function shall execute the following algorithm:
+
+  1. Open a single Probe_Session (FUNC-OSC-008). If the session fails to open, return Mode_Query_Result'(Success => False, Error => Not_A_Terminal).
+  2. For each index I in 1 .. Count:
+     a. Construct the DECRPM query for Modes(I) via DECRPM_Query (FUNC-RPM-005).
+     b. Call Sentinel_Query with the query sequence and a per-query timeout of Timeout_Ms / Count (minimum 50 ms per query, rounded down).
+     c. Call Parse_DECRPM_Response on the resulting response bytes.
+     d. Accumulate the resulting Mode_Report for Modes(I).
+  3. Close the Probe_Session via RAII finalization.
+  4. Assemble the accumulated Mode_Reports into a batch result.
+
+The batch result shall be returned as:
+
+  type Batch_Query_Result (Success : Boolean := False) is record
+     case Success is
+        when True  =>
+           Reports : Mode_Report_Array;
+           Count   : Positive;
+        when False =>
+           Error   : Query_Error;
+     end case;
+  end record;
+
+When Success is True, Reports(1 .. Count) shall hold the Mode_Report for each queried mode in the same order as the input Modes array. Modes for which the terminal timed out shall have Status => Not_Recognized. When Success is False (session open failure), Error shall identify the reason.
+
+The default Timeout_Ms of 200 milliseconds allocates approximately 12 ms per mode for a 16-mode batch, which is sufficient for local terminals; callers over high-latency connections should pass a larger timeout.
+
+This function is an Ada boundary (SPARK_Mode => Off) because it calls Probe_Session I/O operations.
+<<<
+COMMENT: >>>
+Batch querying is architecturally preferable to calling Detect_Mode (FUNC-RPM-009) in a loop for two reasons. First, opening a Probe_Session has overhead: it opens /dev/tty, saves termios, and activates raw mode. A loop of N Detect_Mode calls incurs this overhead N times, whereas Detect_Modes incurs it once. Second, the DA1 sentinel pattern (FUNC-OSC-006) already amortises the session overhead over multiple queries within a single session: each Sentinel_Query within the open session sends its query bytes and waits for the DA1 response, so N queries execute as N sequential query-response pairs within one raw-mode session rather than N independent sessions. The per-query timeout division (Timeout_Ms / Count, minimum 50 ms) prevents the total blocking time from growing linearly with the number of modes: a 200 ms budget divided across 4 modes gives 50 ms per mode, which is appropriate for local terminals. The 50 ms minimum per-query timeout prevents integer truncation from producing a zero-timeout query that would trivially time out. The Batch_Query_Result discriminated record mirrors Mode_Query_Result (FUNC-RPM-004) for structural consistency. Modes that time out individually within the batch receive Status => Not_Recognized in their Mode_Report rather than causing the entire batch to return Success => False: this allows a caller to detect that most modes are supported even if one mode query is slow or unsupported, without retrying the entire batch. The "Should" priority reflects that batch querying is an efficiency optimisation rather than a correctness requirement; single-mode Detect_Mode calls are sufficient for v1 correctness.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Sentinel-Bounded Query and I/O Guards
+
+[REQUIREMENT]
+UID: FUNC-RPM-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: DA1 Sentinel for DECRPM Queries
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-008
+STATEMENT: >>>
+Each DECRPM query sent by Query_Mode (FUNC-RPM-008) shall use the existing Sentinel_Query infrastructure (FUNC-OSC-006) without modification. After writing the CSI ? Ps $ p query bytes, Sentinel_Query shall automatically append the DA1 sentinel (CSI c, ESC [ c). Response bytes shall be accumulated until the DA1 response (ESC [ ? ... c) is detected or Timeout_Ms expires.
+
+The Retry parameter of Sentinel_Query shall be False (no automatic retry) for single-mode queries. The pre-sentinel bytes — those preceding the DA1 response — shall be returned to the caller as the raw DECRPM response for subsequent parsing.
+
+For batch queries (FUNC-RPM-011), each call to Sentinel_Query within the same open session appends a new DA1 sentinel after each individual DECRPM query, providing a response boundary for each mode independently.
+<<<
+COMMENT: >>>
+The DA1 sentinel pattern is the established boundary mechanism for all active terminal probing in Termicap (FUNC-OSC-006). Using DA1 as a sentinel for DECRPM is consistent with the approach used by tcell for keyboard protocol detection (documented in the global synthesis §2.6: "Detection uses DA1 (CSI c) as sentinel: send keyboard query + DA1; if DA1 response arrives first, keyboard protocol is unsupported"). The pattern guarantees response accumulation terminates even when the terminal is slow or when intermediate bytes (stale input, previous query responses) are present in the read buffer. The Retry => False choice for single-mode queries is deliberate: a DECRPM query that times out almost certainly indicates that the terminal does not support the mode or does not implement DECRPM at all; retrying with a doubled timeout would only slow down the common "not supported" case without changing the outcome. For batch queries, using one DA1 sentinel per mode query (rather than one sentinel for the entire batch) gives precise per-mode response boundaries and prevents one slow mode response from blocking all subsequent modes in the batch.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Not-a-TTY Guard
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-008
+STATEMENT: >>>
+The Query_Mode procedure shall not send the DECRPM query sequence when there is no controlling terminal available. This guard is performed implicitly by Probe_Session.Open (FUNC-OSC-001 / FUNC-OSC-008): if /dev/tty cannot be opened, Open returns Session_No_Terminal. Query_Mode shall treat Session_No_Terminal identically to any other session-open failure: set Timed_Out := True, Resp_Length := 0, and return without sending the query.
+
+The procedure shall therefore return a clean "no response" result rather than raising an exception or returning an error code when the process is running in a non-interactive context (e.g., inside a CI pipeline, under a shell script with no controlling terminal).
+<<<
+COMMENT: >>>
+DECRPM queries are meaningless when there is no terminal. The not-a-TTY case is the most common failure mode in CI environments and when programs are invoked from cron or as daemons. Returning Timed_Out => True in this case is consistent with Query_Color (FUNC-BGC-006) and Query_XTVERSION (FUNC-XTV-011) and ensures that callers can treat all non-success outcomes uniformly: check Timed_Out, then decide whether the absence of a terminal implies "mode not supported". The Detect_Mode convenience function (FUNC-RPM-009) maps this to Mode_Query_Result (Success => False, Error => Not_A_Terminal) for callers that need to distinguish the reason.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: Foreground Process Group Check Before Query
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-008
+STATEMENT: >>>
+The Query_Mode procedure shall not send the DECRPM query sequence if the calling process is not in the terminal's foreground process group. This check is performed implicitly by the Probe_Session.Open call (FUNC-OSC-007 / FUNC-OSC-008): if Is_Foreground_Process returns False, Open returns Session_Not_Foreground without entering raw mode or writing any bytes to the terminal. Query_Mode shall treat Session_Not_Foreground identically to any other session-open failure: set Timed_Out := True, Resp_Length := 0, and return without sending the query.
+
+No additional foreground check logic is required in Query_Mode beyond what Probe_Session.Open already provides.
+<<<
+COMMENT: >>>
+Sending escape sequence queries from a background job causes visible terminal corruption: the terminal processes the query bytes as user input while another program holds the terminal foreground. The foreground check is not optional. Because the existing Probe_Session.Open already performs this check via Is_Foreground_Process (FUNC-OSC-007), Query_Mode inherits the guard at no additional cost. This requirement makes the dependency explicit so that future refactors of the session lifecycle do not accidentally remove the guard for DECRPM queries. The text mirrors FUNC-XTV-010 intentionally: all active probing procedures share the same foreground guard semantics.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK Boundaries
+
+[REQUIREMENT]
+UID: FUNC-RPM-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Boundary Partition
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-001
+- TYPE: Parent
+  VALUE: FUNC-RPM-002
+- TYPE: Parent
+  VALUE: FUNC-RPM-003
+- TYPE: Parent
+  VALUE: FUNC-RPM-005
+- TYPE: Parent
+  VALUE: FUNC-RPM-006
+- TYPE: Parent
+  VALUE: FUNC-RPM-007
+STATEMENT: >>>
+The DECRPM feature shall be partitioned across two Ada packages according to the established Termicap SPARK boundary convention:
+
+  SPARK Silver package (SPARK_Mode => On):
+    Package name:  Termicap.DECRPM
+    Contents:
+      - Mode_Id subtype and named mode constants (FUNC-RPM-001)
+      - Mode_Status enumeration (FUNC-RPM-002)
+      - Mode_Report record type (FUNC-RPM-003)
+      - Mode_Id_Array and Mode_Report_Array array types (FUNC-RPM-010)
+      - DECRPM_Query pure function (FUNC-RPM-005)
+      - Contains_DECRPM_Response pure function (FUNC-RPM-006)
+      - Parse_DECRPM_Response pure function (FUNC-RPM-007)
+
+  Ada FFI boundary package (SPARK_Mode => Off):
+    Package name:  Termicap.DECRPM.IO
+    Contents:
+      - Query_Error enumeration (FUNC-RPM-004)
+      - Mode_Query_Result discriminated record (FUNC-RPM-004)
+      - Batch_Query_Result discriminated record (FUNC-RPM-011)
+      - Query_Mode I/O procedure (FUNC-RPM-008)
+      - Detect_Mode convenience function (FUNC-RPM-009)
+      - Detect_Modes batch function (FUNC-RPM-011)
+
+All subprograms in Termicap.DECRPM shall carry Global => null contracts. No dynamic allocation, no OS calls, and no unbounded loops shall appear in the Termicap.DECRPM package body. The SPARK prover shall be able to discharge all proof obligations at Silver level without manual lemmas.
+
+The SPARK_Mode => Off annotation on all I/O subprograms shall be placed on the subprogram specifications (not merely on the bodies), so that callers in SPARK-annotated packages cannot inadvertently call them without a mode barrier.
+<<<
+COMMENT: >>>
+The two-package partition follows the established Termicap pattern: Termicap.OSC / Termicap.OSC.Parsing, Termicap.XTVERSION (SPARK On parsing) / Termicap.XTVERSION.IO (SPARK Off I/O), and Termicap.DA1 (SPARK On) / Termicap.DA1.IO (SPARK Off). Keeping types and pure parsing functions in a SPARK On parent package and I/O operations in a SPARK Off child package allows the test suite to construct byte arrays and call the parsing functions directly without a live terminal, and allows future static analysers to cover the parsing logic at Silver level. The DECRPM_Query function is placed in the SPARK On package despite producing bytes that are ultimately written to a terminal: the function is pure (no side effects, no global state, no OS calls) and is testable independently of I/O. The Mode_Query_Result and Batch_Query_Result discriminated records are placed in the SPARK Off child package because they reference Query_Error, which is only meaningful in the I/O context; placing them in the SPARK On parent would create a dependency on I/O-specific semantics. The note about specification-level SPARK_Mode => Off (rather than body-level) is consistent with FUNC-XTV-008, FUNC-DKL-007, and the OSC infrastructure (FUNC-OSC-015): the Ada 2012 / SPARK 2014 specification requires the annotation on the specification for callers in SPARK-annotated packages to receive a proper compilation error.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Error Handling and Testability
+
+[REQUIREMENT]
+UID: FUNC-RPM-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: Timeout Handling for Non-Supporting Terminals
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-004
+- TYPE: Parent
+  VALUE: FUNC-RPM-009
+STATEMENT: >>>
+When a DECRPM query times out (the DA1 sentinel response is not detected within Timeout_Ms milliseconds), Query_Mode shall set Timed_Out := True and Resp_Length := 0. The Detect_Mode convenience function (FUNC-RPM-009) shall propagate this as Mode_Query_Result'(Success => False, Error => Query_Timeout).
+
+A timeout is not an error condition in the library's operational model. Terminals that do not implement DECRPM — including the Linux kernel virtual console, dumb terminals, and many terminal emulators that do not support DEC private mode queries — will produce no response to CSI ? Ps $ p. Callers shall be able to detect this outcome by testing Success = False and Error = Query_Timeout, and shall proceed to assume the mode is not available without treating a timeout as a failure requiring logging or exception handling.
+
+Callers that need to distinguish "mode definitively not recognized" (Not_Recognized status in a valid DECRPM response) from "no DECRPM support at all" (Query_Timeout) shall test Success and Error in sequence: Success = True and Report.Status = Not_Recognized means the terminal replied "I don't know this mode"; Success = False and Error = Query_Timeout means the terminal did not reply at all.
+<<<
+COMMENT: >>>
+The distinction between Query_Timeout (no DECRPM implementation) and Not_Recognized (DECRPM implemented but mode unknown) is significant for capability inference. A terminal that responds Not_Recognized to MODE_BRACKETED_PASTE (2004) is more capable than a terminal that times out entirely: the former speaks DECRPM but lacks this specific mode, while the latter provides no DECRPM information at all. Callers that need to distinguish these cases (for example, to decide whether to attempt DECRPM queries for other modes) can do so via the two-level check described in the statement. Callers that only need "is this mode available?" can simplify to: Success and Report.Status /= Not_Recognized (which is False for both timeout and explicit Not_Recognized). The framing that "a timeout is not an error condition" mirrors the same statement in FUNC-XTV-015 and FUNC-BGC-013: Termicap is designed for graceful degradation, and missing terminal support is the expected common case in CI, scripted, and legacy terminal environments.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-RPM-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: Unit Testability of Parsing Functions
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-RPM-006
+- TYPE: Parent
+  VALUE: FUNC-RPM-007
+STATEMENT: >>>
+Each pure SPARK parsing function in the Termicap.DECRPM package (Contains_DECRPM_Response and Parse_DECRPM_Response) shall be independently testable by constructing a Byte_Array from known byte values and asserting the expected output. The test suite shall include at minimum the following cases:
+
+  Contains_DECRPM_Response:
+  1. Well-formed response for mode 2004, status 2 (Reset): ESC [ ? 2 0 0 4 ; 2 $ y -> True.
+  2. Well-formed response for mode 25, status 1 (Set): ESC [ ? 2 5 ; 1 $ y -> True.
+  3. Well-formed response for mode 1000, status 0 (Not_Recognized): ESC [ ? 1 0 0 0 ; 0 $ y -> True.
+  4. Empty input (Length = 0): False.
+  5. Missing ? prefix (ESC [ 2 5 ; 1 $ y, ANSI mode report instead of DEC): False.
+  6. Missing semicolon (ESC [ ? 2 5 1 $ y): False.
+  7. Missing $ y suffix (ESC [ ? 2 5 ; 1): False.
+  8. Missing digit before semicolon (ESC [ ? ; 1 $ y): False.
+  9. Missing digit after semicolon (ESC [ ? 2 5 ; $ y): False.
+
+  Parse_DECRPM_Response:
+  1. Mode 2004 (bracketed paste), Pm = 2 (Reset): Mode_Report'(Mode => 2004, Status => Reset).
+  2. Mode 2026 (synchronized output), Pm = 1 (Set): Mode_Report'(Mode => 2026, Status => Set).
+  3. Mode 1049 (alt screen), Pm = 3 (Permanently_Set): Mode_Report'(Mode => 1049, Status => Permanently_Set).
+  4. Mode 25 (cursor visibility), Pm = 4 (Permanently_Reset): Mode_Report'(Mode => 25, Status => Permanently_Reset).
+  5. Mode 1000 (X11 mouse), Pm = 0 (Not_Recognized): Mode_Report'(Mode => 1000, Status => Not_Recognized).
+  6. Unknown Pm value (e.g., Pm = 5): Mode_Report'(Mode => <mode>, Status => Not_Recognized).
+  7. Empty input (Length = 0): Mode_Report'(Mode => 0, Status => Not_Recognized).
+  8. Invalid input (no $ y suffix): Mode_Report'(Mode => 0, Status => Not_Recognized).
+
+  DECRPM_Query:
+  1. Mode 25: result begins with ESC [ ? and ends with $ p, with "25" in between.
+  2. Mode 2004: result contains the digit sequence 2 0 0 4 between ? and $ p.
+  3. Mode 0: single digit '0' between ? and $ p.
+
+All tests shall use programmatically constructed Byte_Array values and shall not require a live terminal.
+<<<
+COMMENT: >>>
+Explicit testability is a first-class requirement rather than an implementation note, matching the pattern of FUNC-XTV-017 for XTVERSION and FUNC-DA1-013 for DA1. The seventeen test cases cover the full recognition decision tree (Contains_DECRPM_Response cases 1-9), all five Mode_Status literals (Parse_DECRPM_Response cases 1-5), the edge cases of unknown Pm, empty input, and invalid structure, and the DECRPM_Query construction for representative mode numbers. All tests are constructable without a live terminal because the parsing and query-construction functions are pure and accept or return Byte_Array values — the same design constraint that makes the BG-COLOR parsing tests (FUNC-BGC-007 tests) fully offline. Including DECRPM_Query tests ensures that the byte-level encoding of mode numbers is verified independently of the parsing tests, catching any digit-order reversal or off-by-one in the ASCII digit generation.
+<<<
+
+[/SECTION]
