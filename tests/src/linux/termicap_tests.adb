@@ -1,5 +1,5 @@
 -------------------------------------------------------------------------------
---  Termicap_Tests - Test Runner for Termicap Library
+--  Termicap_Tests - Test Runner for Termicap Library (Linux / POSIX)
 --
 --  Copyright (c) 2025 Termicap Contributors
 --  SPDX-License-Identifier: Apache-2.0

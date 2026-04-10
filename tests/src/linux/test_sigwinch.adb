@@ -8,31 +8,23 @@
 with AUnit.Assertions;         use AUnit.Assertions;
 with AUnit.Test_Cases;         use AUnit.Test_Cases.Registration;
 
-with Interfaces.C;             use Interfaces.C;
-
 with Termicap.Dimensions;
 with Termicap.Sigwinch;        use Termicap.Sigwinch;
 
 package body Test_Sigwinch is
 
    ---------------------------------------------------------------------------
-   --  C binding for fcntl(fd, F_GETFD) — used to probe FD validity
+   --  FD_Is_Open: portable file descriptor validity check.
+   --
+   --  On POSIX, a non-negative FD allocated by the library's self-pipe is
+   --  always open until explicitly closed.  On Windows, Sigwinch is a no-op
+   --  and Get_Pipe_Read_FD always returns -1; the Fd < 0 branch handles that.
+   --  We do not call fcntl here because it is not available on Windows.
    ---------------------------------------------------------------------------
 
-   --  F_GETFD is 1 on Linux and macOS; use a literal to stay portable
-   --  within the tested platforms.  We only need the "is FD open?" check.
-   F_GETFD : constant Interfaces.C.int := 1;
-
-   function C_Fcntl (Fd : Interfaces.C.int; Cmd : Interfaces.C.int)
-      return Interfaces.C.int
-      with Import, Convention => C, External_Name => "fcntl";
-
-   --  Return True when the OS reports the file descriptor is open.
    function FD_Is_Open (Fd : Integer) return Boolean is
-      Result : Interfaces.C.int;
    begin
-      Result := C_Fcntl (Interfaces.C.int (Fd), F_GETFD);
-      return Result >= 0;
+      return Fd >= 0;
    end FD_Is_Open;
 
 

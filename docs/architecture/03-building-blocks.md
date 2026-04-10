@@ -32,6 +32,23 @@ Termicap                          (root namespace — no types or subprograms)
 └── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
+### Windows Platform Packages (`src/windows/`)
+
+On Windows, a set of platform-specific packages is compiled instead of (or alongside) the POSIX bodies. They are selected automatically via GPR `Source_Dirs` (ADR-0018) and are never referenced directly by application code.
+
+```
+Termicap.Win32_Ntdll    [SPARK_Mode => Off] — dynamic load of ntdll.dll; RtlGetNtVersionNumbers → Windows build number
+Termicap.Win32_VT       [SPARK_Mode => Off] — Is_Valid_Handle, Open/Close CONIN$/CONOUT$, Enable_VT_Processing
+Termicap.Win32_Color    [SPARK_Mode (body Off)] — Build_To_Color_Level (SPARK Silver), Detect_Windows_Color_Level (impure wrapper)
+```
+
+Platform-dispatched bodies (replacing the POSIX equivalents on Windows):
+
+- `src/windows/termicap-tty.adb` — TTY detection via `GetConsoleMode`; calls `Win32_VT.Enable_VT_Processing` on success
+- `src/windows/termicap-dimensions.adb` — terminal size via `GetConsoleScreenBufferInfo`, reads `srWindow` (not `dwSize`)
+- `src/windows/termicap-capabilities.adb` — integrates `Win32_Color.Detect_Windows_Color_Level`; final color is `Color_Level'Max (Win32_Level, env_cascade_level)`
+- `src/windows/termicap-sigwinch.adb` — no-op stubs (SIGWINCH does not exist on Windows; FUNC-SWC-008)
+
 `Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. `Termicap.Capabilities` sits at the top of the dependency graph: it depends on all Tier 1 and Tier 2 packages (`Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id`) and orchestrates them into a single `Terminal_Capabilities` record. The root package remains a namespace-only package. `Termicap.OSC` is the FFI boundary for active terminal probing; it depends on `Ada.Finalization` and `Interfaces.C` and calls nine C helper functions via `termicap_osc.c`. Its child package `Termicap.OSC.Parsing` is a pure SPARK Silver leaf that depends only on the `Byte` and `Byte_Array` types from the parent package. `Termicap.Color.BG_Query` is a SPARK Silver child of `Termicap.Color` providing the RGB type, OSC 10/11 query byte constants, and pure parsing functions for X11 `rgb:` responses, hex channel normalisation, OSC header stripping, and COLORFGBG parsing; it has no dependency on `Termicap.OSC` (which is `SPARK_Mode => Off`) — instead it re-declares compatible `Byte`/`Byte_Array` types using the same underlying `Interfaces.C.unsigned_char` base. Its child `Termicap.Color.BG_Query.IO` is the I/O boundary: it calls `Termicap.OSC.Sentinel_Query` via a `Probe_Session` and optionally wraps the query for multiplexer passthrough. `Termicap.Color.Detection` is a sibling child of `Termicap.Color` that orchestrates the two-level cascade (OSC query → COLORFGBG fallback) and exposes `Detect_Background_Color` and `Detect_Foreground_Color` as the top-level API; it depends on `Termicap.Color.BG_Query` and `Termicap.Color.BG_Query.IO`.
 
 ## Level 2: Package Descriptions
@@ -1059,6 +1076,93 @@ Unlike `Termicap.DA1.IO`, this package uses `Sentinel_Query` (not `Timeout_Query
 
 ---
 
+### `Termicap.Win32_Ntdll`
+
+**Responsibility:** Dynamically loads `ntdll.dll` at runtime, resolves `RtlGetNtVersionNumbers` via `GetProcAddress`, calls it to obtain the Windows build number, and unloads the library. This is Termicap's only custom FFI package in the Windows integration; all other Win32 calls use the win32ada Alire crate.
+
+Returns `0` when `LoadLibraryA` or `GetProcAddress` fails, allowing callers to treat an unresolvable build number as a pre-Anniversary-Update system (color level `None`).
+
+| Property | Value |
+|----------|-------|
+| Files | `src/windows/termicap-win32_ntdll.ads`, `src/windows/termicap-win32_ntdll.adb` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | `Interfaces`, `Interfaces.C`, `Interfaces.C.Strings`, win32ada (`Win32.Winbase`) |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Get_Build_Number` | Function | Returns the low 16 bits of the raw NT build number, or `0` on failure. Never raises. | FUNC-WIN-006, FUNC-WIN-012 |
+
+---
+
+### `Termicap.Win32_VT`
+
+**Responsibility:** Centralises all Win32 console handle helpers used by the Windows platform bodies. Provides the `ENABLE_VIRTUAL_TERMINAL_PROCESSING` constant (missing from win32ada), handle validation, `CONIN$`/`CONOUT$` open/close operations, and VT processing enablement via a `GetConsoleMode`/`SetConsoleMode` read-modify-write.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/windows/termicap-win32_vt.ads`, `src/windows/termicap-win32_vt.adb` |
+| SPARK_Mode | Off (spec and body) |
+| Dependencies | win32ada (`Win32`, `Win32.Winnt`, `Win32.Winbase`, `Win32.Wincon`) |
+
+#### Key Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `ENABLE_VIRTUAL_TERMINAL_PROCESSING` | `16#0004#` | Win32 console mode flag for ANSI/VT sequence interpretation (FUNC-WIN-009). |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Is_Valid_Handle` | Function | Returns `True` when a `HANDLE` is neither `null` nor `INVALID_HANDLE_VALUE`. | FUNC-WIN-001 |
+| `Open_Console_Input` | Function | Opens `CONIN$` via `CreateFileA`; returns `INVALID_HANDLE_VALUE` on failure. | FUNC-WIN-004 |
+| `Open_Console_Output` | Function | Opens `CONOUT$` via `CreateFileA`; returns `INVALID_HANDLE_VALUE` on failure. | FUNC-WIN-004 |
+| `Close_Handle` | Procedure | Closes a console handle. No-op on invalid handles; never raises. | FUNC-WIN-004 |
+| `Enable_VT_Processing` | Function | Reads current console mode, ORs in `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, writes back. Returns `True` on success. | FUNC-WIN-010, FUNC-WIN-011 |
+
+---
+
+### `Termicap.Win32_Color`
+
+**Responsibility:** Windows-specific color level detection. Provides two subprograms: a pure SPARK Silver function mapping a build number and `WT_SESSION` flag to a `Color_Level`, and an impure detection wrapper that reads the live OS build number and consults the environment snapshot.
+
+Build number thresholds (FUNC-WIN-008):
+
+| Build Number Range | Color Level |
+|--------------------|-------------|
+| `< 10_586` | `None` |
+| `10_586 .. 14_930` | `Extended_256` |
+| `>= 14_931` | `True_Color` |
+
+If `WT_SESSION` is present and non-empty, the result is always `True_Color` regardless of build number (FUNC-WIN-007). `Basic_16` is never returned — guaranteed by the SPARK postcondition on `Build_To_Color_Level` (FUNC-WIN-013).
+
+| Property | Value |
+|----------|-------|
+| Files | `src/windows/termicap-win32_color.ads`, `src/windows/termicap-win32_color.adb` |
+| SPARK_Mode | On (spec and `Build_To_Color_Level` body); Off (`Detect_Windows_Color_Level` body) |
+| Dependencies | `Interfaces`, `Termicap.Color`, `Termicap.Environment`, `Termicap.Win32_Ntdll` (body only) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Build_Number` | Subtype of `Interfaces.Unsigned_32`. Matches the return type of `Win32_Ntdll.Get_Build_Number`. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Build_To_Color_Level` | Function | `Global => null`; `Post => (if Has_WT_Session then Result = True_Color) and then Result in None \| Extended_256 \| True_Color` | FUNC-WIN-007, FUNC-WIN-008, FUNC-WIN-013 |
+| `Detect_Windows_Color_Level` | Function | `SPARK_Mode => Off` — calls `Win32_Ntdll.Get_Build_Number` and reads `WT_SESSION` from `Env` | FUNC-WIN-007 |
+
+#### Relationship to Other Packages
+
+`Termicap.Win32_Color` depends on `Termicap.Win32_Ntdll` (body only). It is called by the Windows-platform body of `Termicap.Capabilities`, which combines the returned level with the env-var cascade result using `Color_Level'Max`. Application code never calls `Win32_Color` or `Win32_Ntdll` directly.
+
+---
+
 ## SPARK Boundary Summary
 
 ```
@@ -1404,4 +1508,7 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **Tech Spec DA1** (`docs/tech-specs/da1-response-parsing.md`): DA1 Primary Device Attributes design rationale — capability enumeration design, VT conformance level mapping, timeout-only read loop, SPARK Silver boundary
 - **ADR-0017** (`docs/adr/0017-da1-timeout-only-read-loop.md`): Rationale for the timeout-only read loop in DA1 queries (no sentinel appended)
 - **Tech Spec DECRPM** (`docs/tech-specs/decrpm.md`): DECRPM DEC Private Mode Report design rationale — Mode_Status enumeration design, sentinel vs. timeout strategy, batch query pattern, SPARK Silver boundary
+- **ADR-0018** (`docs/adr/0018-platform-dispatch-via-source-dirs.md`): Rationale for GPR `Source_Dirs` platform dispatch over `pragma Import` or preprocessing
+- **ADR-0019** (`docs/adr/0019-win32ada-as-ffi-layer.md`): Rationale for using the win32ada Alire crate as the Win32 FFI layer
+- **Tech Spec WIN32** (`docs/tech-specs/windows-console.md`): Windows Console API integration design rationale — TTY detection, dimensions, color level, VT processing enablement
 - **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007, FUNC-RPM-001 through FUNC-RPM-017

@@ -4,7 +4,18 @@ with "aunit.gpr";
 
 project Termicap_Tests is
 
-   for Source_Dirs use ("src/", "config/");
+   --  OS detection — mirrors termicap.gpr, using the config crate constant as
+   --  the default so the build works without an explicit ALIRE_HOST_OS override.
+   type OS_Type is ("linux", "windows", "macos", "freebsd");
+   Host_OS : OS_Type :=
+      external ("ALIRE_HOST_OS", Termicap_Tests_Config.Alire_Host_OS);
+
+   case Host_OS is
+      when "windows" =>
+         for Source_Dirs use ("src/", "src/windows/", "config/");
+      when others =>
+         for Source_Dirs use ("src/", "src/linux/", "config/");
+   end case;
    for Create_Missing_Dirs use "True";
    for Exec_Dir use "bin";
    for Main use ("termicap_tests.adb");

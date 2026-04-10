@@ -21,5 +21,7 @@ win32ada = "^26.0.0"
 [build-switches.'case(os)'.windows]
 
 
+[environment.'case(os)'.windows]
+
 [environment.'case(os)'.'...']
 GPR_PROJECT_PATH.prepend = "${CRATE_ROOT}/gpr"

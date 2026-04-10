@@ -1,0 +1,401 @@
+[DOCUMENT]
+TITLE: WIN32 — Windows Console API Integration
+UID: REQ-WIN
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Win32 Handle Types and Constants
+
+[REQUIREMENT]
+UID: FUNC-WIN-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Win32 Handle Type and INVALID_HANDLE_VALUE
+STATEMENT: >>>
+The library shall reuse the Win32 type and constant definitions provided by the win32ada Alire crate rather than declaring its own FFI bindings. Specifically:
+
+  - HANDLE type:             Win32.Winnt.HANDLE (subtype of Win32.PVOID)
+  - INVALID_HANDLE_VALUE:    Win32.Winbase.INVALID_HANDLE_VALUE
+  - DWORD:                   Win32.DWORD (subtype of Interfaces.C.unsigned_long)
+
+The win32ada crate shall be added as a conditional dependency in alire.toml, active only on Windows targets.
+
+The library shall provide a pure predicate:
+
+  function Is_Valid_Handle (H : Win32.Winnt.HANDLE) return Boolean;
+
+which returns True when H /= Win32.Winbase.INVALID_HANDLE_VALUE and False otherwise.
+
+The minimum supported Windows version for all Win32 API functionality in this feature is Windows 10 Build 10586 (November 2015 Update). No attempt shall be made to support Windows 8.1 or earlier.
+<<<
+COMMENT: >>>
+The win32ada crate (available on the Alire index) provides comprehensive, well-tested Ada bindings for the Win32 API, including HANDLE types, console functions (Win32.Wincon), base functions (Win32.Winbase), and all associated types (COORD, SMALL_RECT, CONSOLE_SCREEN_BUFFER_INFO). Reusing win32ada avoids duplicating hundreds of lines of FFI declarations, type mappings, and pragma Import statements that the crate already provides correctly with Stdcall convention. INVALID_HANDLE_VALUE (-1 as a pointer-sized integer, i.e., 0xFFFFFFFFFFFFFFFF on 64-bit) is the sentinel value returned by GetStdHandle on failure and by CreateFile on failure — it is distinct from NULL (0), which Windows also uses as an invalid handle in some APIs. Using conditional dependency via Alire ensures that win32ada is not pulled in on POSIX targets, keeping the library portable. The minimum build constraint (10586) aligns with the oldest Windows 10 release that supports 256-colour VT sequences (FUNC-WIN-008) and provides ENABLE_VIRTUAL_TERMINAL_PROCESSING (FUNC-WIN-011); supporting older Windows versions would require significant fallback logic with no practical benefit given their end-of-life status.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WIN-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Standard Handle Constants and GetStdHandle Binding
+STATEMENT: >>>
+The library shall use the standard handle constants and GetStdHandle binding provided by win32ada:
+
+  Win32.Winbase.STD_INPUT_HANDLE   (value: To_DWORD(-10))
+  Win32.Winbase.STD_OUTPUT_HANDLE  (value: To_DWORD(-11))
+  Win32.Winbase.STD_ERROR_HANDLE   (value: To_DWORD(-12))
+
+  Win32.Winbase.GetStdHandle (nStdHandle : Win32.DWORD) return Win32.Winnt.HANDLE;
+
+The caller shall check the returned handle with Is_Valid_Handle (FUNC-WIN-001) before using it in any subsequent Win32 API call.
+<<<
+COMMENT: >>>
+GetStdHandle is the entry point for all Win32 console I/O: it maps the standard handle identifiers to Win32 handles that can be passed to console API functions. The win32ada crate already provides this binding with the correct Stdcall convention and DWORD parameter type, eliminating the need for a custom pragma Import. crossterm (Rust), go-isatty (Go), and termenv (Go) all use the equivalent of GetStdHandle as the first step before any console query, making it the universally adopted starting point for Windows terminal detection.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Console TTY Detection
+
+[REQUIREMENT]
+UID: FUNC-WIN-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: TTY Detection via GetConsoleMode
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-001
+- TYPE: Parent
+  VALUE: FUNC-WIN-002
+STATEMENT: >>>
+The library shall determine whether a Win32 handle refers to a console (TTY) by calling Win32.Wincon.GetConsoleMode from the win32ada crate:
+
+  Win32.Wincon.GetConsoleMode
+     (hConsoleHandle : Win32.Winnt.HANDLE;
+      lpMode         : Win32.LPDWORD)
+      return Win32.BOOL;
+
+The return value shall be interpreted as: non-zero (Win32.TRUE) means the handle is connected to a console, zero (Win32.FALSE) means the handle is redirected to a file, pipe, or other non-console device.
+
+The current mode value populated in lpMode shall be preserved by the caller for subsequent use in FUNC-WIN-011 (VT processing enabling), to avoid a second GetConsoleMode call.
+
+The TTY detection function exposed by the public Termicap API (Termicap.TTY) shall delegate to this Win32 implementation on Windows, maintaining the same Boolean return type as the existing POSIX isatty() path. On Windows, the body of Termicap.TTY shall be a Windows-specific implementation file selected via the GPR project file.
+<<<
+COMMENT: >>>
+GetConsoleMode is the canonical Windows equivalent of POSIX isatty(): it succeeds only when the handle is attached to a console device. Attempting to call GetConsoleMode on a handle that refers to a file, pipe, or socket causes it to return FALSE and sets the last error to ERROR_INVALID_HANDLE, which is the reliable signal that the stream is redirected. This is exactly the approach used by crossterm, termcolor (Python), and colorama: they all call GetConsoleMode as the TTY check rather than attempting to classify the handle type through GetFileType (which returns FILE_TYPE_CHAR for consoles but also for serial ports). Preserving the mode value avoids the overhead of a second kernel call before SetConsoleMode in FUNC-WIN-011, and is the pattern followed by crossterm's enable_virtual_terminal_processing implementation. Using the GPR's platform-specific body selection (e.g., Body("Termicap.TTY") use "windows/termicap-tty.adb") is the standard Ada/Alire pattern for platform dispatch, keeping the spec identical across platforms while swapping the implementation.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WIN-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: CONIN$/CONOUT$ Fallback for Redirected Standard Handles
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-001
+STATEMENT: >>>
+When the standard input or output handles obtained via GetStdHandle are redirected (i.e., GetConsoleMode fails on them), the library shall provide an operation to open the Windows console device directly using the reserved device names CONIN$ (console input) and CONOUT$ (console output).
+
+The operation shall call Win32.Winbase.CreateFileA from the win32ada crate with:
+  - lpFileName: "CONIN$" or "CONOUT$"
+  - dwDesiredAccess: GENERIC_READ or GENERIC_WRITE
+  - dwShareMode: FILE_SHARE_READ or FILE_SHARE_WRITE
+  - lpSecurityAttributes: null (default)
+  - dwCreationDisposition: OPEN_EXISTING
+  - dwFlagsAndAttributes: 0
+  - hTemplateFile: System.Null_Address
+
+The returned handle shall be closed via Win32.Winbase.CloseHandle when no longer needed. If CreateFileA fails, the return value shall equal INVALID_HANDLE_VALUE. A corresponding close operation shall call CloseHandle and shall not raise an exception on failure.
+<<<
+COMMENT: >>>
+CONIN$ and CONOUT$ are Windows' equivalent of POSIX /dev/tty: they always refer to the process's attached console regardless of how standard handles are connected. This is necessary when a Windows program is launched with its stdout redirected (e.g., prog.exe > file.txt) but still needs to query console capabilities or enable VT processing for the terminal it is attached to. The GENERIC_READ | GENERIC_WRITE access mode is required to both read console input and write to the output buffer; sharing with FILE_SHARE_READ | FILE_SHARE_WRITE is the standard practice to avoid blocking other processes that hold console handles. This pattern is documented in MSDN under "Console Handles" and is used by crossterm when it detects that the standard handle is not a console but a controlling console might still be available. The win32ada crate provides CreateFileA and CloseHandle bindings in Win32.Winbase, along with all required access-mode and share-mode constants.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Console Dimensions
+
+[REQUIREMENT]
+UID: FUNC-WIN-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminal Dimensions via GetConsoleScreenBufferInfo
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-001
+- TYPE: Parent
+  VALUE: FUNC-WIN-002
+STATEMENT: >>>
+The library shall detect terminal dimensions on Windows by calling Win32.Wincon.GetConsoleScreenBufferInfo from the win32ada crate:
+
+  Win32.Wincon.GetConsoleScreenBufferInfo
+     (hConsoleOutput            : Win32.Winnt.HANDLE;
+      lpConsoleScreenBufferInfo : Win32.Wincon.PCONSOLE_SCREEN_BUFFER_INFO)
+      return Win32.BOOL;
+
+The win32ada crate provides the CONSOLE_SCREEN_BUFFER_INFO record with the following fields:
+
+  dwSize              : COORD       -- buffer size (NOT window size)
+  dwCursorPosition    : COORD
+  wAttributes         : Win32.WORD
+  srWindow            : SMALL_RECT  -- visible window coordinates
+  dwMaximumWindowSize : COORD
+
+where COORD contains X and Y as Win32.SHORT (16-bit signed) and SMALL_RECT contains Left, Top, Right, Bottom as Win32.SHORT.
+
+The window dimensions shall be computed from srWindow, NOT from dwSize, as follows:
+
+  Columns := Integer (Info.srWindow.Right  - Info.srWindow.Left + 1);
+  Rows    := Integer (Info.srWindow.Bottom - Info.srWindow.Top  + 1);
+
+Pixel_Width and Pixel_Height shall be set to 0 because the Win32 console API provides no pixel dimension information.
+
+The result shall be mapped to the existing Terminal_Size record (FUNC-DIM-001). On Windows, the body of Termicap.Dimensions shall be a Windows-specific implementation file selected via the GPR project file.
+<<<
+COMMENT: >>>
+The critical distinction between buffer size and window size is a common source of bugs in Windows terminal tools. GetConsoleScreenBufferInfo returns dwSize as the total scrollback buffer size (e.g., 120 columns x 9000 rows), which can be much larger than the visible terminal window. The actual visible window size is encoded in srWindow as a rectangle: the number of visible columns is Right - Left + 1 and the number of visible rows is Bottom - Top + 1. This is the correct calculation used by crossterm (in terminal::sys::windows::get_terminal_size), go-termsize, and the Windows Terminal itself. Using dwSize directly would return the full scrollback buffer height, not the terminal height visible to the user, producing wildly incorrect results for applications that use terminal dimensions for layout. The +1 is necessary because srWindow coordinates are inclusive on both ends (Left=0, Right=119 means 120 columns, not 119). The win32ada crate provides all necessary record types (COORD, SMALL_RECT, CONSOLE_SCREEN_BUFFER_INFO) correctly mapped with pragma Convention(C).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Windows Build Number and Color Level
+
+[REQUIREMENT]
+UID: FUNC-WIN-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Windows Build Number Detection via RtlGetNtVersionNumbers
+STATEMENT: >>>
+The library shall detect the Windows build number by dynamically loading ntdll.dll and calling RtlGetNtVersionNumbers. The dynamic loading shall use Win32.Winbase.LoadLibraryA and Win32.Winbase.GetProcAddress from the win32ada crate to resolve the function at runtime:
+
+  1. Call LoadLibraryA("ntdll.dll") to obtain an HINSTANCE.
+  2. Call GetProcAddress(hModule, "RtlGetNtVersionNumbers") to obtain a FARPROC.
+  3. If either call fails, treat the build number as 0 (unknown / pre-Win10).
+  4. Otherwise, invoke the resolved function via an unchecked conversion of the FARPROC to a typed access-to-procedure:
+
+  type Rtl_Get_Nt_Version_Numbers_Ptr is access procedure
+     (Major_Version : out Win32.DWORD;
+      Minor_Version : out Win32.DWORD;
+      Build_Number  : out Win32.DWORD)
+     with Convention => Stdcall;
+
+  5. The Build_Number value returned shall have the high 4 bits masked off (Build_Number := Build_Number and 16#0000FFFF#) to obtain the canonical 4-5 digit Windows build number, as RtlGetNtVersionNumbers encodes flags in the high bits.
+  6. Call Win32.Winbase.FreeLibrary to release the module handle.
+
+This is the only custom FFI wrapper required; all other Win32 API calls are provided by win32ada.
+<<<
+COMMENT: >>>
+RtlGetNtVersionNumbers is the most reliable way to obtain the true Windows build number at runtime because it reads directly from ntdll's internal version data, bypassing application compatibility shims that may cause GetVersionEx and VerifyVersionInfo to report incorrect (downgraded) version numbers for applications without a proper manifest. This is the technique used by Rust's windows crate and by Node.js (in supports-color) to detect the actual Windows 10 build for colour capability checks. The masking of the high 4 bits (16#0000FFFF#) is necessary because the upper bits of the returned DWORD carry flags (e.g., bit 31 indicates a debug build); the actual build number is in the low 16 bits. The dynamic loading approach via LoadLibraryA/GetProcAddress is required because RtlGetNtVersionNumbers is an undocumented ntdll export with no corresponding .lib import library in any public Windows SDK release. The win32ada crate provides LoadLibraryA, GetProcAddress, and FreeLibrary bindings, so only the typed access-to-procedure and unchecked conversion are Termicap-specific.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WIN-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: WT_SESSION Environment Variable Detection
+STATEMENT: >>>
+The library shall check for the presence of the WT_SESSION environment variable in the supplied Environment snapshot. When WT_SESSION is present and non-empty, the library shall classify the terminal as running inside Windows Terminal and shall assign a color level of TrueColor regardless of the Windows build number.
+
+This check shall be performed before the build-number-based color level mapping (FUNC-WIN-008) so that Windows Terminal is always identified correctly even on older Windows 10 builds where WT_SESSION may be present but the build number is below the TrueColor threshold.
+<<<
+COMMENT: >>>
+WT_SESSION is the environment variable set by Windows Terminal (starting from its initial public release in 2019) to identify the hosting terminal. Windows Terminal has supported 24-bit TrueColor since its first stable release, so its presence is a reliable signal for TrueColor capability regardless of Windows build number. This is the detection strategy used by supports-color (JavaScript/Node.js), termenv (Go), and crossterm (Rust): all three check WT_SESSION before or instead of consulting the build number for TrueColor detection. The check operates on the immutable Environment snapshot, making it a pure operation compatible with SPARK_Mode => On at higher layers.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WIN-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Build Number to Color Level Mapping
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-006
+- TYPE: Parent
+  VALUE: FUNC-WIN-007
+STATEMENT: >>>
+The library shall map the Windows build number to a color capability level using the following thresholds:
+
+  Build < 10586                    =>  Color_None  (no VT color support)
+  10586 <= Build < 14931           =>  Colors_256  (Win10 November 2015 Update)
+  Build >= 14931                   =>  True_Color  (Win10 Anniversary Update v2, build 14931)
+  WT_SESSION present (any build)   =>  True_Color  (Windows Terminal, checked first per FUNC-WIN-007)
+
+The mapping shall be implemented as a pure Ada function:
+
+  function Build_To_Color_Level
+     (Build      : Unsigned_32;
+      Has_WT_Session : Boolean)
+      return Color_Level;
+
+with the contract:
+  Post => (if Has_WT_Session then Build_To_Color_Level'Result = True_Color);
+
+The function shall be declared with SPARK_Mode => On.
+
+The returned Color_Level shall be used as the initial Windows color capability and may be further constrained by the NO_COLOR / FORCE_COLOR environment variable cascade already defined in the existing Termicap color detection logic.
+<<<
+COMMENT: >>>
+The build thresholds (10586 and 14931) are derived from Microsoft's documentation of VT sequence support history in the Windows Console subsystem. Build 10586 (November 2015 Update, also called Version 1511) was the first Windows 10 release to include partial VT support including 256-colour SGR sequences. Build 14931 (a pre-release insider build that shipped stable features in the Anniversary Update branch) extended this to 24-bit colour. These are the same thresholds used by supports-color (Node.js) and termenv (Go), making them the de facto standard cross-language consensus for Windows color level detection. The SPARK postcondition for Has_WT_Session => TrueColor expresses the WT_SESSION override as a provable contract, aligning with the Silver target for pure detection logic.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: VT Processing Mode
+
+[REQUIREMENT]
+UID: FUNC-WIN-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: ENABLE_VIRTUAL_TERMINAL_PROCESSING Flag Constant
+STATEMENT: >>>
+The library shall declare the following Win32 console mode flag constant, which is not present in the win32ada crate:
+
+  ENABLE_VIRTUAL_TERMINAL_PROCESSING : constant Win32.DWORD := 16#0004#;
+
+This constant shall be used in FUNC-WIN-011 when enabling ANSI/VT escape sequence processing on a console handle. The following related constants are already provided by win32ada (Win32.Wincon):
+
+  ENABLE_PROCESSED_OUTPUT             (16#0001#)
+  ENABLE_WRAP_AT_EOL_OUTPUT           (16#0002#)
+
+The ENABLE_VIRTUAL_TERMINAL_PROCESSING constant shall be declared in the Termicap Windows integration package.
+<<<
+COMMENT: >>>
+ENABLE_VIRTUAL_TERMINAL_PROCESSING (0x0004) is the Windows 10 console flag that instructs the console host (conhost.exe or Windows Terminal) to interpret ANSI/VT escape sequences rather than passing them literally to the output buffer. Without this flag set, escape sequences such as ESC[31m (red foreground) appear as literal characters in the console output on Windows 10 builds prior to the Windows Terminal era. The value 0x0004 is defined in the Windows SDK header wincon.h and has been stable since its introduction in build 10586. It is not present in win32ada because that crate predates the Windows 10 console VT update, but it is a simple numeric constant that Termicap can declare directly.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WIN-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: SetConsoleMode Binding
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-001
+STATEMENT: >>>
+The library shall use the Win32.Wincon.SetConsoleMode binding from the win32ada crate:
+
+  Win32.Wincon.SetConsoleMode
+     (hConsoleHandle : Win32.Winnt.HANDLE;
+      dwMode         : Win32.DWORD)
+      return Win32.BOOL;
+
+The return value shall be interpreted as: non-zero (Win32.TRUE) means success, zero (Win32.FALSE) means failure. The calling code shall not raise an exception on failure.
+<<<
+COMMENT: >>>
+SetConsoleMode is the symmetric counterpart to GetConsoleMode: it applies a new mode bitmask to a console handle. It is the mechanism used to enable ENABLE_VIRTUAL_TERMINAL_PROCESSING (FUNC-WIN-011). The win32ada crate provides this binding with the correct Stdcall convention. Treating failure as a non-fatal Boolean result rather than raising is consistent with the Termicap convention for all OS call wrappers and is necessary here because SetConsoleMode fails with ERROR_INVALID_PARAMETER on Windows builds that do not support ENABLE_VIRTUAL_TERMINAL_PROCESSING (pre-10586), which is a predictable and recoverable condition rather than a programming error.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WIN-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Enabling VT Processing via ENABLE_VIRTUAL_TERMINAL_PROCESSING
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-003
+- TYPE: Parent
+  VALUE: FUNC-WIN-009
+- TYPE: Parent
+  VALUE: FUNC-WIN-010
+STATEMENT: >>>
+The library shall provide an operation to enable ANSI/VT escape sequence processing on a console output handle:
+
+  function Enable_VT_Processing (H : Win32_Handle) return Boolean;
+
+The operation shall:
+  1. Call Win32.Wincon.GetConsoleMode (FUNC-WIN-003) to retrieve the current mode into a local variable Current_Mode. If this call fails, return False immediately.
+  2. If (Current_Mode and ENABLE_VIRTUAL_TERMINAL_PROCESSING) /= 0, VT processing is already enabled; return True without calling SetConsoleMode.
+  3. Otherwise, call Win32.Wincon.SetConsoleMode (FUNC-WIN-010) with H and (Current_Mode or ENABLE_VIRTUAL_TERMINAL_PROCESSING).
+  4. Return the Boolean result of SetConsoleMode.
+
+The operation shall be called as part of the Windows-specific TTY initialisation path, after TTY detection succeeds (FUNC-WIN-003). A return value of False shall be treated as a non-fatal condition: the library shall still report TTY = True and shall use the color level derived from FUNC-WIN-008, but callers that need VT sequences to work (e.g., color output) should be aware that the terminal may not render them.
+<<<
+COMMENT: >>>
+Enabling ENABLE_VIRTUAL_TERMINAL_PROCESSING is necessary for applications on Windows 10 that emit ANSI color/cursor escape sequences: without it, those sequences appear as literal text in the console window. The guard in step 2 (check before setting) follows the Windows Console API best practice of not calling SetConsoleMode unnecessarily, since SetConsoleMode resets the entire mode bitmask and may clear flags set by other parts of the application. The non-fatal treatment of Set_Console_Mode failure (step 4) is correct: on Windows Terminal and in CI environments (GITHUB_ACTIONS, Azure DevOps), ENABLE_VIRTUAL_TERMINAL_PROCESSING is often already enabled by the hosting process, so failure here is not a problem. On very old Windows 10 builds (pre-10586), failure signals that VT processing is simply unavailable, which is already reflected in the color level being Color_None (FUNC-WIN-008). crossterm implements the same pattern in its enable_virtual_terminal_processing function, and so does the Python colorama library for its Windows backend.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK and FFI Boundaries
+
+[REQUIREMENT]
+UID: FUNC-WIN-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: FFI Boundary Package for Win32 API Calls
+STATEMENT: >>>
+The library shall use the win32ada Alire crate as its primary FFI layer for Win32 API calls. The following win32ada packages provide all required bindings:
+
+  Win32.Wincon     — GetConsoleMode, SetConsoleMode, GetConsoleScreenBufferInfo, console types (COORD, SMALL_RECT, CONSOLE_SCREEN_BUFFER_INFO)
+  Win32.Winbase    — GetStdHandle, CreateFileA, CloseHandle, LoadLibraryA, GetProcAddress, FreeLibrary, INVALID_HANDLE_VALUE, STD_*_HANDLE constants
+  Win32.Winnt      — HANDLE type
+  Win32            — DWORD, BOOL, SHORT, and other base types
+
+The only custom FFI code required by Termicap is:
+
+  Termicap.Win32_Ntdll — Dynamic resolution and invocation of RtlGetNtVersionNumbers (FUNC-WIN-006), using LoadLibraryA/GetProcAddress from win32ada. This package shall have SPARK_Mode => Off.
+
+The win32ada dependency shall be declared as a conditional dependency in alire.toml, active only on Windows targets. On POSIX targets, no win32ada package shall be compiled or linked.
+
+Platform-specific implementation files shall be placed in OS-specific subdirectories under src/ (e.g., src/windows/ for Windows bodies, src/linux/ for Linux bodies). The GPR project file uses Alire_Host_OS to dynamically include the appropriate subdirectory: "src/" & Termicap_Config.Alire_Host_OS.
+<<<
+COMMENT: >>>
+Reusing win32ada eliminates the need for custom FFI declarations for all standard Win32 console and file APIs. The crate provides correctly typed, Stdcall-convention bindings with proper pragma Import and Convention(C) record layouts that have been tested across GNAT versions. The only API not covered by win32ada is RtlGetNtVersionNumbers, an undocumented ntdll export, which requires a small custom package with dynamic loading. Using GPR-level platform dispatch via Source_Dirs with Alire_Host_OS-based subdirectories (e.g., src/linux/, src/windows/) keeps specs identical across platforms while swapping body implementations at build time. This approach is simpler and more maintainable than the originally planned three custom FFI packages.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WIN-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK-Provable Color Level Logic
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-008
+STATEMENT: >>>
+The following Windows-specific detection function shall be declared with SPARK_Mode => On and shall carry SPARK contracts verifiable at Silver level:
+
+  Build_To_Color_Level (FUNC-WIN-008):
+    - Global => null
+    - Post => (if Has_WT_Session then Build_To_Color_Level'Result = True_Color)
+    - Post => Build_To_Color_Level'Result in Color_None | Colors_256 | True_Color
+
+This function shall depend only on its input parameters, with no access to global variables, OS calls, or Ada.Environment.
+
+The Windows platform-specific body files (windows/termicap-tty.adb, windows/termicap-dimensions.adb) shall be compiled with SPARK_Mode => Off because they call into win32ada FFI packages. The package specs (termicap-tty.ads, termicap-dimensions.ads) remain unchanged and retain their existing SPARK_Mode => On declarations.
+<<<
+COMMENT: >>>
+Keeping Build_To_Color_Level at SPARK Silver level is valuable because the build-number threshold logic is non-trivial (three branches with numeric comparisons) and the correctness of the color level classification directly affects application behaviour. A SPARK postcondition that enumerates all valid output values (Color_None | Colors_256 | True_Color) acts as an exhaustiveness check: the prover will flag any branch that could return an unexpected value. The pattern of SPARK-provable pure functions sitting above SPARK_Mode => Off FFI packages is the same pattern used throughout Termicap (FUNC-DIM-007, FUNC-OSC-015) and is the intended architecture for the SPARK Silver target. Since win32ada types (HANDLE, DWORD) are not SPARK-compatible, all code that uses them directly must be in SPARK_Mode => Off bodies.
+<<<
+
+[/SECTION]

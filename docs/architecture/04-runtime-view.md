@@ -1800,6 +1800,70 @@ Termicap.DECRPM.IO.Query_Mode                      [SPARK_Mode => Off]
 
 ---
 
+## Scenario 24: Windows Color Detection Flow
+
+Executed on Windows when `Termicap.Capabilities.Detect` is called. Replaces the POSIX color/TTY/dimensions flows on that platform.
+
+```
+Caller (application / detection init)
+  │
+  │  Detect (Stream => Stdout)
+  ▼
+Termicap.Capabilities             [Windows body — SPARK_Mode => Off]
+  │
+  │  Step 1: Capture_Current (Env)          -- standard env snapshot
+  │  Step 2: Is_TTY (Stdout)                -- via GetConsoleMode (Win32 body)
+  │    → Get_Override                        -- override short-circuit
+  │    → GetConsoleMode (Stdout handle)      -- if Auto
+  │    → Win32_VT.Enable_VT_Processing (H)  -- side-effect: enable VT escapes
+  │  Step 3: Get_Size                        -- via GetConsoleScreenBufferInfo
+  │
+  │  Step 4: Win32_Color.Detect_Windows_Color_Level (Env)
+  │    [Termicap.Win32_Color — SPARK_Mode => Off for this wrapper]
+  │    │
+  │    │  WT_SESSION check (FUNC-WIN-007):
+  │    │    Contains (Env, "WT_SESSION") and Value ≠ ""?
+  │    │      Yes → return True_Color immediately
+  │    │      No  → continue
+  │    │
+  │    │  Win32_Ntdll.Get_Build_Number        [SPARK_Mode => Off]
+  │    │    → LoadLibraryA ("ntdll.dll")
+  │    │    → GetProcAddress (..., "RtlGetNtVersionNumbers")
+  │    │    → Call function pointer → (Major, Minor, Build_Raw)
+  │    │    → FreeLibrary
+  │    │    → return Build_Raw and 16#FFFF# (low 16 bits)
+  │    │      (returns 0 on any failure)
+  │    │
+  │    │  Build_To_Color_Level (Build, Has_WT_Session => False)
+  │    │    [Termicap.Win32_Color — SPARK Silver, Global => null]
+  │    │    Build < 10_586  → None
+  │    │    Build < 14_931  → Extended_256
+  │    │    Build >= 14_931 → True_Color
+  │    │
+  │    └──► Win32_Level : Color_Level
+  │
+  │  Step 5: Env-var cascade
+  │    Detect_Color_Level (Env, Is_TTY)      -- standard 11-step cascade
+  │    (FORCE_COLOR / NO_COLOR / COLORTERM / TERM / …)
+  │    └──► Env_Level : Color_Level
+  │
+  │  Step 6: Final color = Color_Level'Max (Win32_Level, Env_Level)
+  │    FORCE_COLOR / NO_COLOR can still override via Env_Level
+  │
+  └──► Terminal_Capabilities assembled via Assemble (SPARK Silver)
+```
+
+**Key properties:**
+
+- `WT_SESSION` is the fast path: if Windows Terminal is detected, the result is `True_Color` without any kernel API call.
+- `Get_Build_Number` loads and unloads `ntdll.dll` dynamically — no link-time dependency. Returns `0` on any failure, which maps to `None` (safe default).
+- `Build_To_Color_Level` is SPARK Silver (`Global => null`). Its postcondition machine-verifies that `Basic_16` is never returned (FUNC-WIN-013).
+- `Color_Level'Max` ensures that env-var override steps (FORCE_COLOR, CLICOLOR_FORCE, NO_COLOR) still take priority over the Win32 hardware detection when they produce a higher (or lower, in the case of `None`) result.
+- TTY detection uses `GetConsoleMode` instead of POSIX `isatty()`. As a side effect, `Enable_VT_Processing` is called on the first valid console handle to ensure ANSI escape sequences work in the Windows Console Host.
+- Dimensions use `GetConsoleScreenBufferInfo`'s `srWindow` field (the visible viewport), not `dwSize` (the scroll-back buffer). This matches what the user sees in the terminal window.
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1828,4 +1892,7 @@ Termicap.DECRPM.IO.Query_Mode                      [SPARK_Mode => Off]
 - **Tech Spec DA1** (`docs/tech-specs/da1-response-parsing.md`): DA1 Primary Device Attributes design rationale — capability enumeration design, VT conformance level mapping, timeout-only read loop, SPARK Silver boundary
 - **ADR-0017** (`docs/adr/0017-da1-timeout-only-read-loop.md`): Rationale for the timeout-only read loop in `Query_DA1` — why `Sentinel_Query` cannot be used when the DA1 response is the sought data
 - **Tech Spec DECRPM** (`docs/tech-specs/decrpm.md`): DECRPM DEC Private Mode Report design rationale — Mode_Status enumeration design, sentinel vs. timeout strategy, batch query pattern, SPARK Silver boundary
+- **ADR-0018** (`docs/adr/0018-platform-dispatch-via-source-dirs.md`): Rationale for GPR `Source_Dirs` platform dispatch
+- **ADR-0019** (`docs/adr/0019-win32ada-as-ffi-layer.md`): Rationale for using win32ada as the Win32 FFI layer
+- **Tech Spec WIN32** (`docs/tech-specs/windows-console.md`): Windows Console API integration — full design rationale and build number threshold derivation
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007
