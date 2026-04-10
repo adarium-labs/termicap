@@ -1,0 +1,5 @@
+-- Stub for non-Windows platforms.
+-- On Windows, win32ada provides the real shared.gpr via the Alire GPR path.
+project Shared is
+   Prep := "";
+end Shared;
