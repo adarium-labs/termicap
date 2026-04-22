@@ -18,6 +18,7 @@ with Win32;
 with Win32.Winbase;
 with Win32.Wincon;
 with Win32.Winnt;
+with Termicap.Win32_Cygwin;
 with Termicap.Win32_VT;
 
 package body Termicap.TTY
@@ -56,25 +57,44 @@ is
 
          --  Check whether it is a console handle
          Res := Win32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
-         Termicap.Win32_VT.Close_Handle (H);
-         return Res /= Win32.FALSE;
+         if Res /= Win32.FALSE then
+            Termicap.Win32_VT.Close_Handle (H);
+            return True;
+         end if;
+
+         --  GetConsoleMode on reopened handle failed: check Cygwin/MSYS2
+         --  (FUNC-CYG-015).  VT processing is not enabled for Cygwin handles.
+         declare
+            Cygwin : constant Boolean :=
+               Termicap.Win32_Cygwin.Is_Cygwin_Terminal (H);
+         begin
+            Termicap.Win32_VT.Close_Handle (H);
+            return Cygwin;
+         end;
       end if;
 
       --  GetConsoleMode succeeds iff the handle is attached to a console
       Res := Win32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
 
-      if Res /= Win32.FALSE and then Is_Output then
-         --  Enable VT processing on stdout (non-fatal if it fails)
-         declare
-            Dummy : constant Boolean :=
-               Termicap.Win32_VT.Enable_VT_Processing (H);
-            pragma Unreferenced (Dummy);
-         begin
-            null;
-         end;
+      if Res /= Win32.FALSE then
+         --  (a) Native Windows console: enable VT on stdout, return True
+         --  (FUNC-WIN-011).
+         if Is_Output then
+            declare
+               Dummy : constant Boolean :=
+                  Termicap.Win32_VT.Enable_VT_Processing (H);
+               pragma Unreferenced (Dummy);
+            begin
+               null;
+            end;
+         end if;
+         return True;
       end if;
 
-      return Res /= Win32.FALSE;
+      --  (b) GetConsoleMode failed: try Cygwin/MSYS2 PTY detection
+      --  (FUNC-CYG-015).  VT processing is NOT enabled here — Cygwin PTY
+      --  handles do not support ENABLE_VIRTUAL_TERMINAL_PROCESSING.
+      return Termicap.Win32_Cygwin.Is_Cygwin_Terminal (H);
    end Is_TTY_Via_Handle;
 
    ---------------------------------------------------------------------------

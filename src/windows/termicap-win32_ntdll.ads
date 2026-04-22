@@ -7,7 +7,7 @@
 
 --  @summary
 --  Dynamically loads ntdll.dll and calls RtlGetNtVersionNumbers to obtain
---  the Windows build number.
+--  the Windows build number, and NtQueryObject to retrieve handle names.
 --
 --  @description
 --  This is the only custom FFI package in Termicap's Windows integration.
@@ -16,8 +16,11 @@
 --  Requirements Coverage:
 --    - @relation(FUNC-WIN-006): Windows build number detection
 --    - @relation(FUNC-WIN-012): Custom FFI boundary
+--    - @relation(FUNC-CYG-004): Fallback pipe-name retrieval via NtQueryObject
 
 with Interfaces;
+with System;
+with Win32.Winnt;
 
 package Termicap.Win32_Ntdll
    with SPARK_Mode => Off
@@ -28,5 +31,23 @@ is
    --          or 0 if ntdll.dll cannot be loaded or the function is not found.
    --  @relation(FUNC-WIN-006): Dynamic load and invocation
    function Get_Build_Number return Interfaces.Unsigned_32;
+
+   ---------------------------------------------------------------------------
+   --  NtQueryObject binding (FUNC-CYG-004)
+   ---------------------------------------------------------------------------
+
+   --  @summary Retrieve the NT object name of a handle via ntdll!NtQueryObject.
+   --  @param Handle      The handle to query.
+   --  @param Buffer      A caller-allocated System.Address of at least
+   --                     Buffer_Size bytes.  On success, populated with an
+   --                     OBJECT_NAME_INFORMATION record whose UNICODE_STRING
+   --                     header is followed by the UTF-16 name data.
+   --  @param Buffer_Size Size of Buffer in bytes (caller ensures >= 1024).
+   --  @return True iff NtQueryObject returned NTSTATUS 0 (STATUS_SUCCESS).
+   --  @relation(FUNC-CYG-004): Fallback pipe-name retrieval
+   function Query_Object_Name
+     (Handle      : Win32.Winnt.HANDLE;
+      Buffer      : System.Address;
+      Buffer_Size : Interfaces.Unsigned_32) return Boolean;
 
 end Termicap.Win32_Ntdll;

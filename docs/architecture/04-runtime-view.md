@@ -1864,6 +1864,73 @@ Termicap.Capabilities             [Windows body — SPARK_Mode => Off]
 
 ---
 
+## Scenario 25: Cygwin/MSYS2 TTY Detection Flow
+
+Executed on Windows when `Is_TTY_Via_Handle` is called for a handle where `GetConsoleMode` fails (i.e., the handle is not a native Windows console object). This is the second-chance check introduced by FUNC-CYG-015.
+
+```
+Termicap.TTY (Windows body)      [SPARK_Mode => Off]
+  │
+  │  Is_TTY_Via_Handle (Handle)
+  │
+  │  Step 1: GetConsoleMode (Handle, Mode)
+  │    → Succeeds?
+  │      Yes → Enable_VT_Processing (Handle)   -- side-effect: enable VT escapes
+  │             return True                     -- native Windows console: done
+  │      No  → continue to Step 2
+  │
+  │  Step 2: Is_Cygwin_Terminal (Handle)
+  │    [Termicap.Win32_Cygwin — SPARK_Mode => Off]
+  │    │
+  │    │  GetFileType (Handle)
+  │    │    ≠ FILE_TYPE_PIPE?  → return False immediately
+  │    │    = FILE_TYPE_PIPE   → continue
+  │    │
+  │    │  GetFileInformationByHandleEx        [primary path]
+  │    │    (Handle, FileNameInfo, Buffer)
+  │    │    Succeeds → Wide_String pipe name in Buffer
+  │    │    Fails    → fall through to NtQueryObject path
+  │    │
+  │    │  Query_Object_Name (Handle)          [fallback path]
+  │    │    [Termicap.Win32_Ntdll — dynamically loaded ntdll.dll]
+  │    │    → NtQueryObject (Handle, ObjectNameInformation, …)
+  │    │    → Returns Wide_String pipe name, or "" on failure
+  │    │
+  │    │  UTF-16 decode → ASCII pipe name string
+  │    │    (non-ASCII characters → return False immediately)
+  │    │
+  │    │  Is_Cygwin_Pipe_Name (Name)
+  │    │    [Termicap.Win32_Cygwin — SPARK Silver, Global => null]
+  │    │    │
+  │    │    │  Token[0] prefix: "\msys-" or "\cygwin-" (FUNC-CYG-007)
+  │    │    │  Token[1] non-empty hex PID segment (FUNC-CYG-008)
+  │    │    │  Token[2] starts with "pty" (FUNC-CYG-009)
+  │    │    │  Token[3] is exactly "from" or "to" (FUNC-CYG-010)
+  │    │    │  Token[4] is exactly "master" (FUNC-CYG-011)
+  │    │    │  Minimum 5 '-'-delimited segments (FUNC-CYG-012)
+  │    │    │
+  │    │    └──► Boolean (True = Cygwin/MSYS2 PTY pipe name)
+  │    │
+  │    └──► Boolean result
+  │
+  │  Step 3: Return Is_Cygwin_Terminal result
+  │    True  → handle is a Cygwin/MSYS2 PTY — report as TTY
+  │    False → handle is neither a console nor a Cygwin PTY — report as non-TTY
+  │
+  └──► Boolean TTY result returned to caller
+```
+
+**Key properties:**
+
+- `GetConsoleMode` remains the primary fast path. The Cygwin check only runs when `GetConsoleMode` fails, so the common case (native Windows console) has zero overhead from this feature.
+- `GetFileType = FILE_TYPE_PIPE` is a mandatory guard: if the handle is not a named pipe, `Is_Cygwin_Terminal` returns `False` immediately without attempting any name retrieval.
+- `GetFileInformationByHandleEx` is the primary pipe-name API (available since Windows Vista). `NtQueryObject` via `Termicap.Win32_Ntdll.Query_Object_Name` is the fallback for environments where the primary API is unavailable.
+- `Is_Cygwin_Pipe_Name` is SPARK Silver (`Global => null`). Its five token-level rules are independently testable and are covered by 14 acceptance test vectors (FUNC-CYG-013).
+- `Is_Cygwin_Terminal` never propagates an exception (FUNC-CYG-016). Any OS call failure causes `False` to be returned rather than raising.
+- The Cygwin PTY detection is transparent to application code. `Termicap.TTY.Is_TTY` returns the same `Boolean` type on all paths; no Cygwin-specific types are exposed.
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1895,4 +1962,6 @@ Termicap.Capabilities             [Windows body — SPARK_Mode => Off]
 - **ADR-0018** (`docs/adr/0018-platform-dispatch-via-source-dirs.md`): Rationale for GPR `Source_Dirs` platform dispatch
 - **ADR-0019** (`docs/adr/0019-win32ada-as-ffi-layer.md`): Rationale for using win32ada as the Win32 FFI layer
 - **Tech Spec WIN32** (`docs/tech-specs/windows-console.md`): Windows Console API integration — full design rationale and build number threshold derivation
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007
+- **Tech Spec CYGWIN** (`docs/tech-specs/cygwin-pty.md`): Cygwin/MSYS2 PTY detection design — pipe name grammar, SPARK split, fallback strategy
+- **ADR-0020** (`docs/adr/0020-cygwin-pty-detection-strategy.md`): Rationale for the named-pipe name inspection strategy over alternative PTY detection approaches
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017

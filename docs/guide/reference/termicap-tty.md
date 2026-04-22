@@ -74,7 +74,9 @@ Check whether a standard stream is connected to an interactive terminal.
 
 **Safety:** This function is safe to call at any time. It does not modify terminal state, and returns `False` rather than raising an exception on any error (FUNC-TTY-004).
 
-**Implementation:** Calls POSIX `isatty(fd)` where `fd` is the file descriptor corresponding to `Stream`. Returns `True` only if `isatty()` returns exactly `1`.
+**Implementation:** On POSIX, calls `isatty(fd)` where `fd` is the file descriptor corresponding to `Stream`. Returns `True` only if `isatty()` returns exactly `1`.
+
+On Windows, the implementation calls `GetConsoleMode` on the corresponding standard handle. If `GetConsoleMode` succeeds, the handle is a native Windows console and `True` is returned (with a side effect of enabling VT processing). If `GetConsoleMode` fails, a second-chance check via `Termicap.Win32_Cygwin.Is_Cygwin_Terminal` is performed: if the handle is a Cygwin or MSYS2 named-pipe PTY (e.g., as used by Git Bash), `True` is returned. Otherwise `False` is returned. This ensures that `Is_TTY` behaves correctly in Cygwin/MSYS2 environments where standard streams are pipes rather than native console objects (FUNC-CYG-015).
 
 ```ada
 --  Check if stdout is interactive before using colors
@@ -185,6 +187,8 @@ end;
 ## See Also
 
 - **Architecture: Building Blocks** (`docs/architecture/03-building-blocks.md`) — package hierarchy and SPARK boundary diagram
-- **Architecture: Runtime View** (`docs/architecture/04-runtime-view.md`) — TTY detection flow, bulk query flow, downstream integration
+- **Architecture: Runtime View** (`docs/architecture/04-runtime-view.md`) — TTY detection flow, bulk query flow, downstream integration; Scenario 25: Cygwin/MSYS2 TTY detection
 - **ADR-0003** (`docs/adr/0003-tty-detection-package-structure.md`) — package structure and `TTY_Status` type decision
 - **Tech Spec F2** (`docs/tech-specs/f2-tty-detection.md`) — full design rationale
+- **Windows Console Reference** (`docs/guide/reference/windows-console.md`) — Windows-specific TTY detection including Cygwin/MSYS2 PTY support
+- **ADR-0020** (`docs/adr/0020-cygwin-pty-detection-strategy.md`) — Cygwin/MSYS2 PTY detection strategy rationale

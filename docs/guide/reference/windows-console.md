@@ -12,13 +12,14 @@ How Termicap detects terminal capabilities on Windows — TTY status, terminal d
 
 On Windows, Termicap replaces the POSIX bodies of `Termicap.TTY`, `Termicap.Dimensions`, and `Termicap.Capabilities` with Windows Console API implementations. The public-facing API is identical on all platforms: applications call `Termicap.Capabilities.Detect` or `Termicap.Capabilities.Get` and receive a `Terminal_Capabilities` record. No Windows-specific package names appear in application code.
 
-Three internal helper packages handle the Windows-specific logic:
+Four internal helper packages handle the Windows-specific logic:
 
 | Package | Role |
 |---------|------|
-| `Termicap.Win32_Ntdll` | Obtains the Windows build number via dynamic load of `ntdll.dll` |
+| `Termicap.Win32_Ntdll` | Obtains the Windows build number via dynamic load of `ntdll.dll`; also provides `Query_Object_Name` for pipe name retrieval |
 | `Termicap.Win32_VT` | Console handle helpers: validation, `CONIN$`/`CONOUT$` access, VT processing enablement |
 | `Termicap.Win32_Color` | Maps build number and `WT_SESSION` to a `Color_Level` |
+| `Termicap.Win32_Cygwin` | Detects Cygwin/MSYS2 PTY handles via named-pipe name inspection |
 
 These packages are **internal**. Application code does not `with` or call them directly.
 
@@ -52,6 +53,20 @@ On Windows, `Termicap.TTY.Is_TTY` calls `GetConsoleMode` on the standard handle 
 As a side effect, `Enable_VT_Processing` is called on a valid console output handle the first time a TTY is detected, setting the `ENABLE_VIRTUAL_TERMINAL_PROCESSING` flag (`0x0004`) in the console mode. This ensures that ANSI/VT escape sequences work in the Windows Console Host without requiring a separate setup step by the application.
 
 The process-wide override installed via `Termicap.Override.Set_Override` is checked before the `GetConsoleMode` call, identical to the POSIX `isatty()` path.
+
+#### Cygwin and MSYS2 PTY Support
+
+When running inside a Cygwin or MSYS2 environment (for example, Git Bash on Windows), standard streams are backed by named pipes rather than native Windows console objects. `GetConsoleMode` fails on these handles, which would normally cause `Is_TTY` to return `False` even though the user is interacting with an interactive terminal.
+
+To handle this, `Is_TTY` performs a second-chance check using `Termicap.Win32_Cygwin.Is_Cygwin_Terminal`. This function:
+
+1. Guards on `GetFileType` — only named pipe handles proceed further.
+2. Retrieves the kernel-level pipe name via `GetFileInformationByHandleEx` (primary) or `NtQueryObject` (fallback).
+3. Passes the decoded ASCII name to `Is_Cygwin_Pipe_Name`, a pure SPARK Silver function that validates the Cygwin/MSYS2 pipe name grammar (e.g., `\msys-<hex>-pty<N>-from-master`).
+
+If the pipe name matches, `Is_TTY` returns `True` for that handle. The detection is fully transparent to application code — the returned value is the same `Boolean` on all paths.
+
+This covers the requirements FUNC-CYG-001 through FUNC-CYG-017.
 
 ### Terminal Dimensions
 
@@ -135,6 +150,18 @@ Within the env-var cascade itself (when override is `Auto`), `FORCE_COLOR` and `
 | FUNC-WIN-011 | Enable VT processing on valid console output handle |
 | FUNC-WIN-012 | Custom FFI boundary for `ntdll.dll` (`Termicap.Win32_Ntdll`) |
 | FUNC-WIN-013 | `Build_To_Color_Level` SPARK postcondition: `Basic_16` never returned |
+| FUNC-CYG-006 | `Win32_Cygwin.Is_Cygwin_Pipe_Name` — public SPARK Silver function |
+| FUNC-CYG-007 | Token[0] prefix validation (`\msys-` / `\cygwin-`) |
+| FUNC-CYG-008 | Token[1] non-empty hex PID segment |
+| FUNC-CYG-009 | Token[2] starts with `"pty"` |
+| FUNC-CYG-010 | Token[3] is exactly `"from"` or `"to"` |
+| FUNC-CYG-011 | Token[4] is exactly `"master"` |
+| FUNC-CYG-012 | Minimum 5 `'-'`-delimited segments |
+| FUNC-CYG-013 | 14 acceptance test vectors for `Is_Cygwin_Pipe_Name` |
+| FUNC-CYG-014 | `Win32_Cygwin.Is_Cygwin_Terminal` — full detection pipeline |
+| FUNC-CYG-015 | `Is_TTY_Via_Handle` disjunction: Cygwin check after `GetConsoleMode` fails |
+| FUNC-CYG-016 | `Is_Cygwin_Terminal` no-exception contract |
+| FUNC-CYG-017 | Package structure and SPARK boundary |
 
 ---
 
@@ -143,7 +170,9 @@ Within the env-var cascade itself (when override is `Auto`), `FORCE_COLOR` and `
 - **[Termicap.Capabilities](termicap-capabilities.md)** — primary public API (all platforms)
 - **[Termicap.Color](termicap-color.md)** — env-var color cascade (FORCE_COLOR, NO_COLOR, COLORTERM, …)
 - **Architecture: Building Blocks** (`docs/architecture/03-building-blocks.md`) — `Termicap.Win32_*` package descriptions, Windows platform package list
-- **Architecture: Runtime View** (`docs/architecture/04-runtime-view.md`) — Scenario 24: Windows color detection flow
+- **Architecture: Runtime View** (`docs/architecture/04-runtime-view.md`) — Scenario 24: Windows color detection flow; Scenario 25: Cygwin/MSYS2 TTY detection flow
 - **ADR-0018** (`docs/adr/0018-platform-dispatch-via-source-dirs.md`) — GPR `Source_Dirs` platform dispatch rationale
 - **ADR-0019** (`docs/adr/0019-win32ada-as-ffi-layer.md`) — win32ada FFI layer rationale
+- **ADR-0020** (`docs/adr/0020-cygwin-pty-detection-strategy.md`) — Cygwin/MSYS2 PTY detection strategy rationale
 - **Tech Spec WIN32** (`docs/tech-specs/windows-console.md`) — full design rationale and build number threshold derivation
+- **Tech Spec CYGWIN** (`docs/tech-specs/cygwin-pty.md`) — Cygwin/MSYS2 PTY detection design rationale

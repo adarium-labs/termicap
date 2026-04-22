@@ -1,6 +1,7 @@
 with "config/termicap_tests_config.gpr";
 with "termicap.gpr";
 with "aunit.gpr";
+with "shared.gpr";
 
 project Termicap_Tests is
 
@@ -38,11 +39,24 @@ project Termicap_Tests is
    package Compiler is
       case Coverage_Mode is
          when "disabled" =>
-            for Default_Switches ("Ada") use Termicap_Tests_Config.Ada_Compiler_Switches &
-               ("-gnatyM120", "-gnaty-u", "-gnat2022");
+            case Host_OS is
+               when "windows" =>
+                  for Default_Switches ("Ada") use Termicap_Tests_Config.Ada_Compiler_Switches &
+                     ("-gnatyM120", "-gnaty-u", "-gnat2022") & (Shared.Prep, "-gnateG");
+               when others =>
+                  for Default_Switches ("Ada") use Termicap_Tests_Config.Ada_Compiler_Switches &
+                     ("-gnatyM120", "-gnaty-u", "-gnat2022");
+            end case;
          when "enabled" =>
-            for Default_Switches ("Ada") use Termicap_Tests_Config.Ada_Compiler_Switches &
-               ("-gnatyM120", "-gnaty-u", "-gnat2022") & Coverage_Switches;
+            case Host_OS is
+               when "windows" =>
+                  for Default_Switches ("Ada") use Termicap_Tests_Config.Ada_Compiler_Switches &
+                     ("-gnatyM120", "-gnaty-u", "-gnat2022") & Coverage_Switches &
+                     (Shared.Prep, "-gnateG");
+               when others =>
+                  for Default_Switches ("Ada") use Termicap_Tests_Config.Ada_Compiler_Switches &
+                     ("-gnatyM120", "-gnaty-u", "-gnat2022") & Coverage_Switches;
+            end case;
       end case;
    end Compiler;
 

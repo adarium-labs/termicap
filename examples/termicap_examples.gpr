@@ -13,5 +13,6 @@ aggregate project Termicap_Examples is
                           "xtversion_demo/xtversion_demo.gpr",
                           "da1_demo/da1_demo.gpr",
                           "decrpm_demo/decrpm_demo.gpr",
-                          "win32_color_demo/win32_color_demo.gpr");
+                          "win32_color_demo/win32_color_demo.gpr",
+                          "cygwin_pty_demo/cygwin_pty_demo.gpr");
 end Termicap_Examples;

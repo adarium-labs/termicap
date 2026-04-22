@@ -37,14 +37,18 @@ Termicap                          (root namespace — no types or subprograms)
 On Windows, a set of platform-specific packages is compiled instead of (or alongside) the POSIX bodies. They are selected automatically via GPR `Source_Dirs` (ADR-0018) and are never referenced directly by application code.
 
 ```
-Termicap.Win32_Ntdll    [SPARK_Mode => Off] — dynamic load of ntdll.dll; RtlGetNtVersionNumbers → Windows build number
+Termicap.Win32_Ntdll    [SPARK_Mode => Off] — dynamic load of ntdll.dll; RtlGetNtVersionNumbers → Windows build number;
+                         extended with Query_Object_Name (NtQueryObject wrapper for pipe name retrieval)
 Termicap.Win32_VT       [SPARK_Mode => Off] — Is_Valid_Handle, Open/Close CONIN$/CONOUT$, Enable_VT_Processing
 Termicap.Win32_Color    [SPARK_Mode (body Off)] — Build_To_Color_Level (SPARK Silver), Detect_Windows_Color_Level (impure wrapper)
+Termicap.Win32_Cygwin   [spec: SPARK_Mode => On; body: Off (Is_Cygwin_Pipe_Name body locally On)] —
+                         Cygwin/MSYS2 PTY detection via named-pipe name inspection;
+                         Is_Cygwin_Pipe_Name (SPARK Silver, Global => null), Is_Cygwin_Terminal (Ada FFI)
 ```
 
 Platform-dispatched bodies (replacing the POSIX equivalents on Windows):
 
-- `src/windows/termicap-tty.adb` — TTY detection via `GetConsoleMode`; calls `Win32_VT.Enable_VT_Processing` on success
+- `src/windows/termicap-tty.adb` — TTY detection via `GetConsoleMode`; calls `Win32_VT.Enable_VT_Processing` on success; falls back to `Win32_Cygwin.Is_Cygwin_Terminal` for Cygwin/MSYS2 PTY handles (FUNC-CYG-015)
 - `src/windows/termicap-dimensions.adb` — terminal size via `GetConsoleScreenBufferInfo`, reads `srWindow` (not `dwSize`)
 - `src/windows/termicap-capabilities.adb` — integrates `Win32_Color.Detect_Windows_Color_Level`; final color is `Color_Level'Max (Win32_Level, env_cascade_level)`
 - `src/windows/termicap-sigwinch.adb` — no-op stubs (SIGWINCH does not exist on Windows; FUNC-SWC-008)
@@ -1093,6 +1097,7 @@ Returns `0` when `LoadLibraryA` or `GetProcAddress` fails, allowing callers to t
 | Subprogram | Kind | Description | Requirements |
 |-----------|------|-------------|--------------|
 | `Get_Build_Number` | Function | Returns the low 16 bits of the raw NT build number, or `0` on failure. Never raises. | FUNC-WIN-006, FUNC-WIN-012 |
+| `Query_Object_Name` | Function | Calls `NtQueryObject` via a dynamically loaded `ntdll.dll` function pointer to retrieve the kernel object name (pipe path) of a handle as a wide-character string. Returns an empty string on any failure. Used by `Termicap.Win32_Cygwin` as a fallback when `GetFileInformationByHandleEx` is unavailable. Never raises. | FUNC-CYG-014 |
 
 ---
 
@@ -1160,6 +1165,36 @@ If `WT_SESSION` is present and non-empty, the result is always `True_Color` rega
 #### Relationship to Other Packages
 
 `Termicap.Win32_Color` depends on `Termicap.Win32_Ntdll` (body only). It is called by the Windows-platform body of `Termicap.Capabilities`, which combines the returned level with the env-var cascade result using `Color_Level'Max`. Application code never calls `Win32_Color` or `Win32_Ntdll` directly.
+
+---
+
+### `Termicap.Win32_Cygwin`
+
+**Responsibility:** Detects whether a Win32 `HANDLE` refers to a Cygwin or MSYS2 pseudo-terminal (PTY). Cygwin/MSYS2 PTYs appear as named pipes to the Windows Console API — `GetConsoleMode` fails on them — so a separate name-inspection step is required.
+
+Provides two subprograms:
+
+- `Is_Cygwin_Pipe_Name`: a pure SPARK Silver function that validates a decoded ASCII pipe name against the Cygwin/MSYS2 pipe name grammar (five token-level rules, minimum five `'-'`-delimited segments). Provable at SPARK Silver with `Global => null`. This is the primary testable unit.
+- `Is_Cygwin_Terminal`: an impure Ada wrapper that sequences the full detection pipeline — `GetFileType` guard (must be `FILE_TYPE_PIPE`), pipe name retrieval via `GetFileInformationByHandleEx` (primary) or `NtQueryObject` (fallback), UTF-16 decoding, and `Is_Cygwin_Pipe_Name` pattern matching — for a live Win32 `HANDLE`.
+
+The Windows body of `Termicap.TTY` calls `Is_Cygwin_Terminal` as a second-chance check when `GetConsoleMode` fails, before returning `False` (FUNC-CYG-015).
+
+| Property | Value |
+|----------|-------|
+| Files | `src/windows/termicap-win32_cygwin.ads`, `src/windows/termicap-win32_cygwin.adb` |
+| SPARK_Mode | On (spec); Off (body, except `Is_Cygwin_Pipe_Name` body is locally On) |
+| Dependencies | win32ada (`Win32.Winnt`); body also uses `Win32.Winbase`, `Win32.Wincon`, `Termicap.Win32_Ntdll` (for `Query_Object_Name`) |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Is_Cygwin_Pipe_Name` | Function | `Global => null`; pure pattern match — SPARK Silver | FUNC-CYG-006 through FUNC-CYG-013 |
+| `Is_Cygwin_Terminal` | Function | `SPARK_Mode => Off` — full pipeline with OS calls | FUNC-CYG-014, FUNC-CYG-016 |
+
+#### Relationship to Other Packages
+
+`Termicap.Win32_Cygwin` depends on `Termicap.Win32_Ntdll` (body only, for `Query_Object_Name`). It is called by the Windows-platform body of `Termicap.TTY`; it is not called by application code directly. `Termicap.Win32_Ntdll` was extended with `Query_Object_Name` to support `NtQueryObject`-based pipe name retrieval as a fallback when `GetFileInformationByHandleEx` is unavailable.
 
 ---
 

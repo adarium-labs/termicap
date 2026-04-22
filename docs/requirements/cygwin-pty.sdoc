@@ -1,0 +1,482 @@
+[DOCUMENT]
+TITLE: CYGWIN — Cygwin / MSYS2 PTY Detection
+UID: REQ-CYG
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Pipe Type Check
+
+[REQUIREMENT]
+UID: FUNC-CYG-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: GetFileType Guard — FILE_TYPE_PIPE Prerequisite
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-001
+STATEMENT: >>>
+Before any Cygwin/MSYS2 PTY detection logic is attempted, the library shall verify that the Win32 handle refers to a pipe by calling Win32.Winbase.GetFileType:
+
+  Win32.Winbase.GetFileType (hFile : Win32.Winnt.HANDLE) return Win32.DWORD;
+
+The return value shall be compared against the constant:
+
+  FILE_TYPE_PIPE : constant Win32.DWORD := 16#0003#;
+
+If GetFileType does not return FILE_TYPE_PIPE, the function Is_Cygwin_Terminal (FUNC-CYG-014) shall return False immediately without querying the pipe name. This check shall be performed as the first step of Is_Cygwin_Terminal, before either primary (FUNC-CYG-002, FUNC-CYG-003) or fallback (FUNC-CYG-004, FUNC-CYG-005) pipe-name retrieval is attempted.
+<<<
+COMMENT: >>>
+GetConsoleMode returns FALSE for Cygwin/MSYS2 PTY handles because those environments use named pipes rather than console device handles to emulate a PTY. However, not all non-console handles are Cygwin PTYs: files, anonymous pipes, sockets, and serial ports must all be excluded before expensive pipe-name queries are made. GetFileType is the lightest possible discriminator: a Cygwin PTY is always a named pipe, so FILE_TYPE_PIPE (0x0003) is a necessary — though not sufficient — condition. Checking it first avoids calling GetFileInformationByHandleEx or NtQueryObject on ordinary file handles, which would be wasteful and could produce misleading results. go-isatty performs the same FILE_TYPE_PIPE guard as the first step of its Windows Cygwin detection path, and crossterm does the equivalent via a handle type check before any further pipe classification.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Primary Path — GetFileInformationByHandleEx
+
+[REQUIREMENT]
+UID: FUNC-CYG-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Runtime Probe for GetFileInformationByHandleEx Availability
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-001
+STATEMENT: >>>
+At library initialisation time (or on first use of Is_Cygwin_Terminal), the library shall probe whether GetFileInformationByHandleEx is available from kernel32.dll by performing a dynamic load:
+
+  1. Call Win32.Winbase.LoadLibraryA("kernel32.dll") to obtain an HINSTANCE.
+  2. Call Win32.Winbase.GetProcAddress(hModule, "GetFileInformationByHandleEx") to obtain a FARPROC.
+  3. If either call fails or GetProcAddress returns null, record availability as False and use the NtQueryObject fallback (FUNC-CYG-004) for all subsequent calls.
+  4. If the probe succeeds, record availability as True and store the resolved function pointer for use in FUNC-CYG-003.
+  5. Call Win32.Winbase.FreeLibrary to release the module handle (the OS keeps kernel32 loaded for the lifetime of the process regardless).
+
+The availability flag and function pointer shall be stored as package-level elaboration-time state in Termicap.Win32_Cygwin (FUNC-CYG-017). The probe shall be performed at most once per process lifetime.
+<<<
+COMMENT: >>>
+GetFileInformationByHandleEx was introduced in Windows Vista (kernel32.dll, documented in the Windows SDK as fileapi.h). Because Termicap targets Windows 10 Build 10586 as the minimum supported version (per FUNC-WIN-001), GetFileInformationByHandleEx will be present on all currently supported targets. However, the dynamic probe is still required because Termicap may be deployed in Wine or compatibility environments where the function is absent or stubbed. Dynamic probing via LoadLibraryA/GetProcAddress is the same pattern used for RtlGetNtVersionNumbers in FUNC-WIN-006, and mirrors the approach taken by go-isatty, which uses Go's syscall.NewLazyDLL to lazily resolve GetFileInformationByHandleEx from kernel32.dll. Storing the result at elaboration time avoids repeated LoadLibrary overhead during TTY detection, which may be called for each of the three standard streams.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Pipe Name Retrieval via GetFileInformationByHandleEx
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-001
+- TYPE: Parent
+  VALUE: FUNC-CYG-002
+STATEMENT: >>>
+When GetFileInformationByHandleEx is available (FUNC-CYG-002), the library shall retrieve the pipe name for a FILE_TYPE_PIPE handle by invoking the function with the FileNameInfo information class (value: 2).
+
+The typed access-to-procedure for the dynamic call shall be declared as:
+
+  FILE_NAME_INFO_CLASS : constant := 2;
+
+  type File_Name_Info is record
+     File_Name_Length : Win32.DWORD;
+     File_Name        : Interfaces.C.char16_array (0 .. MAX_PIPE_NAME_LENGTH - 1);
+  end record
+     with Convention => C;
+
+  type Get_File_Info_By_Handle_Ex_Ptr is access function
+     (hFile                  : Win32.Winnt.HANDLE;
+      FileInformationClass   : Win32.DWORD;
+      lpFileInformation      : System.Address;
+      dwBufferSize           : Win32.DWORD)
+      return Win32.BOOL
+     with Convention => Stdcall;
+
+The call shall use a stack-allocated File_Name_Info buffer sized to hold at least 512 UTF-16 code units (1024 bytes) plus the 4-byte length prefix. If GetFileInformationByHandleEx returns Win32.FALSE, Is_Cygwin_Terminal shall return False without attempting the fallback path.
+
+The File_Name_Length field (in bytes) shall be used to determine the number of UTF-16 code units to decode: Length_In_Units := File_Name_Length / 2. The UTF-16 sequence shall then be decoded to an Ada String as specified in FUNC-CYG-005 and passed to Is_Cygwin_Pipe_Name (FUNC-CYG-006).
+<<<
+COMMENT: >>>
+GetFileInformationByHandleEx with FileNameInfo (class 2) returns the kernel-mode object name of the handle, which for named pipes takes the form \msys-XXXX-ptyN-from-master or \Device\NamedPipe\cygwin-XXXX-ptyN-to-master depending on the Windows version and the MSYS2/Cygwin runtime version. This is the documented, supported API for obtaining the name of a file or pipe handle without requiring administrator privileges. The FILE_NAME_INFO structure is defined in the Windows SDK (fileapi.h) with a DWORD length field followed by a variable-length WCHAR array; in Ada this is most safely represented with a fixed-size char16_array bounded by a generous constant to avoid buffer overflows. go-isatty uses this exact API (via syscall.Syscall6) with a 512-WCHAR buffer, establishing the buffer size as sufficient for all observed Cygwin/MSYS2 pipe name lengths. The decision not to fall back to NtQueryObject after a GetFileInformationByHandleEx failure (as opposed to unavailability) is intentional: a failure on a real pipe handle indicates a permissions or OS error, not a missing API, so the fallback would not help.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Fallback Path — NtQueryObject
+
+[REQUIREMENT]
+UID: FUNC-CYG-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Pipe Name Retrieval Fallback via NtQueryObject
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-001
+- TYPE: Parent
+  VALUE: FUNC-CYG-002
+STATEMENT: >>>
+When GetFileInformationByHandleEx is not available (FUNC-CYG-002 probe returned False), the library shall retrieve the pipe name by calling the NtQueryObject binding already declared in Termicap.Win32_Ntdll, using ObjectNameInformation (value: 1) as the information class.
+
+The call interface shall use the existing NtQueryObject binding from Termicap.Win32_Ntdll. The library shall supply a stack-allocated buffer of at least 1024 bytes, large enough to hold an OBJECT_NAME_INFORMATION structure (UNICODE_STRING header followed by the UTF-16 name data).
+
+The UNICODE_STRING structure shall be interpreted as:
+
+  type Unicode_String is record
+     Length        : Interfaces.C.unsigned_short;  --  byte length of Name (not null-terminated)
+     Maximum_Length : Interfaces.C.unsigned_short;
+     Buffer         : System.Address;               --  pointer into the same stack buffer
+  end record
+     with Convention => C;
+
+The Length field (in bytes) shall be used to determine the number of UTF-16 code units to decode: Length_In_Units := Unicode_String.Length / 2. The UTF-16 sequence shall then be decoded to an Ada String as specified in FUNC-CYG-005 and passed to Is_Cygwin_Pipe_Name (FUNC-CYG-006).
+
+If NtQueryObject returns a non-zero NTSTATUS, Is_Cygwin_Terminal shall return False.
+<<<
+COMMENT: >>>
+NtQueryObject with ObjectNameInformation (class 1) is the undocumented-but-stable ntdll.dll alternative for retrieving the kernel-mode name of any handle, including named pipes. It has been available since Windows NT 3.5 and remains present in all Windows 10 and 11 builds. Termicap already has an NtQueryObject binding in Termicap.Win32_Ntdll (introduced for build number detection via RtlGetNtVersionNumbers), so reusing that package's loading infrastructure avoids duplicating the LoadLibraryA/GetProcAddress boilerplate. The UNICODE_STRING interpretation is a POSIX-hostile but well-documented structure: the Length field counts bytes, not characters, and the Buffer pointer points into the same allocation as the structure itself (important when reading from a stack buffer where absolute addresses are valid). go-isatty and supports-color (Node.js on older Windows) both document NtQueryObject as the reliable fallback when GetFileInformationByHandleEx is absent. Treating a non-zero NTSTATUS as a failure without raising is consistent with the Termicap convention for all OS wrappers (FUNC-WIN-011, FUNC-CYG-016).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: UTF-16 Decoding of Pipe Name to Ada String
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-003
+- TYPE: Parent
+  VALUE: FUNC-CYG-004
+STATEMENT: >>>
+The library shall decode the UTF-16LE pipe name returned by either GetFileInformationByHandleEx (FUNC-CYG-003) or NtQueryObject (FUNC-CYG-004) into a standard Ada String for subsequent pattern matching by Is_Cygwin_Pipe_Name (FUNC-CYG-006).
+
+The decoding shall follow these rules:
+
+  1. Iterate over the UTF-16 code units using the Length_In_Units value computed from the byte-length field of the respective API result structure.
+  2. For each code unit in the range 16#0001# .. 16#007F# (non-null ASCII-range), emit the corresponding Character directly into the output String.
+  3. For any code unit with value 0 (null) or outside the range 16#0001# .. 16#007F#, substitute the replacement character '?' and continue; do not raise an exception.
+  4. The output String shall be allocated on the stack using a fixed-size buffer of MAX_PIPE_NAME_LENGTH characters (same bound as the UTF-16 input buffer).
+  5. The actual String slice of length Length_In_Units shall be passed to Is_Cygwin_Pipe_Name; trailing uninitialized buffer content shall not be included.
+
+The decoding subprogram shall reside in the Termicap.Win32_Cygwin package body with SPARK_Mode => Off.
+<<<
+COMMENT: >>>
+Cygwin and MSYS2 pipe names are pure ASCII (hexadecimal session IDs, decimal PTY numbers, and fixed tokens such as "from", "to", "master", "cygwin", "msys"). Full Unicode decoding via Ada.Strings.UTF_Encoding is therefore unnecessary and would add a dependency that complicates the SPARK boundary. The ASCII-range-only decode with '?' substitution for non-ASCII code units is the same approach used by go-isatty's byte-level comparison of the UTF-16 output: it copies only the low byte of each code unit, which is correct for ASCII characters and produces benign garbage for any non-ASCII character (which would fail Is_Cygwin_Pipe_Name's pattern match anyway). Rule 3 (non-raising substitution) is essential for FUNC-CYG-016's no-exception guarantee: a pipe whose name happens to contain a non-ASCII character (e.g., a Unicode path component in an unusual environment) must not crash the library. The fixed-size stack buffer avoids heap allocation, keeping the FFI boundary simple and the SPARK-unsafe surface area minimal.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Pipe Name Pattern Matching (SPARK Silver)
+
+[REQUIREMENT]
+UID: FUNC-CYG-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Is_Cygwin_Pipe_Name — Public SPARK Function Signature
+STATEMENT: >>>
+The library shall expose the following pure SPARK function in the Termicap.Win32_Cygwin package specification:
+
+  function Is_Cygwin_Pipe_Name (Name : String) return Boolean
+     with SPARK_Mode => On,
+          Global     => null,
+          Pre        => True,
+          Post       => True;
+
+The function shall return True if and only if Name satisfies all of the validation rules defined in FUNC-CYG-007 through FUNC-CYG-012. The function shall not raise any exception for any value of Name, including the empty string.
+
+The function shall have no side effects and shall depend only on its Name parameter. It shall be callable from both SPARK_Mode => On and SPARK_Mode => Off contexts.
+<<<
+COMMENT: >>>
+Declaring Is_Cygwin_Pipe_Name with SPARK_Mode => On and Global => null makes it a pure function that the SPARK prover can reason about as a black box when it appears in contracts of higher-level functions. The pipe name validation logic is entirely composed of string iteration and comparison — no OS calls, no global state, no dynamic allocation — making it naturally amenable to SPARK Silver proof. This follows the same architectural pattern as Build_To_Color_Level (FUNC-WIN-008, FUNC-WIN-013): pure detection logic in a SPARK-proven function, with the OS-call plumbing in SPARK_Mode => Off bodies beneath it. go-isatty implements the equivalent logic as a pure Go function (isCygwinPipeName), confirming that no OS interaction is needed for the pattern match itself. The Pre => True / Post => True placeholders leave room for the implementor or prover to strengthen contracts during FUNC-CYG-013 test-vector verification without invalidating the requirement statement.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Validation Rule — token[0] Prefix Must Be a Known Root
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-006
+STATEMENT: >>>
+Is_Cygwin_Pipe_Name shall return False unless the substring of Name that precedes the first '-' character (token[0]) is exactly one of the following four values:
+
+  \cygwin
+  \msys
+  \Device\NamedPipe\cygwin
+  \Device\NamedPipe\msys
+
+The comparison shall be case-sensitive. A Name that begins with any other prefix, including \\cygwin (double backslash), \Cygwin (uppercase C), or \MSYS (uppercase), shall cause the function to return False.
+<<<
+COMMENT: >>>
+The four accepted prefixes correspond to the two observed kernel-mode naming conventions for Cygwin/MSYS2 named pipes on Windows: the short form (\cygwin-... or \msys-...) returned by GetFileInformationByHandleEx on most Windows 10 and 11 installations, and the long NT device path form (\Device\NamedPipe\cygwin-... or \Device\NamedPipe\msys-...) sometimes returned by NtQueryObject or by older Cygwin runtimes. go-isatty's isCygwinPipeName accepts exactly these four prefixes (after splitting by '-'). Case-sensitivity is required because Windows kernel object names are case-insensitive at the OS level but the Cygwin and MSYS2 runtimes always use lowercase; accepting uppercase variants would risk false positives from unrelated named pipes that coincidentally start with \Cygwin. The double-backslash rejection (\\cygwin) is explicit in go-isatty's test suite and is necessary because UNC-style paths use a different naming convention that does not correspond to any real Cygwin pipe.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Validation Rule — token[1] (Session ID) Must Be Non-Empty
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-006
+STATEMENT: >>>
+Is_Cygwin_Pipe_Name shall return False if the second '-'-delimited segment (token[1]), representing the hexadecimal session identifier, is an empty string.
+
+A pipe name of the form \cygwin--pty2-from-master (double dash, producing an empty token[1]) shall be rejected and the function shall return False.
+<<<
+COMMENT: >>>
+The session ID (token[1]) is a 64-bit hexadecimal value generated by the Cygwin or MSYS2 runtime to distinguish PTY instances across concurrent sessions (e.g., e022582115c10879). It is always non-empty for legitimate Cygwin/MSYS2 PTY handles; an empty token[1] indicates a malformed or crafted pipe name. go-isatty includes the \cygwin--pty2-from-master test vector explicitly as a false-positive rejection case. No length or format validation beyond non-emptiness is required: the session ID format (hex digits, 16 characters) may evolve across Cygwin/MSYS2 versions, and requiring a specific length or character set would break detection of future runtime versions.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Validation Rule — token[2] Must Start with Lowercase "pty"
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-006
+STATEMENT: >>>
+Is_Cygwin_Pipe_Name shall return False if the third '-'-delimited segment (token[2]) does not begin with the three-character lowercase prefix "pty".
+
+A segment of "PTY5" (uppercase), "Pty3", or any other non-lowercase variant shall be rejected. A segment of "pty0", "pty4", or "pty12" shall be accepted. A segment that is fewer than three characters long (e.g., "pt") shall also be rejected.
+<<<
+COMMENT: >>>
+token[2] encodes the PTY index in the form "ptyN" where N is a decimal integer. The Cygwin and MSYS2 runtimes always emit this segment in lowercase; the "PTY" uppercase form appears in go-isatty's test vectors as a known false-positive that must be rejected. Requiring the lowercase prefix "pty" (exactly three characters, case-sensitive) is the minimal check needed to distinguish genuine PTY handles from other named pipes that might coincidentally pass the token[0] and token[1] checks. No validation of the digit suffix beyond the prefix presence is required, to remain compatible with any PTY numbering scheme future Cygwin/MSYS2 versions might use.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Validation Rule — token[3] Must Be Exactly "from" or "to"
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-006
+STATEMENT: >>>
+Is_Cygwin_Pipe_Name shall return False if the fourth '-'-delimited segment (token[3]) is not exactly the string "from" or exactly the string "to". Any other value, including "FROM", "To", or any other case variant or unrelated word, shall cause the function to return False.
+<<<
+COMMENT: >>>
+Cygwin and MSYS2 create two named pipes per PTY: one for data flowing from the master (ptyN-from-master) and one for data flowing to the master (ptyN-to-master). These are the only two valid values for token[3] in any Cygwin/MSYS2 PTY pipe name. go-isatty's test suite includes the vector \cygwin-x-pty2-from-toaster (token[4] = "toaster") to ensure the full suffix is checked and not just the prefix; the token[3] check ensures that similarly crafted non-PTY pipe names are rejected at this earlier stage. Case-sensitivity is required for the same reason as FUNC-CYG-007: the runtimes always use lowercase, and accepting uppercase would widen the match unnecessarily.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Validation Rule — token[4] Must Be Exactly "master"
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-006
+STATEMENT: >>>
+Is_Cygwin_Pipe_Name shall return False if the fifth '-'-delimited segment (token[4]) is not exactly the string "master". Any other value — including "MASTER", "Master", "toaster", or any other word — shall cause the function to return False.
+
+Additional segments beyond token[4] (i.e., a sixth or further '-'-delimited segment) shall be ignored; their presence shall not cause the function to return False.
+<<<
+COMMENT: >>>
+"master" is the fixed terminal string that concludes every legitimate Cygwin/MSYS2 PTY pipe name (as in ptyN-from-master and ptyN-to-master). It is always the fifth segment (index 4) and always lowercase. The case-sensitive exact match eliminates coincidental matches from other named pipes. The acceptance of trailing segments (extra dashes) is supported by go-isatty's test vector \cygwin-x-pty2-from-master- (trailing dash, producing a sixth empty segment), which go-isatty correctly classifies as True. Ignoring extra segments makes the validation forward-compatible: a future Cygwin version could append an additional tag to the pipe name without breaking detection.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Validation Rule — Minimum Token Count Is 5
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-006
+STATEMENT: >>>
+Is_Cygwin_Pipe_Name shall return False if splitting Name by the '-' character yields fewer than 5 segments (tokens[0] through token[4]). A Name with 0 to 4 '-'-separated segments shall always return False, regardless of any partial match against other rules.
+
+Splitting shall be performed left-to-right, consuming each '-' as a delimiter. Empty segments (consecutive dashes, or a leading or trailing dash) count as valid segments for the purpose of this count; their content is then checked by the individual token rules (FUNC-CYG-007 through FUNC-CYG-011).
+<<<
+COMMENT: >>>
+The minimum-token-count check is a fast fail-early guard before the more detailed per-token validations. It rejects obviously malformed names (empty string, a single word, or a prefix with too few dashes) without examining individual token content. go-isatty encodes this implicitly by indexing tokens[0..4] and returning false immediately if the split yields fewer than 5 elements. Counting empty segments as valid segments (rather than skipping them) ensures consistency with FUNC-CYG-008: an empty token[1] is counted as a segment but then rejected on content, rather than being silently elided and shifting subsequent indices. This matches the standard behavior of most language split implementations (Go's strings.Split, Python's str.split with a separator argument, Ada iteration over delimited strings).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Acceptance Test Vectors for Is_Cygwin_Pipe_Name
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-006
+STATEMENT: >>>
+The implementation of Is_Cygwin_Pipe_Name shall be verified against the following 14 test vectors derived from the go-isatty test suite. Each vector specifies the input Name string and the required Boolean result:
+
+  | Name                                                               | Expected |
+  |--------------------------------------------------------------------|----------|
+  | ""                                                                 | False    |
+  | "\msys-"                                                           | False    |
+  | "\cygwin-----"                                                     | False    |
+  | "\msys-x-PTY5-pty1-from-master"                                    | False    |
+  | "\cygwin-x-PTY5-from-master"                                       | False    |
+  | "\cygwin-x-pty2-from-toaster"                                      | False    |
+  | "\cygwin--pty2-from-master"                                        | False    |
+  | "\\cygwin-x-pty2-from-master"                                      | False    |
+  | "\cygwin-x-pty2-from-master-"                                      | True     |
+  | "\cygwin-e022582115c10879-pty4-from-master"                        | True     |
+  | "\msys-e022582115c10879-pty4-to-master"                            | True     |
+  | "\Device\NamedPipe\cygwin-e022582115c10879-pty4-from-master"       | True     |
+  | "\Device\NamedPipe\msys-e022582115c10879-pty4-to-master"           | True     |
+  | "Device\NamedPipe\cygwin-e022582115c10879-pty4-to-master"          | False    |
+
+Notes on selected vectors:
+- "\msys-x-PTY5-pty1-from-master": split by '-' gives ["\msys", "x", "PTY5", "pty1", "from", "master"]; token[2]="PTY5" fails FUNC-CYG-009 (uppercase). Result: False.
+- "\cygwin-x-PTY5-from-master": only 5 segments; token[2]="PTY5" fails FUNC-CYG-009. Result: False.
+- "\cygwin-x-pty2-from-toaster": token[4]="toaster" fails FUNC-CYG-011. Result: False.
+- "\cygwin--pty2-from-master": token[1]="" fails FUNC-CYG-008. Result: False.
+- "\\cygwin-x-pty2-from-master": token[0]="\\cygwin" (two backslashes) fails FUNC-CYG-007. Result: False.
+- "\cygwin-x-pty2-from-master-": 6 segments; token[4]="master" passes; extra segment ignored per FUNC-CYG-011. Result: True.
+- "Device\NamedPipe\cygwin-e022582115c10879-pty4-to-master": no leading '\'; token[0]="Device\NamedPipe\cygwin" fails FUNC-CYG-007. Result: False.
+
+These vectors shall be encoded as individual test cases in the Termicap test suite under tests/src/.
+<<<
+COMMENT: >>>
+Reusing the go-isatty test corpus provides an independently derived, cross-language ground truth for the pipe name validation logic. go-isatty is the most widely deployed Cygwin PTY detection library in the Go ecosystem (used by cobra, color, progressbar, and many other CLI tools), so its test vectors represent the accumulated knowledge of real-world Cygwin/MSYS2 pipe name patterns. Encoding these 14 vectors as explicit test cases rather than relying on informal spot-checking ensures that future refactors of Is_Cygwin_Pipe_Name (e.g., performance optimisation, SPARK contract strengthening) cannot accidentally regress on any of the known edge cases. The notes explaining the token decomposition of the ambiguous vectors (PTY5, double-backslash) are included in the requirement statement so that test implementors do not need to re-derive the expected tokenisation independently.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with TTY Detection
+
+[REQUIREMENT]
+UID: FUNC-CYG-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: Is_Cygwin_Terminal — High-Level PTY Detection Function
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-001
+- TYPE: Parent
+  VALUE: FUNC-CYG-006
+STATEMENT: >>>
+The library shall provide the following function in Termicap.Win32_Cygwin:
+
+  function Is_Cygwin_Terminal (Handle : Win32.Winnt.HANDLE) return Boolean;
+
+The function shall implement the following detection pipeline:
+
+  1. Call GetFileType(Handle) (FUNC-CYG-001); if the result is not FILE_TYPE_PIPE, return False.
+  2. If GetFileInformationByHandleEx is available (FUNC-CYG-002), call it with Handle and FileNameInfo (FUNC-CYG-003) to obtain the UTF-16 pipe name.
+     Otherwise, call NtQueryObject with ObjectNameInformation (FUNC-CYG-004) to obtain the UTF-16 pipe name.
+  3. Decode the UTF-16 pipe name to an Ada String (FUNC-CYG-005).
+  4. Call Is_Cygwin_Pipe_Name with the decoded string (FUNC-CYG-006 through FUNC-CYG-012).
+  5. Return the result of Is_Cygwin_Pipe_Name.
+
+The function shall be declared with SPARK_Mode => Off because it calls Win32 FFI functions.
+<<<
+COMMENT: >>>
+Is_Cygwin_Terminal is the integration boundary between the SPARK-provable pipe-name matching logic and the SPARK_Mode => Off FFI plumbing. Structuring it as a named function (rather than inline code in Is_TTY_Via_Handle) enables independent unit testing: the test suite can pass synthesised HANDLEs from named pipes created for the purpose, verifying end-to-end detection without relying on a live Cygwin installation. The sequential pipeline (type check → name retrieval → decode → match) mirrors go-isatty's isatty function for Windows: it performs the GetFileType guard first, then resolves the pipe name via one of the two available OS APIs, then applies the pure string predicate. Keeping this function in Termicap.Win32_Cygwin (rather than directly in Termicap.TTY) maintains the package boundary established in FUNC-CYG-017 and avoids bloating the TTY body with Cygwin-specific logic.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Extended TTY Detection — Disjunction with GetConsoleMode
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-003
+- TYPE: Parent
+  VALUE: FUNC-CYG-014
+STATEMENT: >>>
+The Windows body of Termicap.TTY.Is_TTY (currently implemented in src/windows/termicap-tty.adb) shall be modified so that Is_TTY_Via_Handle returns True when either:
+
+  (a) Win32.Wincon.GetConsoleMode succeeds (Res /= Win32.FALSE) — existing behaviour per FUNC-WIN-003; OR
+  (b) GetConsoleMode fails (Res = Win32.FALSE) AND Termicap.Win32_Cygwin.Is_Cygwin_Terminal returns True for the same handle.
+
+The Cygwin check (b) shall only be performed when GetConsoleMode returns Win32.FALSE, preserving the short-circuit behaviour: a genuine Windows console handle is identified by step (a) without incurring the additional GetFileType and pipe-name API calls.
+
+VT processing enabling (FUNC-WIN-011) shall only be performed for handles that pass the GetConsoleMode path (a); it shall not be attempted for Cygwin PTY handles, as they do not support ENABLE_VIRTUAL_TERMINAL_PROCESSING.
+<<<
+COMMENT: >>>
+The disjunction (GetConsoleMode OR Is_Cygwin_Terminal) is the core fix for the Cygwin/MSYS2 false-negative: GetConsoleMode returns FALSE for named-pipe PTY handles, causing the current Is_TTY_Via_Handle to return False. Adding Is_Cygwin_Terminal as an OR-branch restores correct TTY detection in git-bash, MSYS2 shell, and Cygwin terminal sessions. The short-circuit ordering (GetConsoleMode first) is important for performance: the common case (genuine Windows console in Windows Terminal or cmd.exe) should not pay the overhead of GetFileType and pipe-name retrieval on every Is_TTY call. Skipping VT processing for Cygwin PTY handles is correct because Cygwin's PTY emulation already handles escape sequences internally; calling SetConsoleMode with ENABLE_VIRTUAL_TERMINAL_PROCESSING on a pipe handle would fail (it is only valid for console handles) and would clutter the Is_Cygwin_Terminal path with unnecessary error handling. go-isatty, crossterm, and the Python colorama library all implement the same two-branch logic: try GetConsoleMode, then try Cygwin pipe detection if it fails.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-CYG-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: Fault Isolation — No Exceptions from Is_Cygwin_Terminal
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-CYG-014
+STATEMENT: >>>
+Is_Cygwin_Terminal shall never propagate an exception to its caller under any circumstances, including:
+
+  - GetFileType returning an unexpected value or failing (Win32.GetLastError set)
+  - GetFileInformationByHandleEx returning Win32.FALSE
+  - NtQueryObject returning a non-zero NTSTATUS
+  - The decoded pipe name string being empty or containing only replacement characters ('?')
+  - Is_Cygwin_Pipe_Name raising an internal exception (defensive: it should not, but Is_Cygwin_Terminal shall catch any exception and return False)
+
+All of these failure modes shall cause Is_Cygwin_Terminal to return False silently. No error shall be logged or signalled to the caller.
+
+This requirement applies even when called with INVALID_HANDLE_VALUE or a null handle.
+<<<
+COMMENT: >>>
+Is_Cygwin_Terminal is called from inside Is_TTY_Via_Handle, which is itself called from Is_TTY, a public API function. Any uncaught exception propagating out of Is_TTY would be a library-level defect that crashes the calling application, which is categorically unacceptable for a capability-detection library. The no-exception contract follows the Termicap convention established for all OS call wrappers (FUNC-WIN-011: "A return value of False shall be treated as a non-fatal condition"). Cygwin PTY detection is an opportunistic enhancement: if any API call fails, the worst outcome is that Is_TTY returns False for a Cygwin PTY handle, which is the same behaviour as the current codebase before this feature is implemented. This graceful degradation is preferable to crashing. The explicit defensive catch around Is_Cygwin_Pipe_Name is belt-and-suspenders: a SPARK Silver-proven function should not raise, but if the SPARK proof is incomplete or the body diverges from the spec, the exception handler in Is_Cygwin_Terminal prevents propagation.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: New Package
+
+[REQUIREMENT]
+UID: FUNC-CYG-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: Termicap.Win32_Cygwin — Package Structure and SPARK Boundary
+STATEMENT: >>>
+The library shall introduce a new package Termicap.Win32_Cygwin to encapsulate all Cygwin/MSYS2 PTY detection logic. The package shall be structured as follows:
+
+Package specification (src/windows/termicap-win32_cygwin.ads):
+  - SPARK_Mode => On at the package level
+  - Declares Is_Cygwin_Pipe_Name (FUNC-CYG-006) as a SPARK function with Global => null
+  - Does not declare any Win32 types directly (no dependency on Win32.* packages in the spec)
+
+Package body (src/windows/termicap-win32_cygwin.adb):
+  - SPARK_Mode => Off at the package level
+  - Contains Is_Cygwin_Terminal (FUNC-CYG-014) and all supporting FFI wrappers
+  - Contains the implementation of Is_Cygwin_Pipe_Name with SPARK_Mode => On applied locally to that subprogram body
+  - Contains package elaboration code for the GetFileInformationByHandleEx availability probe (FUNC-CYG-002)
+  - Withed packages: Win32, Win32.Winbase, Win32.Winnt, Termicap.Win32_Ntdll, Interfaces.C, System
+
+File naming shall follow the project convention: lowercase with dashes matching the package hierarchy, yielding termicap-win32_cygwin.ads and termicap-win32_cygwin.adb. Both files shall be placed in src/windows/ alongside the existing Windows-specific sources. The GPR project file shall include these files automatically via the existing src/windows/ source directory entry.
+
+The constant FILE_TYPE_PIPE and the FILE_NAME_INFO_CLASS value shall be declared in the package body, not the spec, as they are implementation details of the FFI path.
+<<<
+COMMENT: >>>
+The package boundary between spec (SPARK_Mode => On) and body (SPARK_Mode => Off) mirrors the established pattern in Termicap for Win32 integration packages: Termicap.Win32_Ntdll has SPARK_Mode => Off in its body for the same reason (direct Win32 FFI calls). Placing Is_Cygwin_Pipe_Name in the SPARK_Mode => On spec enables the SPARK prover to treat it as a verified function when it appears in contracts of higher-level detection functions. The FFI procedures (GetFileType, GetFileInformationByHandleEx calls, NtQueryObject calls) must remain in SPARK_Mode => Off because they use Win32 types (HANDLE, DWORD) and System.Address, which are not SPARK-compatible. Applying SPARK_Mode => On locally to the Is_Cygwin_Pipe_Name body (even within a SPARK_Mode => Off package body) is the standard Ada technique for mixed SPARK/non-SPARK packages and is supported by GNATprove Silver. Placing all Cygwin logic in a dedicated package (rather than extending Termicap.Win32_Ntdll or Termicap.Win32_VT) respects the single-responsibility principle and keeps each package's purpose clear, easing future maintenance and targeted SPARK proof runs.
+<<<
+
+[/SECTION]
