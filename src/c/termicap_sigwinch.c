@@ -9,7 +9,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifdef __unix__
+#if defined(__unix__) || defined(__APPLE__)
 
 #include <errno.h>
 #include <fcntl.h>
@@ -143,4 +143,17 @@ void termicap_sigwinch_get_size(unsigned short *cols,
     *ypixel = cached_ypixel;
 }
 
-#endif /* __unix__ */
+/* Set O_NONBLOCK on the given file descriptor.
+ * Keeps O_NONBLOCK's numeric value inside the C layer where <fcntl.h> guarantees
+ * the correct per-platform constant (Linux=2048, Darwin/BSD=4, ...).
+ * Returns 0 on success, -1 on error.                                          */
+int termicap_set_nonblock(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+#endif /* __unix__ || __APPLE__ */

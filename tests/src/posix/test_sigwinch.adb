@@ -5,26 +5,37 @@
 --  SPDX-License-Identifier: Apache-2.0
 -------------------------------------------------------------------------------
 
-with AUnit.Assertions;         use AUnit.Assertions;
-with AUnit.Test_Cases;         use AUnit.Test_Cases.Registration;
+with Interfaces.C;
+
+with AUnit.Assertions;              use AUnit.Assertions;
+with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 
 with Termicap.Dimensions;
-with Termicap.Sigwinch;        use Termicap.Sigwinch;
+with Termicap.Sigwinch;             use Termicap.Sigwinch;
 
 package body Test_Sigwinch is
 
    ---------------------------------------------------------------------------
-   --  FD_Is_Open: portable file descriptor validity check.
+   --  FD_Is_Open: probe file descriptor validity via fcntl(fd, F_GETFD).
    --
-   --  On POSIX, a non-negative FD allocated by the library's self-pipe is
-   --  always open until explicitly closed.  On Windows, Sigwinch is a no-op
-   --  and Get_Pipe_Read_FD always returns -1; the Fd < 0 branch handles that.
-   --  We do not call fcntl here because it is not available on Windows.
+   --  This file is compiled only on POSIX platforms (src/posix/); the Windows
+   --  test suite lives under tests/src/windows/ and does not include it.
+   --  F_GETFD = 1 on every POSIX we target (Linux, macOS, FreeBSD, OpenBSD).
    ---------------------------------------------------------------------------
 
+   F_GETFD : constant Interfaces.C.int := 1;
+
+   function C_Fcntl (Fd : Interfaces.C.int; Cmd : Interfaces.C.int)
+      return Interfaces.C.int
+      with Import, Convention => C, External_Name => "fcntl";
+
    function FD_Is_Open (Fd : Integer) return Boolean is
+      use type Interfaces.C.int;
    begin
-      return Fd >= 0;
+      if Fd < 0 then
+         return False;
+      end if;
+      return C_Fcntl (Interfaces.C.int (Fd), F_GETFD) >= 0;
    end FD_Is_Open;
 
 

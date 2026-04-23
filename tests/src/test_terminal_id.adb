@@ -8,7 +8,7 @@
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
 with AUnit.Assertions; use AUnit.Assertions;
-with AUnit.Test_Cases;
+with AUnit.Test_Cases.Registration;
 use AUnit.Test_Cases.Registration;
 
 with Termicap.Terminal_Id; use Termicap.Terminal_Id;

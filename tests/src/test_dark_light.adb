@@ -6,7 +6,7 @@
 -------------------------------------------------------------------------------
 
 with AUnit.Assertions; use AUnit.Assertions;
-with AUnit.Test_Cases; use AUnit.Test_Cases.Registration;
+with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 
 with Termicap.Color.BG_Query;       use Termicap.Color.BG_Query;
 with Termicap.Color.Dark_Light;     use Termicap.Color.Dark_Light;

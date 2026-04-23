@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifdef __unix__
+#if defined(__unix__) || defined(__APPLE__)
 
 #include <errno.h>
 #include <string.h>
@@ -197,4 +197,4 @@ int termicap_osc_termios_size(void)
     return (int)sizeof(struct termios);
 }
 
-#endif /* __unix__ */
+#endif /* __unix__ || __APPLE__ */

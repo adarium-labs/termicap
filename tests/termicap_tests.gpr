@@ -7,7 +7,7 @@ project Termicap_Tests is
 
    --  OS detection — mirrors termicap.gpr, using the config crate constant as
    --  the default so the build works without an explicit ALIRE_HOST_OS override.
-   type OS_Type is ("linux", "windows", "macos", "freebsd");
+   type OS_Type is ("linux", "macos", "windows", "freebsd", "openbsd");
    Host_OS : OS_Type :=
       external ("ALIRE_HOST_OS", Termicap_Tests_Config.Alire_Host_OS);
 
@@ -15,7 +15,7 @@ project Termicap_Tests is
       when "windows" =>
          for Source_Dirs use ("src/", "src/windows/", "config/");
       when others =>
-         for Source_Dirs use ("src/", "src/linux/", "config/");
+         for Source_Dirs use ("src/", "src/posix/", "config/");
    end case;
    for Create_Missing_Dirs use "True";
    for Exec_Dir use "bin";

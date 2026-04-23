@@ -34,7 +34,6 @@ with Interfaces.C;
 package body Termicap.Sigwinch is
 
    use type Interfaces.C.int;
-   use type Interfaces.C.unsigned;
    use type Interfaces.C.unsigned_short;
 
    ---------------------------------------------------------------------------
@@ -48,11 +47,12 @@ package body Termicap.Sigwinch is
    function C_Pipe (Pipefd : access Pipe_FD_Array) return Interfaces.C.int;
    pragma Import (C, C_Pipe, "pipe");
 
-   --  fcntl(2): manipulate file descriptor flags.
-   function C_Fcntl
-     (Fd : Interfaces.C.int; Cmd : Interfaces.C.int; Arg : Interfaces.C.int)
-      return Interfaces.C.int;
-   pragma Import (C, C_Fcntl, "fcntl");
+   --  Set O_NONBLOCK on a file descriptor.  Implemented in C so the
+   --  platform-specific value of O_NONBLOCK (Linux=2048, Darwin/BSD=4, ...)
+   --  stays inside the C layer where <fcntl.h> guarantees correctness.
+   --  Returns 0 on success, -1 on error.
+   function C_Set_Nonblock (Fd : Interfaces.C.int) return Interfaces.C.int;
+   pragma Import (C, C_Set_Nonblock, "termicap_set_nonblock");
 
    --  close(2): close a file descriptor.
    function C_Close (Fd : Interfaces.C.int) return Interfaces.C.int;
@@ -92,9 +92,6 @@ package body Termicap.Sigwinch is
    --  Platform constants (POSIX; Linux/macOS/BSDs)
    ---------------------------------------------------------------------------
 
-   F_GETFL    : constant Interfaces.C.int := 3;
-   F_SETFL    : constant Interfaces.C.int := 4;
-   O_NONBLOCK : constant Interfaces.C.int := 2048;  --  Linux; macOS uses 4
    INVALID_FD : constant Interfaces.C.int := -1;
 
    DEFAULT_SIZE : constant Termicap.Dimensions.Terminal_Size :=
@@ -131,7 +128,6 @@ package body Termicap.Sigwinch is
       procedure Install (Terminal_FD : Interfaces.C.int) is
          Actual_FD : Interfaces.C.int;
          Pipe_FDs  : aliased Pipe_FD_Array := [others => INVALID_FD];
-         Flags     : Interfaces.C.int;
          Status    : Interfaces.C.int;
          pragma Unreferenced (Status);
       begin
@@ -147,16 +143,9 @@ package body Termicap.Sigwinch is
             Actual_FD := Terminal_FD;
          end if;
 
-         --  Create self-pipe (FUNC-SWC-004).
+         --  Create self-pipe (FUNC-SWC-004) and set write end non-blocking.
          if C_Pipe (Pipe_FDs'Access) = 0 then
-            Flags := C_Fcntl (Pipe_FDs (1), F_GETFL, 0);
-            Status :=
-              C_Fcntl
-                (Pipe_FDs (1),
-                 F_SETFL,
-                 Interfaces.C.int
-                   (Interfaces.C.unsigned (Flags)
-                    or Interfaces.C.unsigned (O_NONBLOCK)));
+            Status := C_Set_Nonblock (Pipe_FDs (1));
             Pipe_Read := Pipe_FDs (0);
             Pipe_Write := Pipe_FDs (1);
          else

@@ -6,7 +6,7 @@
 -------------------------------------------------------------------------------
 
 with AUnit.Assertions; use AUnit.Assertions;
-with AUnit.Test_Cases;
+with AUnit.Test_Cases.Registration;
 use AUnit.Test_Cases.Registration;
 
 with Termicap.Unicode;     use Termicap.Unicode;
