@@ -29,6 +29,8 @@ Termicap                          (root namespace — no types or subprograms)
 │   └── Termicap.DA1.IO           [SPARK_Mode => Off] — Query_DA1 timeout-only I/O via Probe_Session, Detect_DA1 convenience function
 ├── Termicap.DECRPM               [SPARK Silver] — Mode_Id/Mode_Status/Mode_Report/Mode_Id_Array/Mode_Report_Array types, MODE_* named constants, DECRPM_Query construction function, pure response recognition and parsing functions
 │   └── Termicap.DECRPM.IO        [SPARK_Mode => Off] — Query_Mode/Detect_Mode/Detect_Modes I/O via Probe_Session; Query_Error/Mode_Query_Result/Batch_Query_Result types
+├── Termicap.Keyboard             [SPARK Silver (spec + body)] — Keyboard_Protocol/Kitty_Flags/Keyboard_Capability/Parse_Result types; CSI query constants; pure Parse_Kitty_Flags/Parse_Kitty_Response/Parse_XTerm_Keyboard_Response parsers
+│   └── Termicap.Keyboard.IO      [SPARK_Mode => Off] — Detect_Keyboard_Protocol (cached) and Probe_Keyboard_Protocol (uncached); platform-dispatched (POSIX/Windows) via GPR Source_Dirs
 └── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
@@ -52,6 +54,7 @@ Platform-dispatched bodies (replacing the POSIX equivalents on Windows):
 - `src/windows/termicap-dimensions.adb` — terminal size via `GetConsoleScreenBufferInfo`, reads `srWindow` (not `dwSize`)
 - `src/windows/termicap-capabilities.adb` — integrates `Win32_Color.Detect_Windows_Color_Level`; final color is `Color_Level'Max (Win32_Level, env_cascade_level)`
 - `src/windows/termicap-sigwinch.adb` — no-op stubs (SIGWINCH does not exist on Windows; FUNC-SWC-008)
+- `src/windows/termicap-keyboard-io.adb` — keyboard protocol detection via `GetConsoleMode (STD_INPUT_HANDLE)` fast-path gate; falls through to POSIX-style Kitty/XTerm probe cascade for Cygwin/MSYS2 PTY handles (FUNC-KKB-010)
 
 `Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. `Termicap.Capabilities` sits at the top of the dependency graph: it depends on all Tier 1 and Tier 2 packages (`Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id`) and orchestrates them into a single `Terminal_Capabilities` record. The root package remains a namespace-only package. `Termicap.OSC` is the FFI boundary for active terminal probing; it depends on `Ada.Finalization` and `Interfaces.C` and calls nine C helper functions via `termicap_osc.c`. Its child package `Termicap.OSC.Parsing` is a pure SPARK Silver leaf that depends only on the `Byte` and `Byte_Array` types from the parent package. `Termicap.Color.BG_Query` is a SPARK Silver child of `Termicap.Color` providing the RGB type, OSC 10/11 query byte constants, and pure parsing functions for X11 `rgb:` responses, hex channel normalisation, OSC header stripping, and COLORFGBG parsing; it has no dependency on `Termicap.OSC` (which is `SPARK_Mode => Off`) — instead it re-declares compatible `Byte`/`Byte_Array` types using the same underlying `Interfaces.C.unsigned_char` base. Its child `Termicap.Color.BG_Query.IO` is the I/O boundary: it calls `Termicap.OSC.Sentinel_Query` via a `Probe_Session` and optionally wraps the query for multiplexer passthrough. `Termicap.Color.Detection` is a sibling child of `Termicap.Color` that orchestrates the two-level cascade (OSC query → COLORFGBG fallback) and exposes `Detect_Background_Color` and `Detect_Foreground_Color` as the top-level API; it depends on `Termicap.Color.BG_Query` and `Termicap.Color.BG_Query.IO`.
 
@@ -1080,6 +1083,82 @@ Unlike `Termicap.DA1.IO`, this package uses `Sentinel_Query` (not `Timeout_Query
 
 ---
 
+### `Termicap.Keyboard`
+
+**Responsibility:** Pure SPARK types, constants, and parsing functions for the Kitty Keyboard Protocol detection feature. Detects which of four keyboard input protocols the controlling terminal supports — `Win32`, `Kitty`, `XTerm_CSI`, `Legacy`, or `Unknown` — by sending a `CSI ? u` Kitty query or `CSI ? 4 m` XTerm query, each bounded by a DA1 sentinel, and parsing the response. The priority cascade is Win32 > Kitty probe > XTerm probe > Legacy (FUNC-KKB-009). No I/O, no global state, no exceptions.
+
+Re-declares `Byte` and `Byte_Array` independently of `Termicap.OSC` (which is `SPARK_Mode => Off`) to remain fully SPARK-provable while preserving representation compatibility at the I/O boundary in the child package `Termicap.Keyboard.IO`.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-keyboard.ads`, `src/termicap-keyboard.adb` |
+| SPARK_Mode | On (spec and body) — **Silver level** |
+| Dependencies | `Interfaces.C` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Byte` | Subtype of `Interfaces.C.unsigned_char` — single byte of terminal I/O. Representation-compatible with `Termicap.OSC.Byte`. |
+| `Byte_Array` | Unconstrained array of `Byte` — escape sequence data and response buffers. Representation-compatible with `Termicap.OSC.Byte_Array`. |
+| `Keyboard_Protocol` | Five-literal enumeration: `Unknown`, `Legacy`, `XTerm_CSI`, `Kitty`, `Win32`. `Unknown` is the default (no probe result). |
+| `Kitty_Flags` | Record with five Boolean fields corresponding to Kitty protocol capability bits 0..4. All fields default to `False`. |
+| `Keyboard_Capability` | Record with `Protocol : Keyboard_Protocol`, `Flags : Kitty_Flags`, and `Probed : Boolean`. `Probed = False` means the result was inferred without a terminal probe (non-TTY, background, Win32 gate, or cached prior result). |
+| `Parse_Result` | Discriminated record returned by `Parse_Kitty_Response`: `Found : Boolean` discriminant. `Found = True`: `Flags : Kitty_Flags`. `Found = False`: no fields. |
+
+#### Key Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `NO_KITTY_FLAGS` | All fields `False` | Canonical zero-flags `Kitty_Flags` value. |
+| `NO_KEYBOARD_CAPABILITY` | `(Unknown, NO_KITTY_FLAGS, Probed => False)` | Canonical "no result" capability returned on non-TTY, background-process, or probe-failure paths. |
+| `CSI_KITTY_QUERY` | `ESC [ ? u` (3 bytes) | Kitty keyboard protocol detection query (FUNC-KKB-004). |
+| `CSI_XTERM_KBD_QUERY` | `ESC [ ? 4 m` (5 bytes) | XTerm modifyOtherKeys detection query (FUNC-KKB-007). |
+| `KITTY_PROBE_TIMEOUT_MS` | `1_000` | Millisecond timeout for the Kitty probe (FUNC-KKB-013). |
+| `XTERM_KBD_PROBE_TIMEOUT_MS` | `1_000` | Millisecond timeout for the XTerm probe (FUNC-KKB-013). |
+| `MAX_RESPONSE_SIZE` | `4_096` | Maximum response bytes accumulated per probe. Matches `Termicap.OSC.MAX_RESPONSE_SIZE`; bounds parsing loops for SPARK provability. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Parse_Kitty_Flags` | Function | `Global => null` | FUNC-KKB-005 |
+| `Parse_Kitty_Response` | Function | `Global => null`; `Pre => Length <= Bytes'Length and then Length <= MAX_RESPONSE_SIZE`; `Post => (if Result.Found then Result.Flags = Parse_Kitty_Flags (…))` | FUNC-KKB-006 |
+| `Parse_XTerm_Keyboard_Response` | Function | `Global => null`; `Pre => Length <= Bytes'Length` | FUNC-KKB-008 |
+
+#### Relationship to Other Packages
+
+`Termicap.Keyboard` depends only on `Interfaces.C`. It does not depend on `Termicap.OSC` (SPARK Off), preserving SPARK provability. Its child `Termicap.Keyboard.IO` is the I/O boundary and carries `SPARK_Mode => Off`. Platform dispatch for the Windows gate follows ADR-0018: `Termicap.Keyboard.IO` has two bodies (`src/posix/termicap-keyboard-io.adb` and `src/windows/termicap-keyboard-io.adb`) selected by GPR `Source_Dirs`. Integration of `Keyboard_Capability` into `Terminal_Capabilities` is deferred; see ADR-0021.
+
+---
+
+### `Termicap.Keyboard.IO`
+
+**Responsibility:** I/O boundary for the Kitty Keyboard Protocol detection feature. Implements the four-level detection cascade Win32 > TTY guard > foreground guard > Kitty probe > XTerm probe > Legacy. Exposes `Detect_Keyboard_Protocol` (result cached per process) and `Probe_Keyboard_Protocol` (uncached, always runs the full cascade).
+
+Has `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O — both outside the SPARK 2014 subset. All parsing logic remains in the provable parent package `Termicap.Keyboard`.
+
+Platform dispatch via GPR `Source_Dirs` (ADR-0018):
+- **POSIX body** (`src/posix/termicap-keyboard-io.adb`, 190 lines): non-TTY guard → `Probe_Session` open → Kitty `Sentinel_Query` → `Parse_Kitty_Response` → XTerm `Sentinel_Query` → `Parse_XTerm_Keyboard_Response` → Legacy fallback.
+- **Windows body** (`src/windows/termicap-keyboard-io.adb`, 210 lines): `GetConsoleMode (STD_INPUT_HANDLE)` fast-path check first; if it succeeds, returns `(Win32, Probed => False)` immediately; if it fails (Cygwin/MSYS2 PTY), falls through to the POSIX-style cascade.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-keyboard-io.ads`, `src/posix/termicap-keyboard-io.adb`, `src/windows/termicap-keyboard-io.adb` |
+| SPARK_Mode | Off (spec and both bodies) |
+| Dependencies | `Termicap.Keyboard`, `Termicap.OSC`, `Termicap.TTY` |
+
+#### Public Operations
+
+| Subprogram | Kind | Description | Requirements |
+|-----------|------|-------------|--------------|
+| `Detect_Keyboard_Protocol` | Function | Returns `Keyboard_Capability`. On first call: runs full cascade and caches result in a package-level protected object. On subsequent calls: returns cached value directly (< 1 µs). Never raises. | FUNC-KKB-009, FUNC-KKB-017 |
+| `Probe_Keyboard_Protocol` | Function | Uncached variant. Runs the full cascade on every call. Useful for testing or when a fresh probe is required after terminal reconfiguration. Never raises. | FUNC-KKB-009 |
+
+**See also:** ADR-0021 (`docs/adr/0021-defer-keyboard-capability-integration.md`) — rationale for not integrating `Keyboard_Capability` into `Terminal_Capabilities` yet, and the migration path when the deferral is lifted.
+
+---
+
 ### `Termicap.Win32_Ntdll`
 
 **Responsibility:** Dynamically loads `ntdll.dll` at runtime, resolves `RtlGetNtVersionNumbers` via `GetProcAddress`, calls it to obtain the Windows build number, and unloads the library. This is Termicap's only custom FFI package in the Windows integration; all other Win32 calls use the win32ada Alire crate.
@@ -1431,6 +1510,25 @@ The Windows body of `Termicap.TTY` calls `Is_Cygwin_Terminal` as a second-chance
 │   │  Parse_DECRPM_Response — Pre + Post (Silver)│  │
 │   │  Global => null — no FFI, no state          │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Keyboard (spec + body)                   │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Keyboard_Protocol enumeration (5 values)   │  │
+│   │  Kitty_Flags record (5 Boolean fields)      │  │
+│   │  Keyboard_Capability record (Protocol,      │  │
+│   │    Flags, Probed); Parse_Result type        │  │
+│   │  Byte / Byte_Array types                    │  │
+│   │  CSI_KITTY_QUERY, CSI_XTERM_KBD_QUERY,     │  │
+│   │    NO_KITTY_FLAGS, NO_KEYBOARD_CAPABILITY   │  │
+│   │  KITTY_PROBE_TIMEOUT_MS : 1_000             │  │
+│   │  XTERM_KBD_PROBE_TIMEOUT_MS : 1_000        │  │
+│   │  MAX_RESPONSE_SIZE : 4_096                  │  │
+│   │  Parse_Kitty_Flags — Pre only (Silver)      │  │
+│   │  Parse_Kitty_Response — Pre + Post (Silver) │  │
+│   │  Parse_XTerm_Keyboard_Response — Pre (Silver│  │
+│   │    )                                        │  │
+│   │  Global => null — no FFI, no state          │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────┐
@@ -1510,10 +1608,28 @@ The Windows body of `Termicap.TTY` calls `Is_Cygwin_Terminal` as a second-chance
 │   │  (Probe_Session Limited_Controlled +        │  │
 │   │    terminal I/O — outside SPARK 2014)       │  │
 │   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Keyboard.IO (spec + body)                │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Detect_Keyboard_Protocol — cached entry    │  │
+│   │    point; returns NO_KEYBOARD_CAPABILITY on │  │
+│   │    non-TTY or background process; probes    │  │
+│   │    Kitty then XTerm via Sentinel_Query;     │  │
+│   │    falls back to Legacy; caches result      │  │
+│   │  Probe_Keyboard_Protocol — uncached variant │  │
+│   │    (bypasses protected cache; runs full     │  │
+│   │    cascade each call)                       │  │
+│   │  Windows body: GetConsoleMode fast-path     │  │
+│   │    short-circuits to (Win32, Probed=False)  │  │
+│   │    before any probe; falls through to       │  │
+│   │    Cygwin/MSYS PTY path when gate fails     │  │
+│   │  (Probe_Session Limited_Controlled +        │  │
+│   │    terminal I/O — outside SPARK 2014)       │  │
+│   └─────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
 
-The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O. The XTVERSION subsystem applies the identical SPARK split: `Termicap.XTVERSION` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null`, no FFI, no global state; `Termicap.XTVERSION.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Like `Termicap.Color.BG_Query`, `Termicap.XTVERSION` re-declares `Byte`/`Byte_Array` independently of `Termicap.OSC` to avoid a SPARK mode boundary violation while preserving representation compatibility. The DA1 subsystem applies the same SPARK split: `Termicap.DA1` (both spec and body) is fully SPARK Silver — pure `Interpret_DA1`, `Has_Capability`, and `VT_Level_Of` functions with `Global => null`, no FFI, no global state; `Termicap.DA1.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` and performs terminal I/O via `Timeout_Query`. Unlike other active probes, `Termicap.DA1.IO` cannot use `Sentinel_Query` because the DA1 response is itself the data being sought; it calls `Timeout_Query` instead, a new public procedure added to `Termicap.OSC`. `Termicap.Capabilities` has been extended with a `DA1 : Termicap.DA1.DA1_Capabilities` field and now depends on `Termicap.DA1.IO` in its body. The DECRPM subsystem applies the same SPARK split: `Termicap.DECRPM` (both spec and body) is fully SPARK Silver — `DECRPM_Query`, `Contains_DECRPM_Response`, and `Parse_DECRPM_Response` functions with `Global => null`, no FFI, no global state; `Termicap.DECRPM.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Unlike `Termicap.DA1.IO`, `Termicap.DECRPM.IO` uses `Sentinel_Query` (not `Timeout_Query`): DECRPM responses (`CSI ? Ps ; Pm $ y`) are structurally distinct from the DA1 sentinel (`ESC [ c`), so the sentinel pattern can safely bound the accumulation loop. Like all other active-probing SPARK packages, `Termicap.DECRPM` re-declares `Byte`/`Byte_Array` from `Interfaces.C.unsigned_char` independently of `Termicap.OSC` to preserve SPARK provability while maintaining representation compatibility at the I/O boundary.
+The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Override` body (protected object, `Set_Override`/`Get_Override` bodies, and `Scoped_Override.Initialize`/`Finalize`), the `Termicap.TTY` body, the `Termicap.Dimensions` body, the `Termicap.Terminal_Id` body, the entirety of `Termicap.Sigwinch`, the `Detect`/`Get` bodies of `Termicap.Capabilities`, and the entirety of `Termicap.OSC` are the only points where non-provable code executes. Once a snapshot is produced and TTY status is captured as a `Boolean`, all subsequent detection operations — including `Termicap.Color`, `Termicap.Unicode`, the spec contracts on `Get_Size` and `Detect_Terminal_Identity`, and the `Assemble` function of `Termicap.Capabilities` — stay within the provable zone. `Termicap.Downsampling` goes further: both its spec and its body carry `SPARK_Mode => On` with Gold-level provability — no FFI, no dynamic allocation, no unbounded loops. `Termicap.Override.Parse_Color_Flag` is also provable at Gold level (pure string comparison, no side effects). `Termicap.Unicode` and `Termicap.Downsampling` are the packages where both spec and body carry `SPARK_Mode => On`; `Termicap.Unicode` and `Termicap.Terminal_Id` are the two detection functions callable without a TTY status parameter. `Termicap.Sigwinch` and `Termicap.OSC` are the packages where both spec and body are wholly outside the SPARK zone: `Termicap.Sigwinch` due to its protected object, interrupt handler, and C FFI; `Termicap.OSC` due to `Limited_Controlled` and POSIX syscall FFI. `Termicap.OSC.Parsing` is the pure SPARK Silver complement to `Termicap.OSC`, containing only provable functions that operate on `Byte_Array` values with no side effects. `Termicap.Capabilities` occupies a hybrid position: its spec and the pure `Assemble` function are SPARK Silver, while the `Detect`/`Get` bodies and the protected cache object are compiled with `SPARK_Mode => Off`. The BG-COLOR subsystem follows the same SPARK split pattern: `Termicap.Color.BG_Query` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null` and no FFI; `Termicap.Color.BG_Query.IO` and `Termicap.Color.Detection` are entirely `SPARK_Mode => Off` because they manage `Probe_Session` controlled types and perform terminal I/O. The DARK-LIGHT subsystem continues this layering: `Termicap.Color.Dark_Light` (both spec and body) is SPARK Gold — pure integer arithmetic with `Post` contracts and no I/O; `Termicap.Color.Dark_Light.Detect` is `SPARK_Mode => Off` because it calls `Detect_Background_Color`, which manages `Probe_Session` controlled types and performs terminal I/O. The XTVERSION subsystem applies the identical SPARK split: `Termicap.XTVERSION` (both spec and body) is fully SPARK Silver — pure parsing functions with `Global => null`, no FFI, no global state; `Termicap.XTVERSION.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Like `Termicap.Color.BG_Query`, `Termicap.XTVERSION` re-declares `Byte`/`Byte_Array` independently of `Termicap.OSC` to avoid a SPARK mode boundary violation while preserving representation compatibility. The DA1 subsystem applies the same SPARK split: `Termicap.DA1` (both spec and body) is fully SPARK Silver — pure `Interpret_DA1`, `Has_Capability`, and `VT_Level_Of` functions with `Global => null`, no FFI, no global state; `Termicap.DA1.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` and performs terminal I/O via `Timeout_Query`. Unlike other active probes, `Termicap.DA1.IO` cannot use `Sentinel_Query` because the DA1 response is itself the data being sought; it calls `Timeout_Query` instead, a new public procedure added to `Termicap.OSC`. `Termicap.Capabilities` has been extended with a `DA1 : Termicap.DA1.DA1_Capabilities` field and now depends on `Termicap.DA1.IO` in its body. The DECRPM subsystem applies the same SPARK split: `Termicap.DECRPM` (both spec and body) is fully SPARK Silver — `DECRPM_Query`, `Contains_DECRPM_Response`, and `Parse_DECRPM_Response` functions with `Global => null`, no FFI, no global state; `Termicap.DECRPM.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. Unlike `Termicap.DA1.IO`, `Termicap.DECRPM.IO` uses `Sentinel_Query` (not `Timeout_Query`): DECRPM responses (`CSI ? Ps ; Pm $ y`) are structurally distinct from the DA1 sentinel (`ESC [ c`), so the sentinel pattern can safely bound the accumulation loop. Like all other active-probing SPARK packages, `Termicap.DECRPM` re-declares `Byte`/`Byte_Array` from `Interfaces.C.unsigned_char` independently of `Termicap.OSC` to preserve SPARK provability while maintaining representation compatibility at the I/O boundary. The KEYBOARD subsystem applies the identical SPARK split: `Termicap.Keyboard` (both spec and body) is fully SPARK Silver — `Parse_Kitty_Flags`, `Parse_Kitty_Response`, and `Parse_XTerm_Keyboard_Response` pure functions with `Global => null`, no FFI, no global state; `Termicap.Keyboard.IO` is entirely `SPARK_Mode => Off` because it manages a `Probe_Session` (`Limited_Controlled`) and performs terminal I/O. `Termicap.Keyboard.IO` uses `Sentinel_Query` for both probes: the Kitty response (`CSI ? <digits> u`) and the XTerm response (`CSI ? 4 ; <value> m`) are both structurally distinct from the DA1 sentinel, so the sentinel pattern safely bounds each probe's accumulation loop. Like `Termicap.DECRPM`, `Termicap.Keyboard` re-declares `Byte`/`Byte_Array` from `Interfaces.C.unsigned_char` independently of `Termicap.OSC`. Platform dispatch follows ADR-0018: two bodies under `src/posix/` and `src/windows/` are selected by GPR `Source_Dirs`; the Windows body adds a `GetConsoleMode` fast-path gate before the shared cascade. Integration of `Keyboard_Capability` into `Terminal_Capabilities` is deferred; see ADR-0021.
 
 ## Related Documents
 
@@ -1546,4 +1662,6 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **ADR-0018** (`docs/adr/0018-platform-dispatch-via-source-dirs.md`): Rationale for GPR `Source_Dirs` platform dispatch over `pragma Import` or preprocessing
 - **ADR-0019** (`docs/adr/0019-win32ada-as-ffi-layer.md`): Rationale for using the win32ada Alire crate as the Win32 FFI layer
 - **Tech Spec WIN32** (`docs/tech-specs/windows-console.md`): Windows Console API integration design rationale — TTY detection, dimensions, color level, VT processing enablement
-- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007, FUNC-RPM-001 through FUNC-RPM-017
+- **Tech Spec KITTY-KB** (`docs/tech-specs/kitty-keyboard.md`): Kitty Keyboard Protocol detection design rationale — cascade strategy, DA1 sentinel reuse, SPARK Silver boundary, platform dispatch for Win32 gate
+- **ADR-0021** (`docs/adr/0021-defer-keyboard-capability-integration.md`): Rationale for deferring `Keyboard_Capability` integration into `Terminal_Capabilities`, and the forward-compatible migration path
+- **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007, FUNC-RPM-001 through FUNC-RPM-017, FUNC-KKB-001 through FUNC-KKB-019

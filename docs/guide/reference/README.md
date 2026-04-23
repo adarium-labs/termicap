@@ -22,6 +22,9 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Termicap.XTVERSION / Termicap.XTVERSION.IO](xtversion.md)**
   Active terminal identification via XTVERSION — `XTVERSION_Result` discriminated record, `CSI_XTVERSION_QUERY` constant, DCS response parsing (`Parse_XTVERSION_Response`), I/O procedure (`Query_XTVERSION`), convenience function (`Query_And_Identify`)
 
+- **[Termicap.Keyboard / Termicap.Keyboard.IO](keyboard.md)**
+  Kitty Keyboard Protocol detection — `Keyboard_Protocol` enum, `Kitty_Flags` record, `Keyboard_Capability` result; pure SPARK Silver parsers (`Parse_Kitty_Response`, `Parse_Kitty_Flags`, `Parse_XTerm_Keyboard_Response`); cached entry point (`Detect_Keyboard_Protocol`) and uncached variant (`Probe_Keyboard_Protocol`) implementing the Win32 → Kitty → XTerm → Legacy cascade
+
 - **[Termicap.Dimensions](termicap-dimensions.md)**
   Terminal dimensions detection — `Terminal_Size` type, `Get_Size` function, ioctl/env-var/default fallback chain
 

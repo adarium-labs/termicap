@@ -1,0 +1,814 @@
+[DOCUMENT]
+TITLE: KITTY-KB — Kitty Keyboard Protocol Detection
+UID: REQ-KKB
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[TEXT]
+STATEMENT: >>>
+This document specifies the functional requirements for Kitty Keyboard Protocol Detection
+(feature id KITTY-KB, Tier 4 Stretch Goal). The feature detects, at process startup, which
+keyboard input protocol the controlling terminal supports, choosing from four levels in
+priority order: Win32 Console (Windows only), Kitty Keyboard Protocol (CSI ? u query),
+XTerm modifyOtherKeys (CSI ? 4 m), and Legacy (no enhanced protocol).
+
+Detection reuses the OSC Query Infrastructure (OSC-INFRA, REQ-OSC) sentinel pattern: the
+keyboard query is followed immediately by a DA1 sentinel (CSI c); if the DA1 response
+arrives before the keyboard response, the queried protocol is absent. The result is a
+structured enumeration value that is cached for the process lifetime.
+
+SPARK Silver is the target for pure logic (response parsing, flag set interpretation,
+priority-cascade resolution). All I/O, termios management, and OS-level dispatch are
+classified Ada FFI (SPARK_Mode => Off), consistent with the OSC-INFRA and CYGWIN patterns.
+<<<
+
+[SECTION]
+TITLE: Result Type
+
+[REQUIREMENT]
+UID: FUNC-KKB-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Keyboard_Protocol Enumeration Type
+STATEMENT: >>>
+The library shall provide an enumeration type Keyboard_Protocol whose values represent the
+four keyboard input protocol levels detectable by this feature:
+
+  Unknown    -- Detection has not been performed or was not possible (stdin not a TTY,
+                foreground guard failed, probe timed out entirely).
+  Legacy     -- No enhanced keyboard protocol detected. The terminal uses classic VT/ANSI
+                key encoding with no modifier disambiguation.
+  XTerm_CSI  -- XTerm modifyOtherKeys protocol detected. The terminal acknowledged the
+                CSI ? 4 m query before the DA1 sentinel, indicating support for modifier-
+                encoded key events (xterm scheme: modifier = value - 1 as bitmask
+                Shift=1, Alt=2, Ctrl=4, Meta=8).
+  Kitty      -- Kitty Keyboard Protocol detected. The terminal responded with
+                CSI ? <flags> u before the DA1 sentinel.
+  Win32      -- Windows Console API keyboard mode. Detected via DECRPM mode 9001 on
+                Windows, or by the absence of a PTY on the Win32 Console path. This value
+                is set without probing when the platform is identified as a Win32 Console
+                (not a Cygwin/MSYS2 PTY).
+
+The enumeration shall be defined in a package Termicap.Keyboard (or a child thereof) with
+SPARK_Mode => On.
+<<<
+COMMENT: >>>
+The four-level enumeration directly corresponds to the detection priority Win32 > Kitty >
+XTerm > Legacy documented in the global synthesis (§2.7 "Keyboard Input (Raw + Decoded)").
+Unknown is a fifth value separate from Legacy: Legacy means the terminal was successfully
+probed and responded to DA1 (confirming it is alive) but acknowledged neither the Kitty nor
+the XTerm query; Unknown means probing could not be completed at all (non-TTY, timeout,
+foreground guard, error). Callers that need a safe default when probing fails should treat
+Unknown conservatively (same as Legacy). The Win32 value is listed separately because it
+is set by a platform gate (FUNC-KKB-009), not by an escape-sequence probe.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Kitty_Flags Record Type
+STATEMENT: >>>
+The library shall provide a record type Kitty_Flags whose fields capture the numeric flags
+field returned in the Kitty Keyboard Protocol response CSI ? <flags> u. The record shall
+contain at minimum the following Boolean fields, each corresponding to one bit of the
+flags integer parameter:
+
+  Disambiguate_Escape_Codes : Boolean
+    -- Bit 0 (value 1): terminal disambiguates escape codes that are ambiguous
+    -- in legacy encoding (e.g., ESC vs CSI leader byte, Ctrl+letter vs bare letter).
+  Report_Event_Types        : Boolean
+    -- Bit 1 (value 2): terminal reports key-press, key-repeat, and key-release events
+    -- as distinct event types in the encoded key report.
+  Report_Alternate_Keys     : Boolean
+    -- Bit 2 (value 4): terminal reports shifted and alternate key symbols alongside
+    -- the base key symbol.
+  Report_All_Keys_As_Escape : Boolean
+    -- Bit 3 (value 8): terminal reports every key using the CSI u encoding, even for
+    -- keys that have traditional ASCII representations (e.g., plain printable characters).
+  Report_Associated_Text    : Boolean
+    -- Bit 4 (value 16): terminal reports the associated Unicode text for composed
+    -- key events.
+
+A zero flags value (response CSI ? 0 u) shall yield all fields False and shall be treated
+as a valid Kitty response indicating minimal support.
+
+The Kitty_Flags type shall be declared with SPARK_Mode => On and shall have no invariant
+that excludes any combination of flag bits.
+<<<
+COMMENT: >>>
+The five flag bits are defined in the Kitty Keyboard Protocol specification (kitty.readthedocs.io
+/en/latest/keyboard-protocol.html) and are the values returned in the query response CSI ? <flags> u.
+The global synthesis (§2.7) identifies the CSI ? <flags> u response form but does not enumerate
+individual flags; the five-bit breakdown is taken from the Kitty protocol specification itself,
+which is the authoritative source. Capturing each bit as a named Boolean field (rather than an
+opaque integer) enables SPARK-provable bitmasking and makes the semantics self-documenting to
+Ada callers. A zero response is legal: a terminal that supports the Kitty protocol at the minimum
+level (disambiguation only) may respond with CSI ? 0 u or CSI ? 1 u depending on its configuration.
+Treating CSI ? 0 u as a valid response (Protocol = Kitty, all flags False) is consistent with
+crossterm's behaviour, which accepts any CSI ? Pn u response as confirmation of Kitty support.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Keyboard_Capability Result Record
+STATEMENT: >>>
+The library shall provide an immutable record type Keyboard_Capability that aggregates the
+complete keyboard protocol detection result. The record shall contain at minimum:
+
+  Protocol   : Keyboard_Protocol
+    -- The detected protocol level (FUNC-KKB-001).
+  Flags      : Kitty_Flags
+    -- The Kitty flags field, populated when Protocol = Kitty; all False otherwise.
+  Probed     : Boolean
+    -- True when an active escape-sequence probe was attempted (stdin was a TTY,
+    -- foreground guard passed, probe sequence was sent). False when the result was
+    -- determined without probing (Win32 platform gate, non-TTY stdin, or foreground
+    -- guard failure).
+
+The type shall be declared with SPARK_Mode => On.
+
+The canonical "no result" value shall have Protocol = Unknown, Flags = (all False),
+Probed = False.
+<<<
+COMMENT: >>>
+Separating Probed from Protocol allows callers to distinguish between "we probed and found
+no enhanced protocol" (Protocol = Legacy, Probed = True) and "we could not probe" (Protocol
+= Unknown, Probed = False). This distinction matters for diagnostics and for testing: a test
+harness that verifies detection can confirm whether a probe was actually attempted. The Flags
+field is included unconditionally (rather than in a variant record) to keep the type simple
+and SPARK-provable; callers are expected to inspect Flags only when Protocol = Kitty.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Protocol Detection Mechanism
+
+[REQUIREMENT]
+UID: FUNC-KKB-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Kitty Protocol Query Sequence and Response Pattern
+STATEMENT: >>>
+The library shall detect Kitty Keyboard Protocol support by sending the following query
+sequence to the terminal file descriptor:
+
+  Query bytes: ESC [ ? u   (3 bytes: 0x1B 0x5B 0x3F 0x75)
+
+The query shall be sent via Write_Query (FUNC-OSC-005) as part of a sentinel-bounded probe
+(FUNC-OSC-006). Immediately after the Kitty query, the DA1 sentinel (ESC [ c,
+bytes 0x1B 0x5B 0x63) shall be written to the same file descriptor.
+
+The Kitty response, if present, shall match the pattern:
+
+  ESC [ ? <flags> u
+
+where <flags> is a sequence of one or more ASCII decimal digits representing a non-negative
+integer. The response is terminated by the byte 0x75 ('u'). The bare form ESC [ ? u with no
+digits is NOT a valid Kitty response and shall be rejected: real Kitty terminals always emit
+at least one flag digit (e.g. ESC [ ? 0 u for flags = 0), and accepting the bare form was
+shown in field testing to produce false-positive Kitty classifications on unrelated terminals
+that leaked probe bytes into the pre-sentinel region.
+
+If the pre-sentinel bytes received before the DA1 response match the Kitty response pattern,
+Protocol shall be set to Kitty and the flags integer shall be parsed into a Kitty_Flags value
+(FUNC-KKB-002). If the DA1 response arrives with no pre-sentinel bytes (or pre-sentinel bytes
+that do not match the Kitty response pattern), the Kitty probe is negative.
+<<<
+COMMENT: >>>
+The query sequence CSI ? u is the canonical Kitty Keyboard Protocol detection query as
+documented in §2.7 of the global synthesis, which cites tcell and crossterm as the primary
+reference implementations. The sentinel pattern using DA1 (CSI c) as the response boundary
+is the same pattern already implemented by FUNC-OSC-006; this requirement reuses it without
+modification, ensuring that Kitty probing integrates cleanly with the existing I/O infrastructure.
+The response pattern ESC [ ? <flags>+ u is unambiguous: the '?' discriminator (0x3F) and the
+'u' terminator (0x75) together uniquely identify this response. The bare form (raw CSI ? u
+with no digits) was initially admitted as a flags = 0 synonym during Phase 2 design, but was
+retracted after real-world demo runs on macOS Terminal, iTerm2, Warp, VS Code, and Kitty all
+reported Protocol = Kitty with flags = 0 — i.e. every terminal matched the bare form, which
+means the bare form is a false-positive oracle, not a Kitty-only signature.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Kitty Flags Integer Parsing (SPARK Silver)
+STATEMENT: >>>
+The library shall provide a pure SPARK function that parses a Kitty_Flags value from a
+non-negative integer representing the numeric flags field extracted from a CSI ? <flags> u
+response. Its representative specification is:
+
+  function Parse_Kitty_Flags (Flags_Int : Natural) return Kitty_Flags
+     with SPARK_Mode => On,
+          Global     => null,
+          Pre        => True,
+          Post       => True;
+
+The function shall decompose Flags_Int using bitwise AND against the following masks and
+set each Kitty_Flags field accordingly:
+
+  Disambiguate_Escape_Codes : (Flags_Int and 1)  /= 0
+  Report_Event_Types        : (Flags_Int and 2)  /= 0
+  Report_Alternate_Keys     : (Flags_Int and 4)  /= 0
+  Report_All_Keys_As_Escape : (Flags_Int and 8)  /= 0
+  Report_Associated_Text    : (Flags_Int and 16) /= 0
+
+Bits beyond position 4 (values 32 and above) shall be ignored; the function shall not raise
+for any value of Flags_Int, including values with high bits set.
+<<<
+COMMENT: >>>
+Isolating the bitmasking arithmetic in a SPARK-provable pure function follows the same pattern
+as Is_Cygwin_Pipe_Name (FUNC-CYG-006) for pipe name validation and the parsing functions in the
+BG-COLOR and XTVERSION features: pure detection logic in a SPARK Silver function, FFI plumbing
+in SPARK_Mode => Off bodies. The five-bit encoding is fixed by the Kitty Keyboard Protocol
+specification and is unlikely to change in a backward-incompatible way; any new bits added by
+the protocol will simply be ignored by this parser until the requirement is extended. Ignoring
+unknown high bits (rather than raising) is essential for the no-exception contract (FUNC-KKB-014).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Kitty Response Byte Sequence Parser (SPARK Silver)
+STATEMENT: >>>
+The library shall provide a pure SPARK function that determines whether a byte buffer
+contains a valid Kitty Keyboard Protocol response, and if so, extracts the flags integer.
+Its representative specification is:
+
+  type Parse_Result is record
+     Valid     : Boolean;
+     Flags_Int : Natural;
+  end record;
+
+  function Parse_Kitty_Response
+     (Buffer : Byte_Array;
+      Length : Natural)
+      return Parse_Result
+     with SPARK_Mode => On,
+          Global     => null,
+          Pre        => Length <= Buffer'Length,
+          Post       => True;
+
+The function shall return Valid = True and the extracted Flags_Int when Buffer (1 .. Length)
+matches the pattern:
+
+  ESC (0x1B) '[' (0x5B) '?' (0x3F) <digits>+ 'u' (0x75)
+
+where <digits>+ is ONE OR MORE ASCII decimal digit bytes (0x30 .. 0x39). The minimum valid
+length is 5 bytes (e.g. ESC [ ? 0 u for flags = 0). The bare form ESC [ ? u (length 4, no
+digits) shall be REJECTED; see FUNC-KKB-004 for rationale. The function shall return
+Valid = False for any buffer that does not match this pattern, including partial responses
+(length too short), garbled bytes, the bare form with no digits, or an unexpected terminator
+byte.
+<<<
+COMMENT: >>>
+Separating response recognition (this function) from flag bit extraction (FUNC-KKB-005) follows
+the two-layer parsing pattern established by XTVERSION (FUNC-XTV sequence parsing) and the OSC
+parsing infrastructure. Having a named pure function for the pattern match enables unit testing
+with synthetic byte arrays without any I/O, and allows the SPARK prover to reason about the
+parsing logic independently of the I/O path. The pre-condition Length <= Buffer'Length is the
+minimal safety contract: the function must not read beyond the valid portion of the buffer,
+which is critical when Buffer is a stack-allocated fixed-size array (the typical usage from
+Sentinel_Query).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: XTerm modifyOtherKeys Detection
+
+[REQUIREMENT]
+UID: FUNC-KKB-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: XTerm modifyOtherKeys Query and Response
+STATEMENT: >>>
+The library shall detect XTerm modifyOtherKeys support (as a fallback when Kitty protocol
+is absent) by sending the following query sequence to the terminal file descriptor:
+
+  Query bytes: ESC [ ? 4 m   (5 bytes: 0x1B 0x5B 0x3F 0x34 0x6D)
+
+The query shall be sent via Write_Query (FUNC-OSC-005) followed immediately by the DA1
+sentinel (ESC [ c). The response, if present, shall match the pattern:
+
+  ESC [ ? 4 ; <value> m
+
+where <value> is one or more ASCII decimal digits. The response is terminated by 0x6D ('m').
+
+If the pre-sentinel bytes match this pattern, Protocol shall be set to XTerm_CSI. No
+structured flag record is required for XTerm modifyOtherKeys: the presence of the response
+alone constitutes the detection result. If the DA1 response arrives first, the XTerm probe
+is negative.
+<<<
+COMMENT: >>>
+The XTerm modifyOtherKeys query CSI ? 4 m is documented in the global synthesis (§2.7) as
+the second of the three keyboard protocol detection queries, cited from tcell and notcurses.
+The response pattern CSI ? 4 ; <value> m is the standard DECRPM-style response form for
+private mode 4. No flag bits need to be captured from the XTerm response: the XTerm
+modifyOtherKeys protocol does not expose a flags-style capability query comparable to the
+Kitty protocol; detecting its presence is sufficient for the keyboard protocol cascade
+(FUNC-KKB-009). The <value> field in the response indicates the current mode setting
+(1 = enabled, 2 = enabled level 2, etc.) but the cascade only needs to know whether XTerm
+modifyOtherKeys is supported, not its current setting.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: XTerm Response Byte Sequence Parser (SPARK Silver)
+STATEMENT: >>>
+The library shall provide a pure SPARK function that determines whether a byte buffer
+contains a valid XTerm modifyOtherKeys response. Its representative specification is:
+
+  function Parse_XTerm_Keyboard_Response
+     (Buffer : Byte_Array;
+      Length : Natural)
+      return Boolean
+     with SPARK_Mode => On,
+          Global     => null,
+          Pre        => Length <= Buffer'Length,
+          Post       => True;
+
+The function shall return True when Buffer (1 .. Length) matches the pattern:
+
+  ESC (0x1B) '[' (0x5B) '?' (0x3F) '4' (0x34) ';' (0x3B) <digits>+ 'm' (0x6D)
+
+where <digits>+ is one or more ASCII decimal digit bytes (0x30 .. 0x39). The function
+shall return False for any buffer that does not match this pattern, including a response
+with zero digits before 'm', a missing ';', or an unexpected terminator byte.
+<<<
+COMMENT: >>>
+A dedicated parser function for the XTerm response follows the same structural pattern as
+Parse_Kitty_Response (FUNC-KKB-006), enabling independent unit testing and SPARK proof.
+The constraint that at least one digit must be present between ';' and 'm' (<digits>+
+rather than <digits>*) reflects the fact that the DECRPM response always includes a numeric
+mode value; a bare ESC [ ? 4 ; m (empty value field) is not a conforming DECRPM response
+and shall be rejected to avoid false positives from garbled output.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Priority Cascade and Platform Gating
+
+[REQUIREMENT]
+UID: FUNC-KKB-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Detection Priority Cascade — Win32 > Kitty > XTerm > Legacy
+STATEMENT: >>>
+The library shall implement the following keyboard protocol detection cascade, evaluated
+in order, returning at the first matching condition:
+
+  Step 1 — Win32 Platform Gate (FUNC-KKB-010):
+    If the current platform is Windows and the active file descriptor is a Win32 Console
+    handle (GetConsoleMode succeeds, i.e., not a Cygwin/MSYS2 PTY), return
+    Protocol = Win32, Probed = False, without performing any escape-sequence probe.
+
+  Step 2 — TTY Guard (FUNC-KKB-011):
+    If stdin is not a TTY (Termicap.TTY.Is_TTY (Stdin) returns False), return
+    Protocol = Unknown, Probed = False.
+
+  Step 3 — Foreground Guard (FUNC-KKB-011):
+    If the process is not the foreground process group (Is_Foreground_Process from
+    FUNC-OSC-007), return Protocol = Unknown, Probed = False.
+
+  Step 4 — Kitty Probe (FUNC-KKB-004):
+    Send CSI ? u + DA1 sentinel. If the Kitty response is received before the DA1,
+    return Protocol = Kitty with parsed flags, Probed = True.
+
+  Step 5 — XTerm Probe (FUNC-KKB-007):
+    Send CSI ? 4 m + DA1 sentinel. If the XTerm response is received before the DA1,
+    return Protocol = XTerm_CSI, Flags = (all False), Probed = True.
+
+  Step 6 — Legacy (default):
+    Both probes were negative (DA1 arrived first for both). Return
+    Protocol = Legacy, Flags = (all False), Probed = True.
+
+The cascade shall be implemented in SPARK_Mode => Off because steps 1, 4, and 5 require
+OS calls and I/O. However, the priority logic (which step is tried next given a prior
+result) shall be expressed as a sequence of explicit conditions that could in principle
+be extracted into a pure SPARK function, to keep the cascade's correctness independently
+verifiable.
+<<<
+COMMENT: >>>
+The Win32 > Kitty > XTerm > Legacy priority order is explicitly stated in the global synthesis
+(§2.7): "Priority (tcell): Win32 > Kitty > XTerm > Legacy". The Win32 gate at step 1 is
+evaluated before any probing because Windows Console handles cannot be probed with POSIX
+escape sequences; sending CSI ? u to a Win32 Console handle would produce undefined behaviour
+or be silently discarded, wasting time. On Cygwin/MSYS2 PTY handles (which are pipe-backed and
+pass the POSIX path), step 1 does not fire and the process continues to step 2, matching the
+POSIX behavior. Steps 2 and 3 are fast pre-flight guards that avoid I/O on non-interactive or
+background processes; their placement before the probe steps mirrors the foreground guard
+pattern established by FUNC-OSC-007. Steps 4 and 5 each constitute an independent sentinel-
+bounded probe; they are independent probes (not a single combined probe) because the Kitty and
+XTerm queries use different terminator bytes ('u' vs 'm') and the DA1 sentinel must be re-sent
+for each.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Win32 Platform Gate — Short-Circuit Before Probing
+STATEMENT: >>>
+On the Windows platform, the keyboard protocol detection shall check whether the stdin file
+descriptor is a Win32 Console handle by calling Win32.Wincon.GetConsoleMode on the standard
+input handle (STD_INPUT_HANDLE). If GetConsoleMode returns Win32.TRUE (indicating a genuine
+Windows Console), the detection function shall return Protocol = Win32, Probed = False
+immediately, without acquiring /dev/tty, entering raw mode, or sending any escape sequence.
+
+If GetConsoleMode returns Win32.FALSE (indicating stdin is a pipe or PTY, e.g., under
+Cygwin/MSYS2), the Win32 gate does not fire and detection proceeds to step 2 of the cascade
+(FUNC-KKB-009), following the same path as on POSIX platforms.
+
+On POSIX platforms (Linux, macOS, BSD), step 1 of the cascade is skipped entirely; there
+is no Win32 Console gate and the TTY guard (FUNC-KKB-011) is the first check.
+<<<
+COMMENT: >>>
+The GetConsoleMode check reuses the same predicate already used by FUNC-WIN-003 (Win32 TTY
+detection) and FUNC-CYG-015 (Cygwin PTY integration): GetConsoleMode succeeding is the
+canonical test for a Win32 Console handle. Reusing this existing check avoids introducing a
+new OS call and keeps the Windows platform gate consistent with the rest of the Win32 detection
+stack. The Cygwin/MSYS2 case (GetConsoleMode fails) is explicitly directed to the POSIX probe
+path, which matches the intent of the priority cascade: Cygwin terminals run a PTY emulation
+that supports POSIX escape sequences, so probing with CSI ? u is appropriate and meaningful.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Non-TTY and Background-Process Guards
+STATEMENT: >>>
+The keyboard protocol detection function shall skip all escape-sequence probing when either
+of the following conditions holds, returning Protocol = Unknown, Probed = False:
+
+  Guard 1 — Not a TTY:
+    Termicap.TTY.Is_TTY (Stdin) returns False. This covers redirected stdin (file, pipe),
+    background process in a pipeline, or any context where stdin is not connected to an
+    interactive terminal.
+
+  Guard 2 — Not the foreground process:
+    The Is_Foreground_Process check (FUNC-OSC-007) on the /dev/tty file descriptor returns
+    False. This covers shell background jobs (process running under job control but not in
+    the foreground process group).
+
+Both guards shall be evaluated on the POSIX code path before opening /dev/tty in raw mode.
+If /dev/tty cannot be opened (FUNC-OSC-001 returns an error), the function shall also return
+Protocol = Unknown, Probed = False.
+
+On the Windows path where the Win32 gate fired (FUNC-KKB-010), these guards are not evaluated
+(short-circuit already occurred at step 1).
+<<<
+COMMENT: >>>
+These guards are identical in spirit to those specified for OSC query operations in FUNC-OSC-007
+and FUNC-OSC-008: sending escape sequences to a non-interactive or background process risks
+corrupting a foreground process's output stream. The Is_TTY check ensures that the library does
+not attempt to probe stdin when it is a pipe or file. The foreground process group check ensures
+that a background job (e.g., a command run via shell & backgrounding) does not disrupt the
+foreground terminal. Both guards returning Unknown (not Legacy) is intentional: the caller has
+no evidence about which protocol the terminal supports, so the safe conservative value is Unknown
+rather than Legacy.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: I/O Constraints and Infrastructure Reuse
+
+[REQUIREMENT]
+UID: FUNC-KKB-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: OSC-INFRA Reuse — Sentinel_Query for Both Probes
+STATEMENT: >>>
+The keyboard protocol probe I/O shall be implemented entirely via the OSC Query Infrastructure
+primitives (REQ-OSC) without introducing new terminal I/O mechanisms. Specifically:
+
+  1. The /dev/tty file descriptor shall be obtained via FUNC-OSC-001 (Open_TTY).
+  2. Terminal attributes shall be saved via FUNC-OSC-002 (Save_Termios) before any mode change.
+  3. Raw mode shall be entered via FUNC-OSC-003 (Set_Raw_Mode).
+  4. Each keyboard probe (Kitty and XTerm, if reached) shall be dispatched via FUNC-OSC-006
+     (Sentinel_Query), passing the respective query byte array and receiving the pre-sentinel
+     response bytes.
+  5. Terminal attributes shall be restored via FUNC-OSC-002 (Restore_Termios) unconditionally
+     after both probes complete, including in error-handling paths.
+  6. The /dev/tty file descriptor shall be closed via FUNC-OSC-001 (Close_TTY) unconditionally
+     after attribute restore.
+
+The keyboard probing logic shall not call tcgetattr, tcsetattr, select(), read(), or write()
+directly; all such calls shall be mediated through the OSC-INFRA package interface.
+<<<
+COMMENT: >>>
+Mandating reuse of the OSC-INFRA primitives prevents code duplication of the termios save/restore
+and timeout logic, which has already been carefully specified and tested. The sentinel pattern
+(FUNC-OSC-006) is exactly the mechanism needed here: the Kitty and XTerm queries each have a
+well-defined response terminator, and DA1 provides the outer boundary. Using the same I/O path
+also means that any future improvements to the OSC-INFRA layer (e.g., better EINTR handling,
+improved timeout precision) automatically benefit keyboard protocol detection without requiring
+changes to this feature.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Probe Timeout Value
+STATEMENT: >>>
+Each keyboard protocol sentinel probe (Kitty and XTerm) shall use a timeout of 1000 milliseconds
+(1 second) when calling Sentinel_Query (FUNC-OSC-006). This timeout applies per probe: if the
+Kitty probe times out, the timeout counter resets before the XTerm probe is attempted.
+
+If either probe times out (Timed_Out output of Sentinel_Query is True), the timed-out probe
+shall be treated as a negative result (protocol absent) and the cascade shall continue to the
+next step (FUNC-KKB-009). A timeout shall not be treated as Protocol = Unknown unless all
+probes time out before either DA1 or a keyboard response arrives.
+
+Implementations may use a shorter timeout (minimum 100 milliseconds) on platforms where
+round-trip latency to the terminal is known to be negligible (e.g., local PTY, not over SSH).
+The default shall be 1000 ms unless a platform-specific override is provided.
+<<<
+COMMENT: >>>
+The 1000 ms default matches the recommended timeout for OSC/DA queries given in FUNC-OSC-004's
+comment ("1000 ms for most OSC/DA queries"). The global synthesis (§2.7) notes that tcell uses
+50 ms for ambiguous ESC resolution, but that is for distinguishing a standalone ESC byte from
+the start of an escape sequence during live keyboard input, not for a probe-response cycle.
+A probe-response cycle over SSH to a slow remote terminal may require up to 1000 ms to complete.
+The per-probe reset ensures that a slow Kitty response does not eat the XTerm probe budget.
+Treating a timeout as a negative result (not Unknown) for individual probes is intentional: a
+timeout means the terminal did not respond to that specific query within the deadline, which is
+functionally equivalent to receiving a DA1-only response (the terminal does not support the
+queried protocol).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Error Handling
+
+[REQUIREMENT]
+UID: FUNC-KKB-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: No-Exception Guarantee for Detect_Keyboard_Protocol
+STATEMENT: >>>
+The top-level keyboard protocol detection function Detect_Keyboard_Protocol shall never
+propagate an exception to its caller under any circumstances, including:
+
+  - /dev/tty cannot be opened (FUNC-OSC-001 returns an error).
+  - tcgetattr fails (FUNC-OSC-002 returns an error).
+  - tcsetattr fails during raw-mode entry (FUNC-OSC-003 returns an error).
+  - Write_Query returns Success = False for the keyboard query or DA1 sentinel.
+  - Sentinel_Query returns Timed_Out = True for one or both probes.
+  - The response bytes are garbled (Parse_Kitty_Response or Parse_XTerm_Keyboard_Response
+    returns a negative result on malformed data).
+  - An EINTR or EAGAIN condition is encountered during select() or read().
+  - Termios restore fails (FUNC-OSC-002 Restore_Termios returns an error).
+  - GetConsoleMode raises on Windows (shall be caught and treated as gate-not-fired).
+
+All such failure modes shall cause the function to return Protocol = Unknown, Probed = False,
+or to continue to the next cascade step as appropriate (per FUNC-KKB-009 and FUNC-KKB-013).
+The function shall not log or signal errors to the caller; graceful degradation is the
+sole response.
+
+The no-exception contract applies even when called with a null or invalid file descriptor.
+<<<
+COMMENT: >>>
+The no-exception policy follows the Termicap convention for all OS call wrappers, stated most
+explicitly in FUNC-CYG-016 for Is_Cygwin_Terminal: "any uncaught exception propagating out of
+[the function] would be a library-level defect that crashes the calling application, which is
+categorically unacceptable for a capability-detection library." Keyboard protocol detection is
+an opportunistic startup probe; failure must degrade gracefully to Unknown, not crash. The
+enumerate of specific failure modes in the STATEMENT provides implementors with a comprehensive
+checklist of every error path that must be handled.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Termios Restore on All Exit Paths
+STATEMENT: >>>
+The keyboard protocol detection implementation shall restore terminal attributes (via
+FUNC-OSC-002 Restore_Termios) on every exit path from the raw-mode section, including:
+
+  - Normal exit after both probes complete (step 6, Legacy result).
+  - Early exit after a successful Kitty or XTerm probe (steps 4 or 5).
+  - Exit due to a write failure (FUNC-OSC-005 Write_Query returns Success = False).
+  - Exit due to timeout on a sentinel probe (FUNC-OSC-006 Timed_Out = True).
+  - Exit due to any other I/O error detected during the probe sequence.
+
+Terminal attributes shall be restored before the /dev/tty file descriptor is closed
+(FUNC-OSC-001 Close_TTY), preserving the ordering: open → save → set-raw → [probe] →
+restore → close. Under no circumstances shall the function exit the raw-mode section
+without first attempting Restore_Termios, even if Restore_Termios itself fails (its failure
+is silently ignored per FUNC-OSC-002).
+<<<
+COMMENT: >>>
+Unconditional termios restore is the single most important safety property of any raw-mode
+terminal probe: leaving the terminal in raw mode (no echo, no canonical processing) would
+break the user's shell session after the detection function returns. The ordering
+open → save → raw → probe → restore → close is identical to the pattern established for OSC
+query sessions in FUNC-OSC-002 and FUNC-OSC-008. The requirement to attempt restore even if
+Restore_Termios fails (silently) ensures that the close always happens, preventing a file
+descriptor leak.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-KKB-016
+STATUS: Approved
+PRIORITY: Should
+TITLE: Partial and Garbled Response Handling
+STATEMENT: >>>
+The keyboard protocol detection function shall handle partial and garbled terminal responses
+without entering an infinite accumulation loop. Specifically:
+
+  - If Sentinel_Query (FUNC-OSC-006) returns a non-empty pre-sentinel response that does
+    not match either the Kitty pattern (FUNC-KKB-006) or the XTerm pattern (FUNC-KKB-008),
+    the response shall be discarded and the probe shall be treated as negative for the
+    queried protocol.
+  - If a partial Kitty response is received (e.g., ESC [ ? with digits but no terminating
+    'u') before the DA1 sentinel, the parse function (FUNC-KKB-006) returns Valid = False
+    and the response is discarded.
+  - If interleaved or unexpected bytes appear before the keyboard response pattern
+    (e.g., bracketed paste data, a pending mouse event, or a previous query's stale
+    response), the parse functions shall return a negative result and the response shall be
+    discarded.
+
+In all cases, discarding an unrecognised response shall not prevent the DA1 sentinel
+response detection from completing; Sentinel_Query accumulates bytes until DA1 is found
+regardless of what precedes it.
+<<<
+COMMENT: >>>
+Terminals may emit unsolicited bytes (mouse events, bracketed paste, pending resize notifications)
+that arrive before or interleaved with the keyboard query response. The parser must not false-
+positively match these as keyboard responses. The design of Parse_Kitty_Response and
+Parse_XTerm_Keyboard_Response to return explicit Valid/False results (rather than raising on
+mismatch) ensures that any non-conforming pre-sentinel content is cleanly discarded. Sentinel_Query
+(FUNC-OSC-006) accumulates all bytes until DA1 regardless, so discarding the non-matching pre-
+sentinel bytes does not cause the probe to block indefinitely.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Caching
+
+[REQUIREMENT]
+UID: FUNC-KKB-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: One-Probe-Per-Process Caching
+STATEMENT: >>>
+The library shall cache the Keyboard_Capability result after the first call to
+Detect_Keyboard_Protocol and return the cached value on all subsequent calls without
+re-probing. The cache shall be stored as package-level state in a protected object or
+equivalent thread-safe structure, consistent with the caching pattern for Terminal_Capabilities
+(FUNC-CAP-003).
+
+The cache shall be initialised lazily: no probe is performed until the first call to
+Detect_Keyboard_Protocol (or an equivalent public entry point that triggers keyboard
+detection). Eager probing at library elaboration time is not permitted.
+
+A caller that needs a fresh result (e.g., after a terminal change or for testing) shall
+be able to obtain one via a separate Detect function that bypasses the cache (analogous
+to FUNC-CAP-004 for Terminal_Capabilities), but this is classified as a Should requirement.
+The cache shall not be invalidated by SIGWINCH; keyboard protocol support is invariant
+across terminal resize events.
+<<<
+COMMENT: >>>
+The one-probe-per-process pattern is established for all Termicap capability detections by
+FUNC-CAP-003. Keyboard protocol support is a property of the terminal emulator process, not
+of the terminal size or color palette, so it does not change during a process's lifetime in
+any realistic deployment scenario. Caching avoids repeated raw-mode I/O overhead for
+applications that call the keyboard detection function multiple times (e.g., when initialising
+multiple sub-systems). Lazy initialisation is required by the same rationale as FUNC-CAP-003:
+OS calls during library elaboration are unsafe. The SIGWINCH exclusion is explicit because
+FUNC-SWC-001 triggers re-detection of terminal dimensions on resize; callers familiar with that
+pattern should know that keyboard protocol is not included in the resize re-detection.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK Boundary
+
+[REQUIREMENT]
+UID: FUNC-KKB-018
+STATUS: Approved
+PRIORITY: Must
+TITLE: Package Structure and SPARK Boundary
+STATEMENT: >>>
+The keyboard protocol detection feature shall be implemented in a new package
+Termicap.Keyboard, structured as follows:
+
+Package specification (src/termicap-keyboard.ads):
+  - SPARK_Mode => On at the package level.
+  - Declares Keyboard_Protocol (FUNC-KKB-001), Kitty_Flags (FUNC-KKB-002), and
+    Keyboard_Capability (FUNC-KKB-003) as public types.
+  - Declares the public functions Parse_Kitty_Flags (FUNC-KKB-005),
+    Parse_Kitty_Response (FUNC-KKB-006), and Parse_XTerm_Keyboard_Response (FUNC-KKB-008)
+    with SPARK_Mode => On and Global => null contracts.
+  - Declares the public function Detect_Keyboard_Protocol with SPARK_Mode => Off
+    (it calls FFI-dependent OSC-INFRA operations).
+
+Package body (src/termicap-keyboard.adb):
+  - SPARK_Mode => Off at the package level.
+  - Contains the body of Detect_Keyboard_Protocol and all OS-facing helpers.
+  - Contains the bodies of Parse_Kitty_Flags, Parse_Kitty_Response, and
+    Parse_XTerm_Keyboard_Response with SPARK_Mode => On applied locally to each
+    subprogram body (mixed SPARK pattern, as used in Termicap.Win32_Cygwin per FUNC-CYG-017).
+  - Contains the protected cache object for one-probe-per-process caching (FUNC-KKB-017).
+  - Withed packages: Termicap.OSC (or its I/O subpackage), Termicap.TTY.
+
+Platform-specific I/O bodies:
+  - POSIX path: src/posix/termicap-keyboard-io.adb (or equivalent, SPARK_Mode => Off).
+  - Windows path: src/windows/termicap-keyboard-io.adb (SPARK_Mode => Off), which adds
+    the GetConsoleMode check (FUNC-KKB-010).
+
+File naming shall follow the project convention: lowercase with dashes matching the package
+hierarchy.
+<<<
+COMMENT: >>>
+Placing pure types and SPARK-provable parse functions in the SPARK_Mode => On specification
+follows the established architecture of XTVERSION (Termicap.Xtversion), DA1 (Termicap.DA1),
+and the Cygwin integration (Termicap.Win32_Cygwin). The mixed SPARK pattern (SPARK_Mode => On
+locally on parse function bodies within a SPARK_Mode => Off package body) is explicitly
+documented in the lessons-learned file (.claude/ada-lessons-learned.md) as the correct
+technique for packages that combine FFI and provable logic. Separating platform-specific I/O
+into a per-OS body file follows the existing platform split established in
+refactor(platform):unify-POSIX-sources and maintained consistently across the project.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with Capability Record
+
+[REQUIREMENT]
+UID: FUNC-KKB-019
+STATUS: Approved
+PRIORITY: Should
+TITLE: Keyboard_Capability Field in Terminal_Capabilities
+STATEMENT: >>>
+The Terminal_Capabilities record (FUNC-CAP-001) should be extended with a field:
+
+  Keyboard : Termicap.Keyboard.Keyboard_Capability
+    -- The detected keyboard protocol, populated by Detect_Keyboard_Protocol on the
+    -- first call to Get or Detect (FUNC-CAP-003, FUNC-CAP-004). Defaults to the
+    -- canonical Unknown value (Protocol = Unknown, Flags = all False, Probed = False)
+    -- when keyboard detection has not been performed.
+
+The Status of this requirement is Draft/Should because Terminal_Capabilities (FUNC-CAP-001)
+is in the Approved state and adding a field is a backward-compatible record extension; its
+inclusion depends on whether the KITTY-KB feature is promoted to Approved and whether the
+integrator chooses to include it in the Tier 4 capability record update.
+
+The Detect function for Terminal_Capabilities (FUNC-CAP-004) shall invoke
+Detect_Keyboard_Protocol as part of the sub-detector sequence when this field is present.
+<<<
+COMMENT: >>>
+Incorporating keyboard capability into the Terminal_Capabilities record (FUNC-CAP-001) allows
+callers that already use the capability record pattern to obtain keyboard protocol information
+without a separate API call. Classifying this as a Should requirement (rather than Must) reflects
+the fact that KITTY-KB is a Tier 4 stretch goal: the core detection function
+Detect_Keyboard_Protocol shall be fully usable standalone, and the integration into
+Terminal_Capabilities can be deferred until the feature is stabilised and promoted. The record
+extension is backward-compatible in Ada (existing callers that name only the fields they need
+are unaffected).
+<<<
+
+[/SECTION]

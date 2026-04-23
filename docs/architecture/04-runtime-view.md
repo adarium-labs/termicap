@@ -1931,6 +1931,131 @@ Termicap.TTY (Windows body)      [SPARK_Mode => Off]
 
 ---
 
+## Scenario 26: Keyboard Protocol Detection
+
+End-to-end scenario for `Detect_Keyboard_Protocol`. Shows the Win32 fast-path gate, the two-probe Kitty → XTerm cascade, the DA1 sentinel-bounded read loops, the SPARK Silver parse pipeline, and the per-process cache. Worst-case cold-start latency is 2 s (1 s per probe × 2 probes). Cached calls return in < 1 µs.
+
+### Phase A — Cache Check and Platform Gate
+
+```
+Caller (application)
+  │
+  │  Detect_Keyboard_Protocol
+  ▼
+Termicap.Keyboard.IO.Detect_Keyboard_Protocol      [SPARK_Mode => Off]
+  │
+  │  Step 1: Cache check (protected object)
+  │    Is_Cached = True?
+  │      Yes → return Cached_Result immediately  (< 1 µs)
+  │      No  → continue
+  │
+  │  [Windows body only]
+  │  Step 2: GetConsoleMode (STD_INPUT_HANDLE)    [Win32 FFI]
+  │    Succeeds?
+  │      Yes → Cached_Result :=
+  │              (Protocol => Win32, Flags => NO_KITTY_FLAGS, Probed => False)
+  │             Store in cache; return immediately
+  │      No  → handle is Cygwin/MSYS2 PTY; continue to Step 3
+  │  [End Windows-only block]
+  │
+  └──► Proceed to Phase B
+```
+
+### Phase B — Guards and Kitty Probe
+
+```
+  │
+  │  Step 3: Non-TTY and foreground guards
+  │    Is_TTY (Stdin) = False?       [Termicap.TTY — SPARK_Mode => Off]
+  │      → return NO_KEYBOARD_CAPABILITY (Probed => False); cache and return
+  │    Is_Foreground_Process = False? [Termicap.OSC — SPARK_Mode => Off]
+  │      → return NO_KEYBOARD_CAPABILITY (Probed => False); cache and return
+  │
+  │  Step 4: Open Probe_Session      [Termicap.OSC — SPARK_Mode => Off]
+  │    → Foreground check (Is_Foreground_Process)
+  │    → /dev/tty open
+  │    → Save termios, set raw mode, drain input
+  │    Fails?
+  │      → return NO_KEYBOARD_CAPABILITY; cache and return
+  │
+  │  Step 5: Kitty Sentinel_Query
+  │    [Termicap.OSC.Sentinel_Query — SPARK_Mode => Off]
+  │    ┌──────────────────────────────────────────────────────────────┐
+  │    │  Write CSI_KITTY_QUERY (ESC [ ? u, 3 bytes) to /dev/tty     │
+  │    │  Write DA1 sentinel (ESC [ c) to /dev/tty                   │
+  │    │  Accumulation loop (KITTY_PROBE_TIMEOUT_MS = 1_000 ms):     │
+  │    │    Timed_Read (/dev/tty) → append to Response buffer        │
+  │    │    Contains_DA1_Response (Response, Length)  [SPARK Silver] │
+  │    │      → scan for ESC [ ? <digits/semicolons> c pattern       │
+  │    │      → if found: record pre-sentinel length; exit loop      │
+  │    │    if timeout or overflow: Timed_Out := True; exit loop     │
+  │    └──────────────────────────────────────────────────────────────┘
+  │
+  │  Step 6: Parse_Kitty_Response (Response, Resp_Length)
+  │    [Termicap.Keyboard — SPARK Silver, Global => null]
+  │    → check for ESC [ ? <digits>* u pattern
+  │    → Result.Found = True?
+  │      Yes → Capability :=
+  │              (Protocol => Kitty,
+  │               Flags    => Parse_Kitty_Flags (flags_int),
+  │               Probed   => True)
+  │            Probe_Session.Finalize (RAII)
+  │            Store in cache; return Capability
+  │      No  → continue to Phase C (XTerm probe)
+  │
+  └──► Kitty not detected; continue
+```
+
+### Phase C — XTerm Probe
+
+```
+  │
+  │  Step 7: XTerm Sentinel_Query
+  │    [Termicap.OSC.Sentinel_Query — SPARK_Mode => Off]
+  │    ┌──────────────────────────────────────────────────────────────┐
+  │    │  Write CSI_XTERM_KBD_QUERY (ESC [ ? 4 m, 5 bytes) to       │
+  │    │    /dev/tty                                                  │
+  │    │  Write DA1 sentinel (ESC [ c) to /dev/tty                   │
+  │    │  Accumulation loop (XTERM_KBD_PROBE_TIMEOUT_MS = 1_000 ms): │
+  │    │    Timed_Read (/dev/tty) → append to Response buffer        │
+  │    │    Contains_DA1_Response (Response, Length)  [SPARK Silver] │
+  │    │      → if found: record pre-sentinel length; exit loop      │
+  │    │    if timeout or overflow: Timed_Out := True; exit loop     │
+  │    └──────────────────────────────────────────────────────────────┘
+  │
+  │  Step 8: Parse_XTerm_Keyboard_Response (Response, Resp_Length)
+  │    [Termicap.Keyboard — SPARK Silver, Global => null]
+  │    → check for ESC [ ? 4 ; <digits>+ m pattern
+  │    → Returns Boolean
+  │    True?
+  │      Yes → Capability :=
+  │              (Protocol => XTerm_CSI,
+  │               Flags    => NO_KITTY_FLAGS,
+  │               Probed   => True)
+  │      No  → Capability :=
+  │              (Protocol => Legacy,
+  │               Flags    => NO_KITTY_FLAGS,
+  │               Probed   => True)
+  │
+  │  Probe_Session.Finalize (unconditional RAII)
+  │    → Restore_Termios, close /dev/tty, release single-session guard
+  │
+  │  Store Capability in cache; return Capability
+  │
+  └──► Keyboard_Capability returned to caller
+```
+
+**Key properties:**
+
+- **Worst-case latency:** 2 s cold-start (1 s × 2 probes: Kitty timeout + XTerm timeout). If the terminal responds to the Kitty probe, the XTerm probe is skipped; worst case applies only when both probes time out (legacy terminal).
+- **Cached calls:** The protected-object cache is populated on the first call. All subsequent calls return the cached `Keyboard_Capability` without entering the probe cascade or opening a terminal session. Latency < 1 µs.
+- **Windows fast path:** `GetConsoleMode (STD_INPUT_HANDLE)` is checked before any probe. A native Windows console succeeds immediately and returns `(Win32, Probed => False)` with zero I/O overhead.
+- **Graceful degradation:** On any error — non-TTY stdin, background process, `Probe_Session` open failure, both probes timing out — the function returns `NO_KEYBOARD_CAPABILITY` (`Protocol => Unknown` or `Protocol => Legacy`) without raising an exception (FUNC-KKB-014, FUNC-KKB-016).
+- **Termios safety:** `Probe_Session.Finalize` is called unconditionally on every exit path. Terminal state is always restored regardless of probe outcome (FUNC-KKB-015).
+- **SPARK boundary:** `Termicap.Keyboard` (parent spec and body) is fully SPARK Silver — three pure parsers with `Global => null`, no FFI, no global state. `Termicap.Keyboard.IO` is `SPARK_Mode => Off` throughout (session management, terminal I/O, protected cache object).
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -1964,4 +2089,6 @@ Termicap.TTY (Windows body)      [SPARK_Mode => Off]
 - **Tech Spec WIN32** (`docs/tech-specs/windows-console.md`): Windows Console API integration — full design rationale and build number threshold derivation
 - **Tech Spec CYGWIN** (`docs/tech-specs/cygwin-pty.md`): Cygwin/MSYS2 PTY detection design — pipe name grammar, SPARK split, fallback strategy
 - **ADR-0020** (`docs/adr/0020-cygwin-pty-detection-strategy.md`): Rationale for the named-pipe name inspection strategy over alternative PTY detection approaches
+- **Tech Spec KITTY-KB** (`docs/tech-specs/kitty-keyboard.md`): Kitty Keyboard Protocol detection design rationale — cascade strategy, DA1 sentinel reuse, SPARK Silver boundary, platform dispatch for Win32 gate
+- **ADR-0021** (`docs/adr/0021-defer-keyboard-capability-integration.md`): Rationale for deferring `Keyboard_Capability` integration into `Terminal_Capabilities`, and the forward-compatible migration path
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017

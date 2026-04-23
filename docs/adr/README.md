@@ -39,3 +39,4 @@ Each ADR has a status:
 | [0008](0008-terminal-id-string-representation-spark-boundary.md) | Terminal ID string representation SPARK boundary | proposed |
 | [0009](0009-downsampling-return-type.md) | Downsampling return type | proposed |
 | [0010](0010-override-mode-flat-enum.md) | Five-literal flat enum for Override_Mode | proposed |
+| [0021](0021-defer-keyboard-capability-integration.md) | Defer Keyboard_Capability integration into Terminal_Capabilities | proposed |
