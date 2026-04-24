@@ -1,0 +1,809 @@
+[DOCUMENT]
+TITLE: MOUSE — Mouse Protocol Detection
+UID: REQ-MSE
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[TEXT]
+STATEMENT: >>>
+This document specifies the functional requirements for Mouse Protocol Detection
+(feature id MOUSE, Tier 4 Stretch Goal). The feature detects, at process startup,
+which mouse encoding protocols and tracking modes the controlling terminal supports,
+using DECRPM queries (CSI ? Ps $ p) for modes 1000 (X10 button tracking), 1002
+(button-event tracking), 1003 (any-event tracking), 1006 (SGR mouse encoding), 1015
+(URXVT encoding), and 1016 (SGR pixel-precision encoding). On the Linux text console
+(TERM=linux), DECRPM responses are unreliable and mouse input is provided by the GPM
+daemon; this path is detected via a lightweight heuristic. On Win32 Console (non-PTY),
+mouse input is available through the Console API, not DECRPM.
+
+Detection reuses the OSC Query Infrastructure (OSC-INFRA, REQ-OSC) sentinel pattern and
+the DECRPM query infrastructure (REQ-RPM): multiple DECRPM queries may be batched in a
+single sentinel-bounded session, followed by one DA1 sentinel (CSI c) as the response
+boundary. The result is a structured record capturing per-mode booleans and a preferred
+encoding, cached for the process lifetime.
+
+SPARK Silver is the target for pure logic (DECRPM response parsing, cascade resolution).
+All I/O, termios management, and OS dispatch are classified Ada FFI (SPARK_Mode => Off),
+consistent with OSC-INFRA, CYGWIN, and KITTY-KB patterns.
+<<<
+
+[SECTION]
+TITLE: Result Types
+
+[REQUIREMENT]
+UID: FUNC-MSE-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Mouse_Encoding Enumeration Type
+STATEMENT: >>>
+The library shall provide an enumeration type Mouse_Encoding whose values represent the
+encoding schemes that may be available for mouse event reporting:
+
+  Unknown       -- Detection has not been performed or could not be completed (stdin not
+                   a TTY, foreground guard failed, probe timed out entirely, Win32
+                   DECRPM path not applicable).
+  None          -- Detection was performed successfully but no supported mouse encoding
+                   was found (all queried modes returned Not_Recognized).
+  X10           -- Classic X10 encoding only: ESC [ M Cb Cx Cy (three raw bytes, range
+                   limited to columns/rows 1-222). Indicates mode 1000 was recognised
+                   but modes 1006 and 1016 were not.
+  URXVT         -- URXVT decimal encoding: ESC [ Cb ; Cx ; Cy M (decimal, unlimited
+                   range). Indicates mode 1015 was recognised but modes 1006 and 1016
+                   were not.
+  SGR           -- SGR encoding: ESC [ < Cb ; Cx ; Cy M/m (decimal, unlimited range,
+                   distinguishes press from release). Indicates mode 1006 was recognised
+                   but mode 1016 was not.
+  SGR_Pixels    -- SGR pixel-precision encoding: same format as SGR but Cx, Cy are pixel
+                   coordinates. Indicates mode 1016 was recognised.
+
+The enumeration shall be defined in a package Termicap.Mouse (or a child thereof) with
+SPARK_Mode => On.
+
+Mouse_Encoding represents the BEST available encoding (the result of the preference
+cascade, FUNC-MSE-008). It is distinct from the per-mode Boolean flags in
+Mouse_Capabilities (FUNC-MSE-002), which record the full set of recognised modes.
+<<<
+COMMENT: >>>
+The five non-Unknown/None values correspond to the four encoding families documented in the
+global synthesis (§2.6): X10, SGR, SGR-pixels, and URXVT. URXVT (mode 1015) is included
+because several reference implementations (tcell, notcurses) probe it and it is still found
+in urxvt-derived terminals. The Unknown/None distinction mirrors the Keyboard_Protocol design
+in FUNC-KKB-001: Unknown = probing failed; None = probing succeeded but found nothing. Callers
+that need a conservative default when probing fails should treat Unknown the same as None.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-MSE-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Mouse_Capabilities Result Record
+STATEMENT: >>>
+The library shall provide a record type Mouse_Capabilities that aggregates the complete
+mouse protocol detection result. The record shall contain:
+
+  -- Encoding preference (derived, FUNC-MSE-008):
+  Best_Encoding         : Mouse_Encoding
+    -- The highest-preference encoding available, per the cascade in FUNC-MSE-008.
+    -- Mouse_Encoding'First (Unknown) when detection was not performed.
+
+  -- Per-mode support flags (FUNC-MSE-006):
+  Supports_X10          : Boolean
+    -- True when DECRPM mode 1000 (X11 button tracking) was recognised (status /= 0).
+  Supports_Button_Event : Boolean
+    -- True when DECRPM mode 1002 (button-event / drag tracking) was recognised.
+  Supports_Any_Event    : Boolean
+    -- True when DECRPM mode 1003 (any motion tracking) was recognised.
+  Supports_URXVT        : Boolean
+    -- True when DECRPM mode 1015 (URXVT decimal encoding) was recognised.
+  Supports_SGR          : Boolean
+    -- True when DECRPM mode 1006 (SGR decimal encoding) was recognised.
+  Supports_SGR_Pixels   : Boolean
+    -- True when DECRPM mode 1016 (SGR pixel-precision encoding) was recognised.
+
+  -- Platform-specific flags (FUNC-MSE-010, FUNC-MSE-011):
+  Win32_Console_Mouse   : Boolean
+    -- True when the Win32 platform gate fired and Console API mouse is available.
+    -- Mutually exclusive with a probed result: when True, all Supports_* fields
+    -- are False and Best_Encoding is Unknown.
+  GPM_Available         : Boolean
+    -- True when the Linux/GPM path was detected (TERM=linux and /dev/gpmctl exists).
+    -- When True, Supports_* fields are False (DECRPM not used on this path) and
+    -- Best_Encoding is Unknown (GPM provides its own event stream, not a DECRPM encoding).
+
+  -- Probe metadata:
+  Probed                : Boolean
+    -- True when an active DECRPM probe sequence was attempted (stdin was a TTY,
+    -- foreground guard passed, probe sequence was sent). False when the result was
+    -- determined without probing (Win32 gate, GPM heuristic, non-TTY, foreground guard).
+
+The type shall be declared with SPARK_Mode => On.
+
+The canonical "no result" value shall be:
+  Best_Encoding = Unknown, all Supports_* = False,
+  Win32_Console_Mouse = False, GPM_Available = False, Probed = False.
+<<<
+COMMENT: >>>
+Orthogonal Boolean flags per mode (rather than a set or bitmask) are preferred for SPARK
+provability: each field can be individually reasoned about and individually tested. Best_Encoding
+is a derived summary (computed by the cascade in FUNC-MSE-008) so that callers that only need
+"what encoding should I use?" get a single enum value without needing to implement their own
+cascade logic. The Win32_Console_Mouse and GPM_Available flags are additive: they do not
+conflict with each other in theory, but in practice exactly one of {DECRPM-probed, Win32,
+GPM} paths fires. Declaring them as independent Booleans preserves a clean SPARK type while
+being honest about the platform semantics. The Probed field mirrors the pattern from
+Keyboard_Capability (FUNC-KKB-003) to enable test-harness introspection.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Detection Algorithm — DECRPM Queries
+
+[REQUIREMENT]
+UID: FUNC-MSE-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: DECRPM Mode Constants for Mouse Protocols
+STATEMENT: >>>
+The library shall define the following named constants for the DEC private mode numbers
+used in mouse protocol detection. These shall be defined as values of the Mode_Id subtype
+(FUNC-RPM-001), in the Termicap.Mouse package or a dedicated child package:
+
+  MODE_MOUSE_X10            : constant Mode_Id := 1000;
+    -- X11/X10 mouse button tracking (press and release events only).
+  MODE_MOUSE_BUTTON_EVENT   : constant Mode_Id := 1002;
+    -- Button-event tracking: includes button-press, button-release, and drag motion.
+  MODE_MOUSE_ANY_EVENT      : constant Mode_Id := 1003;
+    -- Any-motion tracking: includes all motion events regardless of button state.
+  MODE_MOUSE_URXVT          : constant Mode_Id := 1015;
+    -- URXVT decimal encoding extension for unlimited coordinate range.
+  MODE_MOUSE_SGR            : constant Mode_Id := 1006;
+    -- SGR decimal encoding with press/release distinction via M/m terminator.
+  MODE_MOUSE_SGR_PIXELS     : constant Mode_Id := 1016;
+    -- SGR pixel-precision encoding: coordinates in pixels, not character cells.
+
+All constants shall use ALL_CAPS_WITH_UNDERSCORES naming per the Ada coding standard.
+<<<
+COMMENT: >>>
+Collecting the mode constants in one place (following the pattern of MODE_MOUSE_X11 and
+MODE_MOUSE_SGR already present in FUNC-RPM-001) ensures consistency between the DECRPM
+infrastructure and the mouse feature. The six modes above are the complete set queried by
+tcell and notcurses per the global synthesis (§2.6). Mode 1015 (URXVT) is included despite
+being less common: it is still present in urxvt-derived terminals and foot, and the cost of
+one additional DECRPM query is negligible when queries are batched (FUNC-MSE-005).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-MSE-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: DECRPM Query Sequence for Mouse Modes
+STATEMENT: >>>
+The library shall probe mouse mode availability by issuing DECRPM queries (CSI ? Ps $ p)
+for the following modes, in the stated order:
+
+  1. MODE_MOUSE_X10          (1000)
+  2. MODE_MOUSE_BUTTON_EVENT (1002)
+  3. MODE_MOUSE_ANY_EVENT    (1003)
+  4. MODE_MOUSE_URXVT        (1015)
+  5. MODE_MOUSE_SGR          (1006)
+  6. MODE_MOUSE_SGR_PIXELS   (1016)
+
+Each query shall be issued via the DECRPM infrastructure (FUNC-RPM-005 or equivalent
+Termicap.DECRPM.Query function). The queries shall be issued as part of a
+sentinel-bounded probe session (FUNC-OSC-006): all six query bytes are written to the
+terminal file descriptor, followed immediately by a single DA1 sentinel (CSI c). The
+session is bounded by the arrival of the DA1 response (CSI ? 1 ; <Psc> c or the first
+DA1-shaped response), providing a firm deadline for the entire batch.
+
+Each DECRPM response shall match the pattern:
+  CSI ? <Ps> ; <Pm> $ y
+where Ps is the mode number and Pm is the status code (0–4, per FUNC-RPM-002).
+<<<
+COMMENT: >>>
+Batching all six queries in a single sentinel-bounded session (one DA1 sentinel for the
+entire batch) is more efficient than six independent sessions (each with its own DA1 and
+termios save/restore cycle). This is safe because the DECRPM responses for the six modes
+are all independently parseable by mode number (Ps) in the CSI ? Ps ; Pm $ y response,
+so interleaved responses can still be attributed to the correct mode. The query order
+(tracking modes first, then encoding modes) follows notcurses and tcell practice. If a
+terminal returns responses out of order, the parser shall match by Ps, not by position.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-MSE-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Batched Query Session — Single Sentinel for All Six Queries
+STATEMENT: >>>
+The six DECRPM mouse queries shall be dispatched in a single batched terminal session,
+reusing the OSC-INFRA session lifecycle (FUNC-OSC-001 through FUNC-OSC-006):
+
+  1. Open /dev/tty via FUNC-OSC-001 (Open_TTY).
+  2. Save terminal attributes via FUNC-OSC-002 (Save_Termios).
+  3. Enter raw mode via FUNC-OSC-003 (Set_Raw_Mode).
+  4. Write all six DECRPM query sequences to the terminal file descriptor via
+     FUNC-OSC-005 (Write_Query), followed by the DA1 sentinel bytes.
+  5. Read responses until the DA1 sentinel pattern is recognised, accumulating
+     all bytes received before the sentinel via FUNC-OSC-006 (Sentinel_Query).
+  6. Restore terminal attributes unconditionally via FUNC-OSC-002 (Restore_Termios).
+  7. Close /dev/tty via FUNC-OSC-001 (Close_TTY).
+
+The mouse detection function shall not call tcgetattr, tcsetattr, select(), read(), or
+write() directly; all such calls shall be mediated through the OSC-INFRA interface,
+consistent with FUNC-KKB-012.
+
+On POSIX platforms, the detection shall use the configured OSC-INFRA timeout
+(FUNC-MSE-012) for the entire batched session.
+<<<
+COMMENT: >>>
+A single batched session avoids the overhead of six raw-mode enter/restore cycles, which
+would be particularly noticeable over SSH. The terminal is left in raw mode for the
+minimal duration needed to collect all responses; this is the standard pattern for
+multi-query probes in notcurses and tcell. Unconditional termios restore (step 6) mirrors
+FUNC-KKB-015 and is the single most important safety invariant of any raw-mode probe.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-MSE-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: DECRPM Response Status Interpretation for Mouse Modes
+STATEMENT: >>>
+For each DECRPM response received before the DA1 sentinel, the library shall extract
+the mode number Ps and status code Pm per the Mode_Status mapping in FUNC-RPM-002.
+The library shall set the corresponding Supports_* flag in Mouse_Capabilities as follows:
+
+  Mode_Status = Not_Recognized (Pm = 0): Supports_* := False
+    -- The terminal does not implement this mode at all.
+  Mode_Status = Set             (Pm = 1): Supports_* := True
+    -- Mode is currently enabled; terminal recognises it.
+  Mode_Status = Reset           (Pm = 2): Supports_* := True
+    -- Mode is currently disabled but the terminal recognises it and can enable it.
+  Mode_Status = Permanently_Set (Pm = 3): Supports_* := True
+    -- Mode is always on; terminal fully supports it.
+  Mode_Status = Permanently_Reset (Pm = 4): Supports_* := True
+    -- Mode is always off but the terminal recognises the mode number.
+
+Status codes 1, 2, 3, and 4 all result in Supports_* = True because they indicate the
+terminal implements the mode. Only status 0 (Not_Recognized) yields Supports_* = False.
+
+If no response is received for a given mode before the DA1 sentinel arrives (the terminal
+did not emit a response for that Ps), Supports_* shall remain False.
+
+The response parser shall be a pure SPARK function (FUNC-MSE-007).
+<<<
+COMMENT: >>>
+This interpretation follows the DECRPM semantics documented in FUNC-RPM-002: the key
+distinction is whether the terminal RECOGNISES the mode number, not whether the mode is
+currently enabled. A terminal may have SGR mouse encoding reset (status 2) but still
+support it — the application is responsible for activating it with DECSET. Treating all
+non-zero statuses as "supported" is consistent with tcell's DECRPM usage and with the
+purpose of this query: capability detection, not current state inspection.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-MSE-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: DECRPM Mouse Response Parser (SPARK Silver)
+STATEMENT: >>>
+The library shall provide a pure SPARK function that parses a single DECRPM response byte
+buffer and extracts the mode number and status. Its representative specification is:
+
+  type DECRPM_Parse_Result is record
+     Valid  : Boolean;
+     Mode   : Mode_Id;
+     Status : Mode_Status;
+  end record
+     with SPARK_Mode => On;
+
+  function Parse_Mouse_DECRPM_Response
+     (Buffer : Byte_Array;
+      Length : Natural)
+      return DECRPM_Parse_Result
+     with SPARK_Mode => On,
+          Global     => null,
+          Pre        => Length <= Buffer'Length,
+          Post       => True;
+
+The function shall return Valid = True when Buffer (1 .. Length) matches:
+
+  ESC (0x1B) '[' (0x5B) '?' (0x3F) <mode_digits>+ ';' (0x3B) <status_digit> '$' (0x24) 'y' (0x79)
+
+where <mode_digits>+ is one or more ASCII decimal digits encoding the mode number Ps, and
+<status_digit> is a single ASCII decimal digit in the range '0'..'4' encoding Pm.
+
+The function shall decode Ps into Mode and Pm into Status using the Mode_Status mapping
+(FUNC-RPM-002). It shall return Valid = False for any buffer that does not match this
+pattern, including partial responses, missing ';', missing '$', or Pm outside 0–4.
+
+Bits beyond the valid pattern shall not cause a range error; the function shall not raise
+for any buffer content.
+<<<
+COMMENT: >>>
+A dedicated pure SPARK parser for the DECRPM mouse response follows the same structural
+pattern as Parse_Kitty_Response (FUNC-KKB-006) and Parse_XTerm_Keyboard_Response
+(FUNC-KKB-008): pure parsing logic in a SPARK Silver function, independently testable
+with synthetic byte arrays. The pre-condition Length <= Buffer'Length is the minimal
+safety contract, preventing reads beyond the valid portion of a stack-allocated buffer.
+Returning a record (Valid + Mode + Status) rather than a Boolean keeps the caller logic
+simple: a single call extracts everything needed to update the corresponding Supports_*
+flag in Mouse_Capabilities.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Encoding Cascade and Preference Resolution
+
+[REQUIREMENT]
+UID: FUNC-MSE-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Best_Encoding Cascade — SGR_Pixels > SGR > URXVT > X10 > None
+STATEMENT: >>>
+After all DECRPM responses have been parsed and the Supports_* flags set, the library
+shall derive Best_Encoding via the following preference cascade, evaluated in order:
+
+  Step 1: if Supports_SGR_Pixels  => Best_Encoding := SGR_Pixels
+  Step 2: else if Supports_SGR    => Best_Encoding := SGR
+  Step 3: else if Supports_URXVT  => Best_Encoding := URXVT
+  Step 4: else if Supports_X10    => Best_Encoding := X10
+  Step 5: else                     => Best_Encoding := None
+
+The cascade is evaluated only after a successful DECRPM probe session (Probed = True).
+When probing was not performed or failed entirely (Probed = False), Best_Encoding shall
+remain Unknown.
+
+The cascade shall be implemented as a pure SPARK function:
+
+  function Resolve_Best_Encoding
+     (Caps : Mouse_Capabilities)
+      return Mouse_Encoding
+     with SPARK_Mode => On,
+          Global     => null,
+          Pre        => True,
+          Post       => True;
+<<<
+COMMENT: >>>
+The preference order SGR_Pixels > SGR > URXVT > X10 > None reflects the capability
+hierarchy: SGR pixel encoding (1016) provides the richest information (pixel coordinates),
+SGR (1006) provides unlimited coordinate range with press/release distinction, URXVT (1015)
+provides unlimited range without press/release, and X10 (1000) is the legacy baseline.
+URXVT is placed above X10 (not below SGR) because it at least provides unlimited
+coordinates; X10's byte-limited range is strictly inferior. The cascade deliberately ignores
+tracking mode flags (Supports_Button_Event, Supports_Any_Event) in the encoding decision:
+the encoding scheme is orthogonal to the tracking mode (whether drag or motion events are
+reported). Applications that need drag events can check Supports_Button_Event independently.
+The pure SPARK function Resolve_Best_Encoding makes the cascade independently testable and
+provable without any I/O.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Platform Gating
+
+[REQUIREMENT]
+UID: FUNC-MSE-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Pre-Conditions and TTY / Foreground Guards
+STATEMENT: >>>
+The mouse protocol detection function shall apply the following guards before initiating
+any DECRPM probe, in order:
+
+  Guard 1 — Win32 Platform Gate (FUNC-MSE-010):
+    Evaluated first on Windows. If stdin is a Win32 Console handle (GetConsoleMode
+    succeeds), return with Win32_Console_Mouse set per FUNC-MSE-010, without probing.
+
+  Guard 2 — Linux/GPM Heuristic (FUNC-MSE-011):
+    Evaluated on POSIX before opening /dev/tty. If TERM=linux and /dev/gpmctl is
+    accessible, return with GPM_Available = True, Probed = False, without probing.
+
+  Guard 3 — Not a TTY:
+    If Termicap.TTY.Is_TTY (Stdin) returns False, return Mouse_Capabilities with
+    Best_Encoding = Unknown, Probed = False.
+
+  Guard 4 — Not the foreground process:
+    If Is_Foreground_Process (FUNC-OSC-007) returns False, return Mouse_Capabilities
+    with Best_Encoding = Unknown, Probed = False.
+
+  Guard 5 — /dev/tty not openable:
+    If Open_TTY (FUNC-OSC-001) fails, return Mouse_Capabilities with
+    Best_Encoding = Unknown, Probed = False.
+
+Guards 1–5 are evaluated before entering raw mode. If all guards pass, the batched DECRPM
+probe session (FUNC-MSE-005) is executed.
+<<<
+COMMENT: >>>
+The guard ordering mirrors FUNC-KKB-009 and FUNC-KKB-011. Win32 and GPM gates are placed
+before the generic TTY/foreground checks because they are platform-specific short-circuits
+that do not require opening /dev/tty. The GPM guard (guard 2) precedes the TTY check to
+avoid the overhead of opening /dev/tty on a Linux text console where DECRPM would fail
+anyway. Guards 3 and 4 follow the OSC-INFRA pattern established in FUNC-OSC-007 and
+FUNC-OSC-008, protecting against probing in non-interactive or background processes.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-MSE-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Win32 Platform Gate — Console API Mouse
+STATEMENT: >>>
+On the Windows platform, before initiating any DECRPM probe, the mouse detection function
+shall check whether stdin is a Win32 Console handle by calling Win32.Wincon.GetConsoleMode
+on the standard input handle (STD_INPUT_HANDLE).
+
+If GetConsoleMode returns Win32.TRUE (genuine Windows Console, not a Cygwin/MSYS2 PTY),
+the function shall return Mouse_Capabilities with:
+  Win32_Console_Mouse := True
+  Best_Encoding       := Unknown
+  all Supports_*      := False
+  Probed              := False
+
+and shall not issue any DECRPM queries.
+
+If GetConsoleMode returns Win32.FALSE (Cygwin/MSYS2 PTY or other pipe), the Win32 gate
+does not fire and detection proceeds to guard 2 (FUNC-MSE-009), following the POSIX path.
+
+On POSIX platforms (Linux, macOS, BSD), the Win32 gate is skipped entirely; guard 2 is
+the first check evaluated.
+<<<
+COMMENT: >>>
+Win32_Console_Mouse = True signals to the caller that mouse input is available via the
+Windows Console API (ReadConsoleInput with MOUSE_EVENT records), not via DECRPM. The
+caller is responsible for using the appropriate API; this library detects availability only.
+The GetConsoleMode predicate reuses the same Windows Console detection already present in
+FUNC-WIN-003 and FUNC-KKB-010, keeping the Windows gate consistent across features.
+Cygwin/MSYS2 PTYs pass POSIX probing (they support DECRPM escape sequences through the
+PTY layer), so they correctly fall through to the POSIX detection path.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-MSE-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Linux Console / GPM Fallback Detection
+STATEMENT: >>>
+On POSIX platforms, before opening /dev/tty, the mouse detection function shall check
+whether the current environment indicates a Linux text console with GPM support, using
+the following heuristic:
+
+  Condition: TERM environment variable equals "linux"
+         AND the socket file /dev/gpmctl is accessible (Ada.Directories.Exists or
+             equivalent check returns True)
+
+If this condition holds, the function shall return Mouse_Capabilities with:
+  GPM_Available  := True
+  Best_Encoding  := Unknown
+  all Supports_* := False
+  Probed         := False
+
+and shall not issue any DECRPM queries.
+
+If TERM=linux but /dev/gpmctl does not exist, GPM is not running; the function shall
+proceed to guard 3 (FUNC-MSE-009), issue the DECRPM probe, and expect all modes to
+return Not_Recognized (Best_Encoding = None).
+
+On non-Linux platforms or when TERM /= "linux", this heuristic is skipped.
+<<<
+COMMENT: >>>
+The Linux text console (virtual terminal, TERM=linux) does not implement DEC private mode
+queries; sending DECRPM to a Linux console produces no response, causing the detection to
+time out and return Best_Encoding = None. Mouse support on the Linux console is provided
+exclusively by the GPM (General Purpose Mouse) daemon via the /dev/gpmctl Unix domain
+socket. Detecting GPM via the existence of /dev/gpmctl (rather than attempting to connect
+to it) is intentionally lightweight: we are detecting capability, not establishing a session.
+A more thorough approach (connect, send a GPM_OPEN request) would be more accurate but adds
+significant complexity and a latency risk for a detection-only library. Using Ada.Directories.Exists
+avoids any SPARK_Mode issues and is already used in the Cygwin detection path. The TERM=linux
+condition (rather than checking /proc/tty/drivers or similar) is the same heuristic used by
+tcell and notcurses: it is well-established and has negligible false-positive rate on modern
+systems. An alternative design considered was to probe DECRPM anyway and treat a timeout as
+a GPM hint; this was rejected because it adds a 1-second timeout delay on every Linux
+console session.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Multiplexer Awareness
+
+[REQUIREMENT]
+UID: FUNC-MSE-012
+STATUS: Approved
+PRIORITY: Should
+TITLE: Terminal Multiplexer Caveat for DECRPM Responses
+STATEMENT: >>>
+The mouse protocol detection function shall be aware that terminal multiplexers (tmux,
+GNU screen) may intercept, swallow, or rewrite DECRPM responses:
+
+  - Under tmux: DECRPM responses for mouse modes may be returned with values that reflect
+    tmux's own state rather than the outer terminal's capabilities.
+  - Under GNU screen: DECRPM queries may receive no response, causing a total timeout.
+
+For v1, the library shall adopt strategy (a): attempt the DECRPM probe regardless of
+multiplexer presence, accept whatever responses are received, and document the limitation.
+The library shall detect multiplexer presence via the TMUX and STY environment variables
+(already available from the TERM-ID feature): if TMUX is set (tmux) or STY is set (screen),
+the returned Mouse_Capabilities record shall have an additional diagnostic note, but the
+Supports_* fields shall be populated with whatever DECRPM responded.
+
+DCS passthrough wrapping (strategy b) for transparent outer-terminal probing is deferred
+to a future version and shall be noted as a known limitation in the implementation.
+
+The multiplexer detection relies on existing TERM-ID infrastructure; this requirement
+does not introduce new OS calls.
+<<<
+COMMENT: >>>
+Strategy (a) — probe anyway, accept partial results — is the approach used by tcell and
+crossterm for multiplexer environments. It is pragmatic: the DECRPM responses under tmux
+reflect tmux's supported mouse modes, which is often sufficient for callers (applications
+running inside tmux still interact with the tmux mouse model). DCS passthrough (strategy b,
+used by some notcurses builds for SGR pixel detection) is more correct but requires
+reconstructing the outer-terminal response through the multiplexer's DCS passthrough
+mechanism, which is complex to implement and test. Deferring it avoids blocking this
+feature on multiplexer DCS support. The diagnostic note (that a multiplexer was detected)
+gives callers the option to handle this case specially without the library making the
+decision for them.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Timeout Behaviour
+
+[REQUIREMENT]
+UID: FUNC-MSE-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Probe Session Timeout and Partial Response Handling
+STATEMENT: >>>
+The batched DECRPM mouse probe session shall use a timeout of 1000 milliseconds (1 second)
+for the entire session (from writing the first query to receiving the DA1 sentinel), applied
+via the OSC-INFRA timeout mechanism (FUNC-OSC-004).
+
+On total timeout (DA1 sentinel not received within the deadline and no DECRPM responses
+parsed): the function shall return Mouse_Capabilities with Best_Encoding = Unknown,
+all Supports_* = False, Probed = False.
+
+On partial response (some DECRPM responses received before DA1 arrives, even if the full
+set was not returned): the function shall set Supports_* = True for modes whose responses
+were received, run the cascade (FUNC-MSE-008), and return the partially-populated
+Mouse_Capabilities with Probed = True.
+
+Implementations may use a shorter timeout (minimum 100 milliseconds) on platforms where
+round-trip latency to the terminal is known to be negligible (e.g., local PTY).
+<<<
+COMMENT: >>>
+The 1000 ms default matches FUNC-KKB-013 and FUNC-OSC-004. A single timeout for the
+entire six-query batch (rather than per-query timeouts) is simpler and imposes no
+additional overhead: the DA1 sentinel bounds the entire batch, so the timeout is defined
+as the interval from batch-write to DA1-receipt. Partial response handling (returning
+what was parsed rather than discarding all results on a partial timeout) is a deliberate
+choice: if a slow terminal has replied for five of six modes before the deadline, those
+five results are valid and useful. Best_Encoding = Unknown is reserved for total timeout
+(no DA1, no usable data), distinguishing it from Best_Encoding = None (DA1 received, all
+modes returned Not_Recognized).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Error Handling
+
+[REQUIREMENT]
+UID: FUNC-MSE-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: No-Exception Guarantee for Detect_Mouse_Protocols
+STATEMENT: >>>
+The top-level mouse protocol detection function Detect_Mouse_Protocols shall never
+propagate an exception to its caller under any circumstances, including:
+
+  - /dev/tty cannot be opened (FUNC-OSC-001 returns an error).
+  - tcgetattr fails (FUNC-OSC-002 returns an error).
+  - tcsetattr fails during raw-mode entry (FUNC-OSC-003 returns an error).
+  - Write_Query returns Success = False for any DECRPM query or the DA1 sentinel.
+  - The session times out entirely (FUNC-MSE-013, total timeout).
+  - Any DECRPM response buffer is garbled (Parse_Mouse_DECRPM_Response returns Valid = False).
+  - An EINTR or EAGAIN condition is encountered during select() or read().
+  - Restore_Termios fails (its failure is silently ignored per FUNC-OSC-002).
+  - Ada.Directories.Exists raises when checking /dev/gpmctl (treated as file absent).
+  - GetConsoleMode raises on Windows (treated as gate-not-fired).
+
+All failure modes shall cause the function to return either Best_Encoding = Unknown
+(probe could not complete) or a partial Mouse_Capabilities (probe partially completed),
+as specified in FUNC-MSE-009 and FUNC-MSE-013. The function shall not log or signal
+errors to the caller; graceful degradation is the sole response.
+
+The no-exception contract applies even when called with a null or invalid file descriptor.
+<<<
+COMMENT: >>>
+The no-exception policy is universal across all Termicap detection functions, stated most
+explicitly in FUNC-KKB-014 and FUNC-CYG-016. A capability-detection library that crashes
+the caller on a terminal I/O error is categorically defective. The enumerate of specific
+failure modes provides implementors with a comprehensive checklist.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-MSE-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Termios Restore on All Exit Paths
+STATEMENT: >>>
+The mouse protocol detection implementation shall restore terminal attributes (via
+FUNC-OSC-002 Restore_Termios) on every exit path from the raw-mode section, including:
+
+  - Normal exit after all DECRPM responses or DA1 sentinel received.
+  - Exit due to partial response + DA1 received early.
+  - Exit due to total timeout (no DA1 within deadline).
+  - Exit due to a write failure (Write_Query returns Success = False).
+  - Exit due to any other I/O error during the probe session.
+
+Terminal attributes shall be restored before the /dev/tty file descriptor is closed,
+preserving the ordering: open → save → set-raw → [probe] → restore → close. Under no
+circumstances shall the function exit the raw-mode section without first attempting
+Restore_Termios, even if Restore_Termios itself fails.
+
+This requirement mirrors FUNC-KKB-015 and applies identically to the mouse probe session.
+<<<
+COMMENT: >>>
+Unconditional termios restore is the single most critical safety invariant of any
+raw-mode probe. Leaving the terminal in raw mode after detection would break the user's
+shell session. The ordering constraint (restore before close) is identical to FUNC-KKB-015
+and FUNC-OSC-002 and must not be violated even in error paths.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Caching
+
+[REQUIREMENT]
+UID: FUNC-MSE-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: One-Probe-Per-Process Caching
+STATEMENT: >>>
+The library shall cache the Mouse_Capabilities result after the first call to
+Detect_Mouse_Protocols and return the cached value on all subsequent calls without
+re-probing. The cache shall be stored as package-level state in a protected object or
+equivalent thread-safe structure, consistent with FUNC-KKB-017 and FUNC-CAP-003.
+
+The cache shall be initialised lazily: no probe is performed until the first call to
+Detect_Mouse_Protocols (or an equivalent public entry point). Eager probing at library
+elaboration time is not permitted.
+
+A caller that needs a fresh result (e.g., after a terminal change or for testing) should
+be able to obtain one via a separate Detect function that bypasses the cache (analogous
+to FUNC-CAP-004). This bypass is classified as a Should requirement.
+
+The cache shall not be invalidated by SIGWINCH: mouse protocol support is invariant
+across terminal resize events.
+<<<
+COMMENT: >>>
+One-probe-per-process caching is the universal pattern for all Termicap capability
+detections (FUNC-CAP-003). Mouse protocol support is a property of the terminal emulator,
+not of the terminal size, so it does not change during a process's lifetime. Lazy
+initialisation avoids OS calls during library elaboration (unsafe). The SIGWINCH exclusion
+mirrors FUNC-KKB-017 for the same reason.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK Boundary and Package Structure
+
+[REQUIREMENT]
+UID: FUNC-MSE-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: Package Structure and SPARK Boundary
+STATEMENT: >>>
+The mouse protocol detection feature shall be implemented in a new package
+Termicap.Mouse, structured as follows:
+
+Package specification (src/termicap-mouse.ads):
+  - SPARK_Mode => On at the package level.
+  - Declares Mouse_Encoding (FUNC-MSE-001) and Mouse_Capabilities (FUNC-MSE-002)
+    as public types.
+  - Declares the mode constants (FUNC-MSE-003) as public named constants.
+  - Declares the DECRPM_Parse_Result record and Parse_Mouse_DECRPM_Response function
+    (FUNC-MSE-007) with SPARK_Mode => On and Global => null contracts.
+  - Declares Resolve_Best_Encoding (FUNC-MSE-008) with SPARK_Mode => On.
+  - Declares the public function Detect_Mouse_Protocols with SPARK_Mode => Off
+    (it calls FFI-dependent OSC-INFRA and DECRPM operations).
+
+Package body (src/termicap-mouse.adb):
+  - SPARK_Mode => Off at the package level.
+  - Contains the body of Detect_Mouse_Protocols and all OS-facing helpers.
+  - Contains the bodies of Parse_Mouse_DECRPM_Response and Resolve_Best_Encoding with
+    SPARK_Mode => On applied locally to each subprogram body (mixed SPARK pattern,
+    consistent with FUNC-KKB-018 and FUNC-CYG-017).
+  - Contains the protected cache object for one-probe-per-process caching (FUNC-MSE-016).
+  - Withed packages: Termicap.OSC (or its I/O subpackage), Termicap.TTY,
+    Termicap.DECRPM (for Mode_Id, Mode_Status, FUNC-RPM-001, FUNC-RPM-002).
+
+Platform-specific I/O bodies:
+  - POSIX path: src/posix/termicap-mouse-io.adb (SPARK_Mode => Off).
+  - Windows path: src/windows/termicap-mouse-io.adb (SPARK_Mode => Off), which adds
+    the GetConsoleMode Win32 gate (FUNC-MSE-010).
+
+File naming shall follow the project convention: lowercase with dashes matching the
+package hierarchy (termicap-mouse.ads, termicap-mouse.adb).
+<<<
+COMMENT: >>>
+The package structure mirrors Termicap.Keyboard (FUNC-KKB-018) exactly: SPARK_Mode => On
+specification with pure types and parse functions, SPARK_Mode => Off body with mixed local
+SPARK_Mode => On on the pure subprogram bodies, and per-OS I/O body files. The mixed SPARK
+pattern (documented in ada-lessons-learned.md) avoids circular SPARK boundary issues while
+keeping the pure parsing and cascade logic provable. Withing Termicap.DECRPM for the Mode_Id
+and Mode_Status types avoids redefinition and ensures that the mouse constants are
+interoperable with the general DECRPM infrastructure.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with Capability Record
+
+[REQUIREMENT]
+UID: FUNC-MSE-018
+STATUS: Approved
+PRIORITY: Could
+TITLE: Mouse_Capabilities Field in Terminal_Capabilities (Deferred)
+STATEMENT: >>>
+The Terminal_Capabilities record (FUNC-CAP-001) should be extended with a field:
+
+  Mouse : Termicap.Mouse.Mouse_Capabilities
+    -- The detected mouse protocol capabilities, populated by Detect_Mouse_Protocols
+    -- on the first call to Get or Detect (FUNC-CAP-003, FUNC-CAP-004). Defaults to
+    -- the canonical Unknown/empty value when mouse detection has not been performed.
+
+Integration into Terminal_Capabilities is OUT OF SCOPE for this feature specification
+and is deferred as an explicit non-goal. The integration shall be tracked as a separate
+work item when MOUSE is promoted from Draft to Approved and the Tier 4 capability record
+update is scheduled.
+
+The Detect function for Terminal_Capabilities (FUNC-CAP-004) shall invoke
+Detect_Mouse_Protocols as part of the sub-detector sequence when this field is present.
+<<<
+COMMENT: >>>
+Deferring integration into Terminal_Capabilities follows the same pattern as FUNC-KKB-019:
+the core detection function Detect_Mouse_Protocols is fully usable as a standalone API,
+and the capability record integration can be deferred until the feature is stabilised.
+This non-goal is stated explicitly to prevent implementors from feeling obligated to
+modify capability_record.sdoc as part of this feature. The Should priority (vs Must)
+reflects that standalone use is sufficient for Tier 4.
+<<<
+
+[/SECTION]

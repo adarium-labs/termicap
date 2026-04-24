@@ -2056,6 +2056,168 @@ Termicap.Keyboard.IO.Detect_Keyboard_Protocol      [SPARK_Mode => Off]
 
 ---
 
+## Scenario 27: Mouse Protocol Detection
+
+End-to-end scenario for `Detect_Mouse_Protocols`. Shows the Win32 fast-path gate (Windows only), the GPM heuristic (POSIX/Linux only), the three remaining guards, the single batched DECRPM probe (six queries + one DA1 sentinel), the SPARK Silver frame scanner, the `Resolve_Best_Encoding` cascade, and the per-process cache. Worst-case cold-start latency is 1 s (the full batch times out). Cached calls return in < 1 µs.
+
+### Phase A — Cache Check and Platform Gates
+
+```
+Caller (application)
+  │
+  │  Detect_Mouse_Protocols
+  ▼
+Termicap.Mouse.IO.Detect_Mouse_Protocols      [SPARK_Mode => Off]
+  │
+  │  Step 1: Cache check (protected object)
+  │    Is_Cached = True?
+  │      Yes → return Cached_Result immediately  (< 1 µs)
+  │      No  → continue
+  │
+  │  [Windows body only]
+  │  Step 2: Win32 Console gate
+  │    GetConsoleMode (STD_INPUT_HANDLE)
+  │      Succeeds?
+  │        Yes → Cached_Result :=
+  │                (Best_Encoding        => Unknown,
+  │                 Win32_Console_Mouse  => True,
+  │                 Probed               => False, others => False)
+  │              Store in cache; return immediately
+  │        No  → handle is Cygwin/MSYS2 PTY; continue to Step 3
+  │  [End Windows-only block]
+  │
+  │  [POSIX body only]
+  │  Step 3: Linux/GPM heuristic
+  │    Value (Env, "TERM") = "linux"
+  │    and Ada.Directories.Exists ("/dev/gpmctl")  [ADR-0024]
+  │      Both true?
+  │        Yes → Cached_Result :=
+  │                (Best_Encoding  => Unknown,
+  │                 GPM_Available  => True,
+  │                 Probed         => False, others => False)
+  │              Store in cache; return immediately
+  │        No  → continue to Step 4
+  │  [End POSIX-only block]
+  │
+  └──► Proceed to Phase B
+```
+
+### Phase B — Guards and Session Open
+
+```
+  │
+  │  Step 4: Non-TTY guard
+  │    Is_TTY (Stdin) = False?          [Termicap.TTY — SPARK_Mode => Off]
+  │      → return NO_MOUSE_CAPABILITIES (Probed => False); cache and return
+  │
+  │  Step 5: Foreground guard
+  │    Is_Foreground_Process = False?   [Termicap.OSC — SPARK_Mode => Off]
+  │      → return NO_MOUSE_CAPABILITIES (Probed => False); cache and return
+  │
+  │  Step 6: Open Probe_Session         [Termicap.OSC — SPARK_Mode => Off]
+  │    → /dev/tty open
+  │    → Save termios, set raw mode, drain input
+  │    Fails?
+  │      → return NO_MOUSE_CAPABILITIES; cache and return
+  │
+  └──► Session open; proceed to Phase C
+```
+
+### Phase C — Batched DECRPM Probe
+
+```
+  │
+  │  Step 7: Write six DECRPM queries + DA1 sentinel in one batch
+  │    [Termicap.OSC.Write_Query / Sentinel_Query — SPARK_Mode => Off]
+  │    ┌──────────────────────────────────────────────────────────────────┐
+  │    │  Write CSI ? 1000 $ p  (MODE_MOUSE_X10)                        │
+  │    │  Write CSI ? 1002 $ p  (MODE_MOUSE_BUTTON_EVENT)               │
+  │    │  Write CSI ? 1003 $ p  (MODE_MOUSE_ANY_EVENT)                  │
+  │    │  Write CSI ? 1015 $ p  (MODE_MOUSE_URXVT)                      │
+  │    │  Write CSI ? 1006 $ p  (MODE_MOUSE_SGR)                        │
+  │    │  Write CSI ? 1016 $ p  (MODE_MOUSE_SGR_PIXELS)                 │
+  │    │  Write DA1 sentinel    (ESC [ c)                                │
+  │    └──────────────────────────────────────────────────────────────────┘
+  │
+  │  Step 8: Sentinel-bounded read loop  (MOUSE_PROBE_TIMEOUT_MS = 1_000 ms)
+  │    ┌──────────────────────────────────────────────────────────────────┐
+  │    │  Accumulation loop:                                              │
+  │    │    Timed_Read (/dev/tty) → append to Response buffer            │
+  │    │    Contains_DA1_Response (Response, Length)  [SPARK Silver]     │
+  │    │      → scan for ESC [ ? <digits/semicolons> c pattern           │
+  │    │      → if found: record pre-sentinel length; exit loop          │
+  │    │    if timeout or overflow: Timed_Out := True; exit loop         │
+  │    └──────────────────────────────────────────────────────────────────┘
+  │
+  │    Timed_Out = True and Resp_Length = 0?
+  │      → Probe_Session.Finalize (RAII)
+  │      → return NO_MOUSE_CAPABILITIES (Probed => False); cache and return
+  │
+  └──► Pre-sentinel bytes accumulated; proceed to Phase D
+```
+
+### Phase D — Frame Scan and Encoding Cascade
+
+```
+  │
+  │  Step 9: Scan pre-sentinel bytes for DECRPM frames
+  │    [Body-private scanner in Termicap.Mouse.IO]
+  │    Caps := NO_MOUSE_CAPABILITIES;  Caps.Probed := True;
+  │
+  │    for Pos in Response'First .. Resp_Length loop
+  │      │
+  │      │  Parse_Mouse_DECRPM_Response (Response, Length_From_Pos)
+  │      │    [Termicap.Mouse — SPARK Silver, Global => null]
+  │      │    → match ESC [ ? <Ps_digits>+ ; <Pm_digit> $ y
+  │      │    → Result.Valid = True?
+  │      │        Yes → decode Mode (Ps) and Status (Pm)
+  │      │              Pm in 1..4 (Set / Reset / Permanently_Set /
+  │      │                          Permanently_Reset) => Supports_* := True
+  │      │              Pm = 0 (Not_Recognized)         => Supports_* := False
+  │      │              Map Mode to Supports_* field:
+  │      │                1000 → Caps.Supports_X10
+  │      │                1002 → Caps.Supports_Button_Event
+  │      │                1003 → Caps.Supports_Any_Event
+  │      │                1015 → Caps.Supports_URXVT
+  │      │                1006 → Caps.Supports_SGR
+  │      │                1016 → Caps.Supports_SGR_Pixels
+  │      │              Advance Pos past this frame
+  │      │        No  → advance Pos by 1 (garbled or partial frame)
+  │      └──► continue
+  │    end loop;
+  │
+  │  Step 10: Resolve_Best_Encoding (Caps)
+  │    [Termicap.Mouse — SPARK Silver, Global => null]
+  │    Encoding cascade (ADR-0023):
+  │      Caps.Supports_SGR_Pixels? → SGR_Pixels
+  │      Caps.Supports_SGR?        → SGR
+  │      Caps.Supports_URXVT?      → URXVT
+  │      Caps.Supports_X10?        → X10
+  │      else                       → None
+  │    Caps.Best_Encoding := cascade result
+  │
+  │  Step 11: Cleanup and cache
+  │    Probe_Session.Finalize (unconditional RAII)
+  │      → Restore_Termios, close /dev/tty, release single-session guard
+  │    Store Caps in cache; return Caps
+  │
+  └──► Mouse_Capabilities returned to caller
+```
+
+**Key properties:**
+
+- **Worst-case latency:** 1 s cold-start (single batch + DA1 sentinel timeout). Unlike the keyboard cascade (two serial probes × 1 s each), mouse detection uses one batched session for all six modes.
+- **Cached calls:** The protected-object cache is populated on the first call. All subsequent calls return the cached `Mouse_Capabilities` without entering the probe cascade or opening a terminal session. Latency < 1 µs.
+- **Windows fast path:** `GetConsoleMode (STD_INPUT_HANDLE)` is checked before any probe. A native Windows console returns `Win32_Console_Mouse = True` with zero I/O overhead.
+- **GPM fast path (POSIX/Linux):** `TERM=linux` + `/dev/gpmctl` exists → `GPM_Available = True` with no DECRPM probe and no terminal I/O.
+- **Partial results:** If the session times out after receiving some DECRPM responses, those responses are honoured and `Probed = True` is set. A total timeout with zero pre-sentinel bytes returns `NO_MOUSE_CAPABILITIES` (`Probed = False`).
+- **Frame matching by mode number:** Responses are matched by the decoded `Ps` field (`Mode`), not by position, so a terminal that reorders or elides frames still produces a correct result.
+- **Graceful degradation:** On any error — non-TTY stdin, background process, `Probe_Session` open failure, total timeout — the function returns `NO_MOUSE_CAPABILITIES` or a partial result without raising an exception (FUNC-MSE-014).
+- **Termios safety:** `Probe_Session.Finalize` is called unconditionally on every exit path. Terminal state is always restored regardless of probe outcome (FUNC-MSE-015).
+- **SPARK boundary:** `Termicap.Mouse` (spec) is fully SPARK Silver — two pure functions with `Global => null`, no FFI, no global state. `Termicap.Mouse.IO` is `SPARK_Mode => Off` throughout (session management, terminal I/O, protected cache object).
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -2091,4 +2253,9 @@ Termicap.Keyboard.IO.Detect_Keyboard_Protocol      [SPARK_Mode => Off]
 - **ADR-0020** (`docs/adr/0020-cygwin-pty-detection-strategy.md`): Rationale for the named-pipe name inspection strategy over alternative PTY detection approaches
 - **Tech Spec KITTY-KB** (`docs/tech-specs/kitty-keyboard.md`): Kitty Keyboard Protocol detection design rationale — cascade strategy, DA1 sentinel reuse, SPARK Silver boundary, platform dispatch for Win32 gate
 - **ADR-0021** (`docs/adr/0021-defer-keyboard-capability-integration.md`): Rationale for deferring `Keyboard_Capability` integration into `Terminal_Capabilities`, and the forward-compatible migration path
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017
+- **Tech Spec MOUSE** (`docs/tech-specs/mouse-protocol.md`): Mouse protocol detection design rationale — batched DECRPM probe, encoding cascade, GPM heuristic, Win32 gate, SPARK Silver boundary
+- **ADR-0022** (`docs/adr/0022-batched-single-sentinel-decrpm-mouse-probe.md`): Rationale for issuing all six DECRPM queries as a single batched session with one DA1 sentinel
+- **ADR-0023** (`docs/adr/0023-mouse-encoding-cascade-order.md`): Rationale for the SGR_Pixels > SGR > URXVT > X10 > None cascade order
+- **ADR-0024** (`docs/adr/0024-gpm-detection-heuristic.md`): Rationale for the `TERM=linux` + `/dev/gpmctl` GPM detection heuristic
+- **ADR-0026** (`docs/adr/0026-defer-mouse-capability-integration.md`): Rationale for deferring `Mouse_Capabilities` integration into `Terminal_Capabilities` and the migration path
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018

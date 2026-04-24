@@ -1,0 +1,141 @@
+-------------------------------------------------------------------------------
+--  Termicap.Mouse.IO - Mouse Protocol Detection I/O Orchestration
+--
+--  Copyright (c) 2026 Termicap Contributors
+--  SPDX-License-Identifier: Apache-2.0
+-------------------------------------------------------------------------------
+
+--  @summary
+--  Platform-dispatched I/O orchestration for mouse protocol detection:
+--  caching entry point and cache-bypass probe.
+--
+--  @description
+--  This child package provides the two public entry points for mouse protocol
+--  detection:
+--
+--    Detect_Mouse_Protocols  — cached, process-lifetime result.
+--    Probe_Mouse_Protocols   — uncached, always runs the full cascade.
+--
+--  Detect_Mouse_Protocols implements the five-guard cascade (FUNC-MSE-009):
+--    Guard 1 (Windows only): Win32 Console gate — if GetConsoleMode succeeds
+--      on STD_INPUT_HANDLE, return Win32_Console_Mouse = True immediately.
+--    Guard 2 (POSIX only):   Linux/GPM heuristic — if TERM=linux and
+--      /dev/gpmctl exists, return GPM_Available = True immediately.
+--    Guard 3:                Non-TTY guard — if Is_TTY (Stdin) = False,
+--      return NO_MOUSE_CAPABILITIES.
+--    Guard 4:                Foreground guard — if the process is not in the
+--      foreground process group, return NO_MOUSE_CAPABILITIES.
+--    Guard 5:                /dev/tty openability — if Probe_Session fails to
+--      open, return NO_MOUSE_CAPABILITIES.
+--  If all guards pass, a batched DECRPM probe session (FUNC-MSE-005) is
+--  executed: six DECRPM queries (mode 1000, 1002, 1003, 1015, 1006, 1016)
+--  are written in a single batch, followed by one DA1 sentinel, and all
+--  responses are read until the DA1 terminates the session (ADR-0022).
+--  The Resolve_Best_Encoding cascade (FUNC-MSE-008) then derives Best_Encoding
+--  from the per-mode Supports_* flags, and the result is cached in a
+--  package-level protected object for the process lifetime (FUNC-MSE-016).
+--
+--  The no-exception guarantee (FUNC-MSE-014) means any failure degrades
+--  gracefully: partial responses are preserved (Probed = True, partial flags
+--  set); total failures return NO_MOUSE_CAPABILITIES (Probed = False).
+--  Terminal attributes are restored on every exit path from the raw-mode
+--  section, including error and timeout paths (FUNC-MSE-015).
+--
+--  Probe_Mouse_Protocols runs the identical cascade without consulting or
+--  updating the cache, intended for test harnesses and edge cases where a
+--  fresh probe is required after a terminal change (FUNC-MSE-016 Should clause).
+--
+--  I/O is performed exclusively through Termicap.OSC.Probe_Session,
+--  Termicap.OSC.Write_Query, and Termicap.OSC.Sentinel_Query (FUNC-MSE-005);
+--  no direct tcgetattr / tcsetattr / select / read / write calls are made.
+--  Termios restore is guaranteed by the RAII semantics of Probe_Session's
+--  Ada.Finalization.Limited_Controlled base (FUNC-MSE-015).
+--
+--  Platform differences are isolated in two separate body files:
+--    src/posix/termicap-mouse-io.adb   — cascade starts at guard 2 (GPM).
+--    src/windows/termicap-mouse-io.adb — cascade starts at guard 1 (Win32).
+--  The single shared spec here allows the project's GPR source-dir mechanism
+--  to select exactly one body file per platform without any conditional
+--  compilation in the spec, keeping Win32 dependencies out of POSIX object
+--  files entirely (ADR-0018).
+--
+--  This package is SPARK_Mode Off because it depends on Ada.Finalization
+--  controlled types (Probe_Session), terminal I/O, and the protected-object
+--  cache; all are outside the SPARK 2014 language subset.  The pure type
+--  definitions, parsing functions, and cascade remain provable in the parent
+--  package Termicap.Mouse (SPARK_Mode On).
+--
+--  Requirements Coverage:
+--    - @relation(FUNC-MSE-005): Single batched DECRPM probe session (ADR-0022)
+--    - @relation(FUNC-MSE-009): Five-guard cascade before probing
+--    - @relation(FUNC-MSE-010): Win32 Console platform gate (Windows body)
+--    - @relation(FUNC-MSE-011): Linux/GPM heuristic (POSIX body; ADR-0024)
+--    - @relation(FUNC-MSE-012): Multiplexer awareness; probe regardless of TMUX/STY
+--    - @relation(FUNC-MSE-013): 1000 ms total batch timeout; partial-result preservation
+--    - @relation(FUNC-MSE-014): No-exception guarantee for Detect_Mouse_Protocols
+--    - @relation(FUNC-MSE-015): Termios restore on all exit paths via RAII
+--    - @relation(FUNC-MSE-016): One-probe-per-process cache; Probe_Mouse_Protocols bypass
+--    - @relation(FUNC-MSE-017): Package structure and SPARK boundary
+
+pragma SPARK_Mode (Off);
+
+package Termicap.Mouse.IO is
+
+   ---------------------------------------------------------------------------
+   --  Cached Detection Entry Point (FUNC-MSE-009, FUNC-MSE-016)
+   ---------------------------------------------------------------------------
+
+   --  @summary Detect mouse protocol support, returning a cached result on all
+   --  subsequent calls after the first.
+   --  @description Implements the platform cascade:
+   --    Guard 1 (Windows): GetConsoleMode (STD_INPUT_HANDLE) — on success,
+   --      return Mouse_Capabilities with Win32_Console_Mouse = True without
+   --      probing (FUNC-MSE-010).
+   --    Guard 2 (POSIX): TERM=linux + /dev/gpmctl exists — return
+   --      Mouse_Capabilities with GPM_Available = True without probing
+   --      (FUNC-MSE-011, ADR-0024).
+   --    Guard 3: Is_TTY (Stdin) = False — return NO_MOUSE_CAPABILITIES.
+   --    Guard 4: foreground process check (via Probe_Session.Open) — return
+   --      NO_MOUSE_CAPABILITIES when not in the foreground process group.
+   --    Guard 5: Probe_Session.Open fails — return NO_MOUSE_CAPABILITIES.
+   --    Probe: send six DECRPM queries (1000, 1002, 1003, 1015, 1006, 1016)
+   --      plus one DA1 sentinel in a single batched session (ADR-0022);
+   --      read responses until DA1; parse all DECRPM frames by mode number;
+   --      run Resolve_Best_Encoding cascade; set Probed = True.
+   --  The result is stored in a package-level protected object after the first
+   --  call and returned from the cache on all subsequent calls (FUNC-MSE-016).
+   --  This function never propagates an exception under any circumstances;
+   --  any failure path returns NO_MOUSE_CAPABILITIES or a partial result
+   --  (FUNC-MSE-014).  Terminal attributes are restored on every exit path
+   --  including error and timeout (FUNC-MSE-015).
+   --  @return Mouse_Capabilities with the detected encoding preference, per-mode
+   --          flags, platform flags, and Probed metadata.  Returns
+   --          NO_MOUSE_CAPABILITIES on complete failure.
+   --  @relation(FUNC-MSE-009): Full five-guard cascade
+   --  @relation(FUNC-MSE-010): Win32 Console gate (Windows body only)
+   --  @relation(FUNC-MSE-011): Linux/GPM heuristic (POSIX body only)
+   --  @relation(FUNC-MSE-014): No-exception guarantee
+   --  @relation(FUNC-MSE-016): One-probe-per-process caching
+   function Detect_Mouse_Protocols return Mouse_Capabilities;
+
+   ---------------------------------------------------------------------------
+   --  Cache-Bypass Probe (FUNC-MSE-016 Should Clause)
+   ---------------------------------------------------------------------------
+
+   --  @summary Run the full mouse protocol detection cascade without consulting
+   --  or updating the process-lifetime cache.
+   --  @description Executes the identical platform cascade as
+   --  Detect_Mouse_Protocols (all five guards + batched DECRPM probe + cascade)
+   --  but does not read from or write to the protected-object cache.
+   --  Intended for test harnesses that need a fresh probe result (e.g., after
+   --  a terminal change or TMUX reattach) and for integration tests that must
+   --  verify detection behaviour in isolation from the cache.
+   --  Like Detect_Mouse_Protocols, this function never propagates an exception;
+   --  any failure path returns NO_MOUSE_CAPABILITIES or a partial result
+   --  (FUNC-MSE-014).
+   --  @return Mouse_Capabilities from a fresh cascade execution.
+   --  @relation(FUNC-MSE-016): Cache-bypass detection for test use
+   --  @relation(FUNC-MSE-014): No-exception guarantee
+   function Probe_Mouse_Protocols return Mouse_Capabilities;
+
+end Termicap.Mouse.IO;
