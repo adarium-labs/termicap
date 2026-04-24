@@ -44,10 +44,7 @@ is
    --  Returns INVALID_HEX (16) for non-hex bytes.
    ---------------------------------------------------------------------------
 
-   function Hex_Digit_Value (B : Byte) return Natural
-   with
-     Post => Hex_Digit_Value'Result <= INVALID_HEX
-   is
+   function Hex_Digit_Value (B : Byte) return Natural with Post => Hex_Digit_Value'Result <= INVALID_HEX is
    begin
       if B >= BYTE_DIG0 and then B <= BYTE_DIG9 then
          return Natural (B) - Natural (BYTE_DIG0);
@@ -67,8 +64,11 @@ is
    function Query_Sequence (Kind : Query_Kind) return Byte_Array is
    begin
       case Kind is
-         when Background => return OSC_BG_QUERY;
-         when Foreground => return OSC_FG_QUERY;
+         when Background =>
+            return OSC_BG_QUERY;
+
+         when Foreground =>
+            return OSC_FG_QUERY;
       end case;
    end Query_Sequence;
 
@@ -76,12 +76,7 @@ is
    --  Hex Channel Parsing (FUNC-BGC-009)
    ---------------------------------------------------------------------------
 
-   function Parse_Hex_Channel
-     (Bytes  : Byte_Array;
-      Start  : Natural;
-      Length : Natural)
-      return Channel_Result
-   is
+   function Parse_Hex_Channel (Bytes : Byte_Array; Start : Natural; Length : Natural) return Channel_Result is
       --  Use a wider type to accumulate without overflow:
       --  max 4 hex digits = 0xFFFF = 65535, fits in Natural.
       --  But intermediate * 16 for 4 digits could be up to 65535 * 16 before
@@ -145,15 +140,10 @@ is
    --  RGB Prefix Detection (FUNC-BGC-008)
    ---------------------------------------------------------------------------
 
-   procedure Find_RGB_Prefix
-     (Bytes  :     Byte_Array;
-      Length :     Natural;
-      Offset : out Natural;
-      Found  : out Boolean)
-   is
+   procedure Find_RGB_Prefix (Bytes : Byte_Array; Length : Natural; Offset : out Natural; Found : out Boolean) is
    begin
       Offset := Bytes'First;
-      Found  := False;
+      Found := False;
 
       --  Need at least 4 bytes for "rgb:" and at least 1 byte after the colon
       if Length < 5 then
@@ -167,14 +157,14 @@ is
          pragma Loop_Invariant (I >= Bytes'First);
          pragma Loop_Invariant (I <= Bytes'First + Length - 5);
 
-         if Bytes (I)     = BYTE_r
+         if Bytes (I) = BYTE_r
            and then Bytes (I + 1) = BYTE_g
            and then Bytes (I + 2) = BYTE_b
            and then Bytes (I + 3) = BYTE_CLON
          then
             --  Found "rgb:" — offset points to byte after the colon
             Offset := I + 4;
-            Found  := True;
+            Found := True;
             return;
          end if;
       end loop;
@@ -189,7 +179,7 @@ is
          pragma Loop_Invariant (I >= Bytes'First);
          pragma Loop_Invariant (I <= Bytes'First + Length - 6);
 
-         if Bytes (I)     = BYTE_r
+         if Bytes (I) = BYTE_r
            and then Bytes (I + 1) = BYTE_g
            and then Bytes (I + 2) = BYTE_b
            and then Bytes (I + 3) = BYTE_a
@@ -197,7 +187,7 @@ is
          then
             --  Found "rgba:" — offset points to byte after the colon
             Offset := I + 5;
-            Found  := True;
+            Found := True;
             return;
          end if;
       end loop;
@@ -208,14 +198,14 @@ is
    ---------------------------------------------------------------------------
 
    procedure Split_RGB_Channels
-     (Bytes             :     Byte_Array;
-      Start             :     Natural;
-      Length            :     Natural;
+     (Bytes            : Byte_Array;
+      Start            : Natural;
+      Length           : Natural;
       Ch_R, Ch_G, Ch_B : out Channel_Slice;
-      Success           : out Boolean)
+      Success          : out Boolean)
    is
       --  End of the scan range (inclusive), absolute index
-      Last       : constant Natural := Start + Length - 1;
+      Last : constant Natural := Start + Length - 1;
 
       --  Positions of the first and second slash (absolute indices), 0 = not found
       Slash1_Pos : Natural := 0;
@@ -227,9 +217,9 @@ is
       B_Len : Natural;
    begin
       --  Initialize outputs defensively
-      Ch_R    := (Start => Start, Length => 1);
-      Ch_G    := (Start => Start, Length => 1);
-      Ch_B    := (Start => Start, Length => 1);
+      Ch_R := (Start => Start, Length => 1);
+      Ch_G := (Start => Start, Length => 1);
+      Ch_B := (Start => Start, Length => 1);
       Success := False;
 
       --  Scan for the first slash
@@ -297,7 +287,7 @@ is
       --  Find end of B channel: scan for 3rd slash (optional)
       declare
          B_Start : constant Natural := Slash2_Pos + 1;
-         B_End   : Natural          := Last;
+         B_End   : Natural := Last;
       begin
          for I in B_Start .. Last loop
             pragma Loop_Invariant (I >= B_Start);
@@ -323,9 +313,9 @@ is
             return;
          end if;
 
-         Ch_R    := (Start => Start,         Length => R_Len);
-         Ch_G    := (Start => Slash1_Pos + 1, Length => G_Len);
-         Ch_B    := (Start => B_Start,         Length => B_Len);
+         Ch_R := (Start => Start, Length => R_Len);
+         Ch_G := (Start => Slash1_Pos + 1, Length => G_Len);
+         Ch_B := (Start => B_Start, Length => B_Len);
          Success := True;
       end;
    end Split_RGB_Channels;
@@ -334,18 +324,14 @@ is
    --  RGB Response Parsing (FUNC-BGC-007)
    ---------------------------------------------------------------------------
 
-   function Parse_RGB_Response
-     (Bytes  : Byte_Array;
-      Length : Natural)
-      return Parse_Result
-   is
-      Prefix_Offset   : Natural;
-      Prefix_Found    : Boolean;
+   function Parse_RGB_Response (Bytes : Byte_Array; Length : Natural) return Parse_Result is
+      Prefix_Offset    : Natural;
+      Prefix_Found     : Boolean;
       Ch_R, Ch_G, Ch_B : Channel_Slice;
-      Split_OK        : Boolean;
-      R_Result        : Channel_Result;
-      G_Result        : Channel_Result;
-      B_Result        : Channel_Result;
+      Split_OK         : Boolean;
+      R_Result         : Channel_Result;
+      G_Result         : Channel_Result;
+      B_Result         : Channel_Result;
    begin
       if Length = 0 then
          return (Success => False);
@@ -411,12 +397,7 @@ is
             return (Success => False);
          end if;
 
-         return
-           (Success => True,
-            Color   =>
-              (Red   => R_Result.Value,
-               Green => G_Result.Value,
-               Blue  => B_Result.Value));
+         return (Success => True, Color => (Red => R_Result.Value, Green => G_Result.Value, Blue => B_Result.Value));
       end;
    end Parse_RGB_Response;
 
@@ -424,12 +405,7 @@ is
    --  OSC Header Stripping (FUNC-BGC-010)
    ---------------------------------------------------------------------------
 
-   function Strip_OSC_Header
-     (Bytes  : Byte_Array;
-      Length : Natural;
-      Kind   : Query_Kind)
-      return Strip_Result
-   is
+   function Strip_OSC_Header (Bytes : Byte_Array; Length : Natural; Kind : Query_Kind) return Strip_Result is
       --  Minimum: ESC ] 1 X ; + 1 payload byte = 6 bytes
       MIN_LENGTH : constant := 6;
 
@@ -444,16 +420,17 @@ is
       end if;
 
       --  Step 2: verify ESC ] at positions 1 and 2 (Bytes'First and Bytes'First + 1)
-      if Bytes (Bytes'First) /= BYTE_ESC
-        or else Bytes (Bytes'First + 1) /= BYTE_OSC
-      then
+      if Bytes (Bytes'First) /= BYTE_ESC or else Bytes (Bytes'First + 1) /= BYTE_OSC then
          return (Success => False);
       end if;
 
       --  Step 3: determine expected digit at position 4 (Bytes'First + 3)
       case Kind is
-         when Background => Expected_Digit := BYTE_DIG1;  --  '1' for OSC 11
-         when Foreground => Expected_Digit := BYTE_DIG0;  --  '0' for OSC 10
+         when Background =>
+            Expected_Digit := BYTE_DIG1;  --  '1' for OSC 11
+
+         when Foreground =>
+            Expected_Digit := BYTE_DIG0;  --  '0' for OSC 10
       end case;
 
       --  Step 4: verify '1' at position 3 and Expected_Digit at position 4
@@ -476,10 +453,7 @@ is
          Payload_End := Last;
 
          --  Check for ESC \ (two bytes at end)
-         if Length >= 2
-           and then Bytes (Last - 1) = BYTE_ESC
-           and then Bytes (Last)     = BYTE_ST
-         then
+         if Length >= 2 and then Bytes (Last - 1) = BYTE_ESC and then Bytes (Last) = BYTE_ST then
             --  Exclude the two terminator bytes
             if Last < 2 then
                return (Success => False);
@@ -503,10 +477,7 @@ is
             return (Success => False);
          end if;
 
-         return
-           (Success        => True,
-            Offset         => Payload_Start,
-            Payload_Length => Payload_Len);
+         return (Success => True, Offset => Payload_Start, Payload_Length => Payload_Len);
       end;
    end Strip_OSC_Header;
 
@@ -514,12 +485,8 @@ is
    --  COLORFGBG Parsing (FUNC-BGC-011)
    ---------------------------------------------------------------------------
 
-   function Parse_Colorfgbg
-     (Value : String)
-      return Colorfgbg_Result
-   is
-      FAIL : constant Colorfgbg_Result :=
-        (Success => False, Foreground => 0, Background => 0);
+   function Parse_Colorfgbg (Value : String) return Colorfgbg_Result is
+      FAIL : constant Colorfgbg_Result := (Success => False, Foreground => 0, Background => 0);
 
       First_Semi : Natural := 0;
       Last_Semi  : Natural := 0;
@@ -568,7 +535,7 @@ is
       end if;
 
       Has_Dig := False;
-      FG_Val  := 0;
+      FG_Val := 0;
 
       for I in Value'First .. First_Semi - 1 loop
          pragma Loop_Invariant (I >= Value'First);
@@ -584,7 +551,7 @@ is
             if FG_Val > 1_000 then
                return FAIL;
             end if;
-            FG_Val  := FG_Val * 10 + (Character'Pos (C) - Character'Pos ('0'));
+            FG_Val := FG_Val * 10 + (Character'Pos (C) - Character'Pos ('0'));
             Has_Dig := True;
          end;
       end loop;
@@ -600,7 +567,7 @@ is
       end if;
 
       Has_Dig := False;
-      BG_Val  := 0;
+      BG_Val := 0;
 
       for I in Last_Semi + 1 .. Value'Last loop
          pragma Loop_Invariant (I >= Last_Semi + 1);
@@ -615,7 +582,7 @@ is
             if BG_Val > 1_000 then
                return FAIL;
             end if;
-            BG_Val  := BG_Val * 10 + (Character'Pos (C) - Character'Pos ('0'));
+            BG_Val := BG_Val * 10 + (Character'Pos (C) - Character'Pos ('0'));
             Has_Dig := True;
          end;
       end loop;
@@ -624,10 +591,7 @@ is
          return FAIL;
       end if;
 
-      return
-        (Success    => True,
-         Foreground => FG_Val,
-         Background => BG_Val);
+      return (Success => True, Foreground => FG_Val, Background => BG_Val);
    end Parse_Colorfgbg;
 
    ---------------------------------------------------------------------------

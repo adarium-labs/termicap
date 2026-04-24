@@ -40,10 +40,7 @@
 with Ada.Finalization;
 
 package Termicap.Override
-  with
-    SPARK_Mode,
-    Abstract_State =>
-      (Override_State with External => (Async_Readers, Async_Writers))
+  with SPARK_Mode, Abstract_State => (Override_State with External => (Async_Readers, Async_Writers))
 is
 
    pragma Elaborate_Body;
@@ -58,8 +55,7 @@ is
    --  the detection functions perform their normal logic.  The four Force_*
    --  literals map directly onto Color_Level values and bypass all detection.
    --  @relation(FUNC-OVR-001): Five-literal enumeration ÃÂ¢ÃÂÃÂ no other values representable
-   type Override_Mode is
-     (Auto, Force_None, Force_Basic, Force_256, Force_True_Color);
+   type Override_Mode is (Auto, Force_None, Force_Basic, Force_256, Force_True_Color);
 
    ---------------------------------------------------------------------------
    --  Global State Access (FUNC-OVR-002, FUNC-OVR-003, FUNC-OVR-011)
@@ -122,8 +118,7 @@ is
    --
    --  @relation(FUNC-OVR-007): Initialize saves current mode, installs Mode discriminant
    --  @relation(FUNC-OVR-008): Finalize suppresses exceptions; non-copyable
-   type Scoped_Override (Mode : Override_Mode) is
-     new Ada.Finalization.Limited_Controlled with private;
+   type Scoped_Override (Mode : Override_Mode) is new Ada.Finalization.Limited_Controlled with private;
 
 private
 
@@ -131,9 +126,7 @@ private
    --  Private: Scoped_Override completion
    ---------------------------------------------------------------------------
 
-   type Scoped_Override (Mode : Override_Mode) is
-     new Ada.Finalization.Limited_Controlled
-   with record
+   type Scoped_Override (Mode : Override_Mode) is new Ada.Finalization.Limited_Controlled with record
       Saved : Override_Mode := Auto;
    end record;
 

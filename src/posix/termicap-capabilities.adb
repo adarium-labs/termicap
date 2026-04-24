@@ -31,8 +31,7 @@ is
       Size       : Termicap.Dimensions.Terminal_Size;
       Unicode    : Termicap.Unicode.Unicode_Level;
       Identity   : Termicap.Terminal_Id.Terminal_Identity;
-      DA1        : Termicap.DA1.DA1_Capabilities)
-      return Terminal_Capabilities is
+      DA1        : Termicap.DA1.DA1_Capabilities) return Terminal_Capabilities is
    begin
       return
         Terminal_Capabilities'
@@ -59,24 +58,20 @@ is
    type Cache_Array is array (Termicap.TTY.Stream_Kind) of Cache_Slot;
 
    protected Cache is
-      function Get_Cached
-        (Stream : Termicap.TTY.Stream_Kind) return Cache_Slot;
-      procedure Set_Cached
-        (Stream : Termicap.TTY.Stream_Kind; Caps : Terminal_Capabilities);
+      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Cache_Slot;
+      procedure Set_Cached (Stream : Termicap.TTY.Stream_Kind; Caps : Terminal_Capabilities);
    private
       Slots : Cache_Array;
    end Cache;
 
    protected body Cache is
 
-      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Cache_Slot
-      is
+      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Cache_Slot is
       begin
          return Slots (Stream);
       end Get_Cached;
 
-      procedure Set_Cached
-        (Stream : Termicap.TTY.Stream_Kind; Caps : Terminal_Capabilities) is
+      procedure Set_Cached (Stream : Termicap.TTY.Stream_Kind; Caps : Terminal_Capabilities) is
       begin
          Slots (Stream) := (Initialized => True, Value => Caps);
       end Set_Cached;
@@ -87,10 +82,7 @@ is
    --  Detect (FUNC-CAP-004) â fresh, uncached detection
    ---------------------------------------------------------------------------
 
-   function Detect
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Terminal_Capabilities
-   is
+   function Detect (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities is
       Env               : Termicap.Environment.Environment;
       Id                : Termicap.Terminal_Id.Terminal_Identity;
       TTY_All           : Termicap.TTY.TTY_Status;
@@ -112,7 +104,7 @@ is
       --  Step 4: Select the TTY flag for the requested stream.
       Is_TTY_For_Stream :=
         (case Stream is
-           when Termicap.TTY.Stdin  => TTY_All.Stdin,
+           when Termicap.TTY.Stdin => TTY_All.Stdin,
            when Termicap.TTY.Stdout => TTY_All.Stdout,
            when Termicap.TTY.Stderr => TTY_All.Stderr);
 
@@ -145,10 +137,7 @@ is
    --  Get (FUNC-CAP-003) â lazy cached detection
    ---------------------------------------------------------------------------
 
-   function Get
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Terminal_Capabilities
-   is
+   function Get (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities is
       Slot : constant Cache_Slot := Cache.Get_Cached (Stream);
    begin
       if Slot.Initialized then

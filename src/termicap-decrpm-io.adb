@@ -19,8 +19,7 @@ package body Termicap.DECRPM.IO is
    ---------------------------------------------------------------------------
 
    function Passthrough_For_Identity
-     (Identity : Termicap.Terminal_Id.Terminal_Identity)
-      return Termicap.OSC.Parsing.Passthrough_Mode
+     (Identity : Termicap.Terminal_Id.Terminal_Identity) return Termicap.OSC.Parsing.Passthrough_Mode
    is
       use Termicap.Terminal_Id;
       use Termicap.OSC.Parsing;
@@ -39,8 +38,8 @@ package body Termicap.DECRPM.IO is
    ---------------------------------------------------------------------------
 
    procedure Query_Mode
-     (Mode        :     Mode_Id;
-      Timeout_Ms  :     Natural;
+     (Mode        : Mode_Id;
+      Timeout_Ms  : Natural;
       Response    : out Termicap.OSC.Response_Buffer;
       Resp_Length : out Natural;
       Timed_Out   : out Boolean)
@@ -52,18 +51,17 @@ package body Termicap.DECRPM.IO is
       Passthrough : Termicap.OSC.Parsing.Passthrough_Mode;
       Query_Bytes : constant Byte_Array := DECRPM_Query (Mode);
    begin
-      Response    := [others => 0];
+      Response := [others => 0];
       Resp_Length := 0;
-      Timed_Out   := True;
+      Timed_Out := True;
 
       Termicap.Environment.Capture.Capture_Current (Env);
-      Identity    := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
+      Identity := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
       Passthrough := Passthrough_For_Identity (Identity);
 
       declare
          Wrapped : constant Termicap.OSC.Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough
-             (Termicap.OSC.Byte_Array (Query_Bytes), Passthrough);
+           Termicap.OSC.Parsing.Wrap_For_Passthrough (Termicap.OSC.Byte_Array (Query_Bytes), Passthrough);
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;
       begin
@@ -87,10 +85,7 @@ package body Termicap.DECRPM.IO is
    --  Detect_Mode (FUNC-RPM-009)
    ---------------------------------------------------------------------------
 
-   function Detect_Mode
-     (Mode       : Mode_Id;
-      Timeout_Ms : Natural := 100) return Mode_Query_Result
-   is
+   function Detect_Mode (Mode : Mode_Id; Timeout_Ms : Natural := 100) return Mode_Query_Result is
       Resp_Buffer : Termicap.OSC.Response_Buffer;
       Resp_Length : Natural;
       Timed_Out   : Boolean;
@@ -102,9 +97,7 @@ package body Termicap.DECRPM.IO is
          return (Success => False, Error => Query_Timeout);
       end if;
 
-      Report :=
-        Parse_DECRPM_Response
-          (Byte_Array (Resp_Buffer), Resp_Length);
+      Report := Parse_DECRPM_Response (Byte_Array (Resp_Buffer), Resp_Length);
 
       if Report.Mode = 0 then
          return (Success => False, Error => Parse_Failed);
@@ -118,15 +111,12 @@ package body Termicap.DECRPM.IO is
    ---------------------------------------------------------------------------
 
    function Detect_Modes
-     (Modes      : Mode_Id_Array;
-      Count      : Positive;
-      Timeout_Ms : Natural := 200) return Batch_Query_Result
+     (Modes : Mode_Id_Array; Count : Positive; Timeout_Ms : Natural := 200) return Batch_Query_Result
    is
       use Termicap.OSC;
 
       MIN_PER_QUERY : constant Natural := 50;
-      Results       : Mode_Report_Array := [others => (Mode => 0,
-                                                        Status => Not_Recognized)];
+      Results       : Mode_Report_Array := [others => (Mode => 0, Status => Not_Recognized)];
       Env           : Termicap.Environment.Environment;
       Identity      : Termicap.Terminal_Id.Terminal_Identity;
       Passthrough   : Termicap.OSC.Parsing.Passthrough_Mode;
@@ -139,7 +129,7 @@ package body Termicap.DECRPM.IO is
       Status        : Termicap.OSC.Session_Status;
    begin
       Termicap.Environment.Capture.Capture_Current (Env);
-      Identity    := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
+      Identity := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
       Passthrough := Passthrough_For_Identity (Identity);
 
       Termicap.OSC.Open (Session, Status);
@@ -153,12 +143,11 @@ package body Termicap.DECRPM.IO is
          declare
             Query_Bytes : constant Byte_Array := DECRPM_Query (Modes (I));
             Wrapped     : constant Termicap.OSC.Byte_Array :=
-              Termicap.OSC.Parsing.Wrap_For_Passthrough
-                (Termicap.OSC.Byte_Array (Query_Bytes), Passthrough);
+              Termicap.OSC.Parsing.Wrap_For_Passthrough (Termicap.OSC.Byte_Array (Query_Bytes), Passthrough);
          begin
             Resp_Buffer := [others => 0];
             Resp_Length := 0;
-            Timed_Out   := True;
+            Timed_Out := True;
 
             Termicap.OSC.Sentinel_Query
               (Session     => Session,
@@ -170,9 +159,7 @@ package body Termicap.DECRPM.IO is
                Retry       => False);
 
             if not Timed_Out then
-               Report :=
-                 Parse_DECRPM_Response
-                   (Byte_Array (Resp_Buffer), Resp_Length);
+               Report := Parse_DECRPM_Response (Byte_Array (Resp_Buffer), Resp_Length);
                if Report.Mode > 0 then
                   Results (I) := Report;
                else

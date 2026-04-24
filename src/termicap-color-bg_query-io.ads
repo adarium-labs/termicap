@@ -58,8 +58,8 @@ package Termicap.Color.BG_Query.IO is
    --                     or if the Probe_Session failed to open.
    --  @relation(FUNC-BGC-006): OSC color query execution via Probe_Session
    procedure Query_Color
-     (Kind        :     BG_Query.Query_Kind;
-      Timeout_Ms  :     Natural;
+     (Kind        : BG_Query.Query_Kind;
+      Timeout_Ms  : Natural;
       Response    : out BG_Query.Byte_Array;
       Resp_Length : out Natural;
       Timed_Out   : out Boolean)

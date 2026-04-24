@@ -58,8 +58,7 @@ is
    --  @description Indexed from 1.  Only Values(1..Count) are meaningful;
    --  Values(Count+1..MAX_DA1_PARAMS) are zero-initialised.
    --  @relation(FUNC-OSC-010): DA1 parameter value array
-   type DA1_Value_Array is
-     array (Positive range 1 .. MAX_DA1_PARAMS) of Natural;
+   type DA1_Value_Array is array (Positive range 1 .. MAX_DA1_PARAMS) of Natural;
 
    --  @summary Record aggregating the count and values from a parsed DA1 response.
    --  @description Count = 0 indicates that no valid DA1 response was found.
@@ -80,8 +79,7 @@ is
    --  without wrapping.  Callers derive the appropriate value from a
    --  Termicap.Terminal_Id.Terminal_Identity result.
    --  @relation(FUNC-OSC-014): Multiplexer kind for passthrough selection
-   type Passthrough_Mode is
-     (No_Passthrough, Tmux_Passthrough, Screen_Passthrough);
+   type Passthrough_Mode is (No_Passthrough, Tmux_Passthrough, Screen_Passthrough);
 
    ---------------------------------------------------------------------------
    --  DA1 Sentinel Detection (FUNC-OSC-006)
@@ -97,8 +95,7 @@ is
    --  @param Length Number of valid bytes in Bytes to inspect.
    --  @return True if a complete DA1 response pattern is present.
    --  @relation(FUNC-OSC-006): Sentinel detection predicate for query accumulation
-   function Contains_DA1_Response
-     (Bytes : Byte_Array; Length : Natural) return Boolean
+   function Contains_DA1_Response (Bytes : Byte_Array; Length : Natural) return Boolean
    with Pre => Length <= Bytes'Length;
 
    --  @summary Return the index of the first ESC byte that starts a DA1 response.
@@ -111,11 +108,8 @@ is
    --  @param Length Number of valid bytes in Bytes to inspect.
    --  @return 1-based index of the DA1 ESC byte, or Length if not found.
    --  @relation(FUNC-OSC-006): Pre-sentinel byte extraction support
-   function DA1_Response_Start
-     (Bytes : Byte_Array; Length : Natural) return Natural
-   with
-     Pre  => Length <= Bytes'Length,
-     Post => DA1_Response_Start'Result <= Length;
+   function DA1_Response_Start (Bytes : Byte_Array; Length : Natural) return Natural
+   with Pre => Length <= Bytes'Length, Post => DA1_Response_Start'Result <= Length;
 
    ---------------------------------------------------------------------------
    --  DA1 Response Parsing (FUNC-OSC-010)
@@ -132,10 +126,9 @@ is
    --                and Length <= MAX_RESPONSE_SIZE.
    --  @return A DA1_Params record.  Result.Count <= MAX_DA1_PARAMS always holds.
    --  @relation(FUNC-OSC-010): Pure DA1 response parser with SPARK postcondition
-   function Parse_DA1_Response
-     (Bytes : Byte_Array; Length : Natural) return DA1_Params
+   function Parse_DA1_Response (Bytes : Byte_Array; Length : Natural) return DA1_Params
    with
-     Pre  => Length <= Bytes'Length and then Length <= MAX_RESPONSE_SIZE,
+     Pre => Length <= Bytes'Length and then Length <= MAX_RESPONSE_SIZE,
      Post => Parse_DA1_Response'Result.Count <= MAX_DA1_PARAMS;
 
    ---------------------------------------------------------------------------
@@ -158,7 +151,6 @@ is
    --  @param Passthrough The multiplexer wrapping mode to apply.
    --  @return The wrapped byte sequence, or Query unchanged for No_Passthrough.
    --  @relation(FUNC-OSC-014): Pure passthrough wrapping: tmux DCS, screen DCS
-   function Wrap_For_Passthrough
-     (Query : Byte_Array; Passthrough : Passthrough_Mode) return Byte_Array;
+   function Wrap_For_Passthrough (Query : Byte_Array; Passthrough : Passthrough_Mode) return Byte_Array;
 
 end Termicap.OSC.Parsing;

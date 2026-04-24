@@ -38,7 +38,7 @@ package body Termicap.DA1.IO is
 
    --  @relation(FUNC-DA1-008): DA1 I/O procedure with timeout-only read loop
    procedure Query_DA1
-     (Timeout_Ms  :     Natural;
+     (Timeout_Ms  : Natural;
       Response    : out Termicap.OSC.Response_Buffer;
       Resp_Length : out Natural;
       Timed_Out   : out Boolean)
@@ -51,9 +51,9 @@ package body Termicap.DA1.IO is
       Passthrough : Termicap.OSC.Parsing.Passthrough_Mode;
    begin
       --  Initialise outputs.
-      Response    := [others => 0];
+      Response := [others => 0];
       Resp_Length := 0;
-      Timed_Out   := True;
+      Timed_Out := True;
 
       --  Step 1: Capture environment and detect terminal identity.
       Termicap.Environment.Capture.Capture_Current (Env);
@@ -74,8 +74,7 @@ package body Termicap.DA1.IO is
       declare
          --  Step 2: Wrap DA1_QUERY for multiplexer passthrough if required.
          Wrapped : constant Termicap.OSC.Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough
-             (Termicap.OSC.Byte_Array (DA1_QUERY), Passthrough);
+           Termicap.OSC.Parsing.Wrap_For_Passthrough (Termicap.OSC.Byte_Array (DA1_QUERY), Passthrough);
 
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;
@@ -105,27 +104,18 @@ package body Termicap.DA1.IO is
    ---------------------------------------------------------------------------
 
    --  @relation(FUNC-DA1-009): Detect_DA1 convenience function
-   function Detect_DA1
-     (Timeout_Ms : Natural := 100) return DA1_Capabilities
-   is
+   function Detect_DA1 (Timeout_Ms : Natural := 100) return DA1_Capabilities is
       Resp_Buffer : Termicap.OSC.Response_Buffer;
       Resp_Length : Natural;
       Timed_Out   : Boolean;
       Params      : Termicap.OSC.Parsing.DA1_Params;
    begin
       --  Step 1: Obtain raw response bytes via the I/O layer.
-      Query_DA1
-        (Timeout_Ms  => Timeout_Ms,
-         Response    => Resp_Buffer,
-         Resp_Length => Resp_Length,
-         Timed_Out   => Timed_Out);
+      Query_DA1 (Timeout_Ms => Timeout_Ms, Response => Resp_Buffer, Resp_Length => Resp_Length, Timed_Out => Timed_Out);
 
       --  Step 2: Timed out -> return default (Supported => False).
       if Timed_Out then
-         return DA1_Capabilities'
-           (Supported => False,
-            Level     => Unknown,
-            Flags     => [others => False]);
+         return DA1_Capabilities'(Supported => False, Level => Unknown, Flags => [others => False]);
       end if;
 
       --  Step 3: Parse the raw bytes into DA1_Params.

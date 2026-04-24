@@ -55,8 +55,7 @@ package Termicap.Color.Detection is
    --    Parse_Failed     -- OSC response was received but could not be parsed.
    --    No_Fallback      -- COLORFGBG is absent or could not be parsed.
    --  @relation(FUNC-BGC-013): Detect_Error enumeration
-   type Detect_Error is
-     (Not_A_Terminal, Not_Foreground, Query_Timeout, Parse_Failed, No_Fallback);
+   type Detect_Error is (Not_A_Terminal, Not_Foreground, Query_Timeout, Parse_Failed, No_Fallback);
 
    ---------------------------------------------------------------------------
    --  Detection Result Type
@@ -69,8 +68,11 @@ package Termicap.Color.Detection is
    --  Callers must check the Success discriminant before accessing either field.
    type Detection_Result (Success : Boolean := False) is record
       case Success is
-         when True  => Color : BG_Query.RGB;
-         when False => Error : Detect_Error;
+         when True =>
+            Color : BG_Query.RGB;
+
+         when False =>
+            Error : Detect_Error;
       end case;
    end record;
 
@@ -90,8 +92,7 @@ package Termicap.Color.Detection is
    --  @return Detection_Result with Color when successful, Error otherwise.
    --  @relation(FUNC-BGC-013): Background color detection cascade
    --  @relation(FUNC-BGC-015): Timeout clamping
-   function Detect_Background_Color
-     (Timeout_Ms : Natural := 1_000) return Detection_Result;
+   function Detect_Background_Color (Timeout_Ms : Natural := 1_000) return Detection_Result;
 
    ---------------------------------------------------------------------------
    --  Foreground Color Detection (FUNC-BGC-014)
@@ -109,7 +110,6 @@ package Termicap.Color.Detection is
    --  @return Detection_Result with Color when successful, Error otherwise.
    --  @relation(FUNC-BGC-014): Foreground color detection cascade
    --  @relation(FUNC-BGC-015): Timeout clamping
-   function Detect_Foreground_Color
-     (Timeout_Ms : Natural := 1_000) return Detection_Result;
+   function Detect_Foreground_Color (Timeout_Ms : Natural := 1_000) return Detection_Result;
 
 end Termicap.Color.Detection;

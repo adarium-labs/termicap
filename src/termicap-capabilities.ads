@@ -102,14 +102,11 @@ is
       Size       : Termicap.Dimensions.Terminal_Size;
       Unicode    : Termicap.Unicode.Unicode_Level;
       Identity   : Termicap.Terminal_Id.Terminal_Identity;
-      DA1        : Termicap.DA1.DA1_Capabilities)
-      return Terminal_Capabilities
+      DA1        : Termicap.DA1.DA1_Capabilities) return Terminal_Capabilities
    with
      SPARK_Mode => On,
-     Global     => null,
-     Post       =>
-       Assemble'Result.Downsampling_Available
-       = (Assemble'Result.Color >= Termicap.Color.Extended_256);
+     Global => null,
+     Post => Assemble'Result.Downsampling_Available = (Assemble'Result.Color >= Termicap.Color.Extended_256);
 
    ---------------------------------------------------------------------------
    --  Detection Functions (FUNC-CAP-003, FUNC-CAP-004, FUNC-CAP-005)
@@ -132,9 +129,7 @@ is
    --  @relation(FUNC-CAP-010): Sub-detector invocation order enforced in body
    --  @relation(FUNC-CAP-011): Single Capture_Current call per Detect invocation
    --  @relation(FUNC-CAP-014): Every Detect call performs a full detection run
-   function Detect
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Terminal_Capabilities;
+   function Detect (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities;
 
    --  @summary Return a cached Terminal_Capabilities value for the given stream.
    --  @description On the first call for a given Stream, invokes Detect and
@@ -148,8 +143,6 @@ is
    --  @relation(FUNC-CAP-005): Default Stream => Stdout for the common case
    --  @relation(FUNC-CAP-008): Thread safety via protected object in body
    --  @relation(FUNC-CAP-009): Returned record is a copy; cache is not aliased
-   function Get
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Terminal_Capabilities;
+   function Get (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities;
 
 end Termicap.Capabilities;

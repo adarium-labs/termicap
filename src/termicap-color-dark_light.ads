@@ -76,8 +76,8 @@ is
    --  @param Color The RGB color value whose luminance is to be computed.
    --  @return Perceived luminance in the range 0..255.
    --  @relation(FUNC-DKL-002): BT.601 integer luminance computation
-   function Luminance (Color : RGB) return Natural is
-     ((299 * Color.Red + 587 * Color.Green + 114 * Color.Blue) / 1_000)
+   function Luminance (Color : RGB) return Natural
+   is ((299 * Color.Red + 587 * Color.Green + 114 * Color.Blue) / 1_000)
    with Post => Luminance'Result in 0 .. 255;
 
    ---------------------------------------------------------------------------
@@ -93,8 +93,8 @@ is
    --  @param Color The RGB color value to classify.
    --  @return Dark if luminance < 128, Light if luminance >= 128.
    --  @relation(FUNC-DKL-003): Threshold-based dark/light classification
-   function Classify_Theme (Color : RGB) return Theme_Kind is
-     (if Luminance (Color) < LUMINANCE_THRESHOLD then Dark else Light);
+   function Classify_Theme (Color : RGB) return Theme_Kind
+   is (if Luminance (Color) < LUMINANCE_THRESHOLD then Dark else Light);
 
    ---------------------------------------------------------------------------
    --  Boolean Convenience Predicates (FUNC-DKL-004)
@@ -107,8 +107,8 @@ is
    --  @param Color The RGB color value to test.
    --  @return True iff Classify_Theme (Color) = Dark.
    --  @relation(FUNC-DKL-004): Boolean dark predicate
-   function Is_Dark (Color : RGB) return Boolean is
-     (Classify_Theme (Color) = Dark)
+   function Is_Dark (Color : RGB) return Boolean
+   is (Classify_Theme (Color) = Dark)
    with Post => Is_Dark'Result = (Classify_Theme (Color) = Dark);
 
    --  @summary Return True when the color's perceived luminance is at or above 128.
@@ -118,8 +118,8 @@ is
    --  @param Color The RGB color value to test.
    --  @return True iff Classify_Theme (Color) = Light.
    --  @relation(FUNC-DKL-004): Boolean light predicate
-   function Is_Light (Color : RGB) return Boolean is
-     (Classify_Theme (Color) = Light)
+   function Is_Light (Color : RGB) return Boolean
+   is (Classify_Theme (Color) = Light)
    with Post => Is_Light'Result = (Classify_Theme (Color) = Light);
 
 end Termicap.Color.Dark_Light;

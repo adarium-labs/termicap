@@ -59,8 +59,7 @@ is
    --  @relation(FUNC-UNI-002): Pure detection function
    --  @relation(FUNC-UNI-007): SPARK Silver provability
    --  @relation(FUNC-UNI-008): Detection priority order
-   function Detect_Unicode_Level
-     (Env : Termicap.Environment.Environment) return Unicode_Level
+   function Detect_Unicode_Level (Env : Termicap.Environment.Environment) return Unicode_Level
    with Global => null;
 
 end Termicap.Unicode;

@@ -93,6 +93,7 @@ is
          when Success =>
             Terminal_Name    : Ada.Strings.Unbounded.Unbounded_String;
             Terminal_Version : Ada.Strings.Unbounded.Unbounded_String;
+
          when Timeout | Parse_Error =>
             null;
       end case;
@@ -134,7 +135,8 @@ is
    --  it without introducing a SPARK_Mode boundary violation.
    --  @relation(FUNC-XTV-002): CSI_XTVERSION_QUERY constant
    CSI_XTVERSION_QUERY : constant Byte_Array :=
-     [16#1B#, 16#5B#,                       --  ESC [   (CSI introducer)
+     [16#1B#,
+      16#5B#,                       --  ESC [   (CSI introducer)
       Character'Pos ('>'),                   --  >
       Character'Pos ('q')];                  --  q
 
@@ -153,12 +155,8 @@ is
    --  @param Length Number of valid bytes in Bytes to examine.
    --  @return True when a well-formed DCS XTVERSION envelope is present.
    --  @relation(FUNC-XTV-003): DCS XTVERSION response recognition
-   function Contains_XTVERSION_Response
-     (Bytes  : Byte_Array;
-      Length : Natural) return Boolean
-   with
-     Global => null,
-     Pre    => Length <= Bytes'Length;
+   function Contains_XTVERSION_Response (Bytes : Byte_Array; Length : Natural) return Boolean
+   with Global => null, Pre => Length <= Bytes'Length;
 
    ---------------------------------------------------------------------------
    --  Payload Extraction (FUNC-XTV-004)
@@ -175,18 +173,14 @@ is
    --  @param Length Number of valid bytes in Bytes.
    --  @return A Payload_Slice with Offset >= Bytes'First + 4 and Length > 0.
    --  @relation(FUNC-XTV-004): DCS payload extraction
-   function Extract_XTV_Payload
-     (Bytes  : Byte_Array;
-      Length : Natural) return Payload_Slice
+   function Extract_XTV_Payload (Bytes : Byte_Array; Length : Natural) return Payload_Slice
    with
      Global => null,
-     Pre    => Length <= Bytes'Length
-                 and then Contains_XTVERSION_Response (Bytes, Length),
-     Post   => Extract_XTV_Payload'Result.Length > 0
-                 and then Extract_XTV_Payload'Result.Offset >= Bytes'First + 4
-                 and then Extract_XTV_Payload'Result.Offset
-                            + Extract_XTV_Payload'Result.Length - 1
-                          < Bytes'First + Length;
+     Pre => Length <= Bytes'Length and then Contains_XTVERSION_Response (Bytes, Length),
+     Post =>
+       Extract_XTV_Payload'Result.Length > 0
+       and then Extract_XTV_Payload'Result.Offset >= Bytes'First + 4
+       and then Extract_XTV_Payload'Result.Offset + Extract_XTV_Payload'Result.Length - 1 < Bytes'First + Length;
 
    ---------------------------------------------------------------------------
    --  Payload Tokenisation (FUNC-XTV-005)
@@ -205,15 +199,8 @@ is
    --  @param Length Number of payload bytes (> 0).
    --  @return Token_Pair with Name and Version as Unbounded_Strings.
    --  @relation(FUNC-XTV-005): Name and version tokenisation (both formats)
-   function Split_XTV_Payload
-     (Bytes  : Byte_Array;
-      Offset : Positive;
-      Length : Natural) return Token_Pair
-   with
-     Global => null,
-     Pre    => Length > 0
-                 and then Offset >= Bytes'First
-                 and then Offset + Length - 1 <= Bytes'Last;
+   function Split_XTV_Payload (Bytes : Byte_Array; Offset : Positive; Length : Natural) return Token_Pair
+   with Global => null, Pre => Length > 0 and then Offset >= Bytes'First and then Offset + Length - 1 <= Bytes'Last;
 
    ---------------------------------------------------------------------------
    --  Top-Level Parse Function (FUNC-XTV-006)
@@ -235,16 +222,12 @@ is
    --  @return XTVERSION_Result with Status = Success and non-empty Terminal_Name on success.
    --  @relation(FUNC-XTV-006): Top-level XTVERSION response parse
    --  @relation(FUNC-XTV-016): All malformed-input cases return Parse_Error
-   function Parse_XTVERSION_Response
-     (Bytes  : Byte_Array;
-      Length : Natural) return XTVERSION_Result
+   function Parse_XTVERSION_Response (Bytes : Byte_Array; Length : Natural) return XTVERSION_Result
    with
      Global => null,
-     Pre    => Length <= Bytes'Length
-                 and then Length <= MAX_RESPONSE_SIZE,
-     Post   =>
+     Pre => Length <= Bytes'Length and then Length <= MAX_RESPONSE_SIZE,
+     Post =>
        (if Parse_XTVERSION_Response'Result.Status = Success
-        then Ada.Strings.Unbounded.Length
-               (Parse_XTVERSION_Response'Result.Terminal_Name) > 0);
+        then Ada.Strings.Unbounded.Length (Parse_XTVERSION_Response'Result.Terminal_Name) > 0);
 
 end Termicap.XTVERSION;

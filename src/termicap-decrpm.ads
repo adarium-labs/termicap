@@ -88,23 +88,23 @@ is
 
    --  @summary X11 mouse button tracking (mode 1000).
    --  @relation(FUNC-RPM-001): MODE_MOUSE_X11 named constant
-   MODE_MOUSE_X11         : constant Mode_Id := 1000;
+   MODE_MOUSE_X11 : constant Mode_Id := 1000;
 
    --  @summary SGR mouse coordinate encoding (mode 1006).
    --  @relation(FUNC-RPM-001): MODE_MOUSE_SGR named constant
-   MODE_MOUSE_SGR         : constant Mode_Id := 1006;
+   MODE_MOUSE_SGR : constant Mode_Id := 1006;
 
    --  @summary Alternate screen buffer (mode 1049).
    --  @relation(FUNC-RPM-001): MODE_ALT_SCREEN named constant
-   MODE_ALT_SCREEN        : constant Mode_Id := 1049;
+   MODE_ALT_SCREEN : constant Mode_Id := 1049;
 
    --  @summary Bracketed paste mode (mode 2004).
    --  @relation(FUNC-RPM-001): MODE_BRACKETED_PASTE named constant
-   MODE_BRACKETED_PASTE   : constant Mode_Id := 2004;
+   MODE_BRACKETED_PASTE : constant Mode_Id := 2004;
 
    --  @summary Synchronized output (mode 2026).
    --  @relation(FUNC-RPM-001): MODE_SYNC_OUTPUT named constant
-   MODE_SYNC_OUTPUT       : constant Mode_Id := 2026;
+   MODE_SYNC_OUTPUT : constant Mode_Id := 2026;
 
    ---------------------------------------------------------------------------
    --  Mode_Status Enumeration (FUNC-RPM-002)
@@ -142,7 +142,7 @@ is
    --  clearly "empty" because mode 0 is not a valid DEC private mode number.
    --  @relation(FUNC-RPM-003): Mode_Report record type
    type Mode_Report is record
-      Mode   : Mode_Id     := 0;
+      Mode   : Mode_Id := 0;
       Status : Mode_Status := Not_Recognized;
    end record;
 
@@ -162,16 +162,14 @@ is
    --  to query; elements beyond Count are ignored.  Fixed size is required for
    --  SPARK Silver mode (no heap allocation).
    --  @relation(FUNC-RPM-010): Mode_Id_Array type
-   type Mode_Id_Array is
-     array (Positive range 1 .. MAX_BATCH_MODES) of Mode_Id;
+   type Mode_Id_Array is array (Positive range 1 .. MAX_BATCH_MODES) of Mode_Id;
 
    --  @summary Fixed-size array of mode reports for batch query output.
    --  @description The I-th element corresponds to the I-th mode in the
    --  Mode_Id_Array input, regardless of whether a response was received.
    --  Modes that timed out individually have Status => Not_Recognized.
    --  @relation(FUNC-RPM-010): Mode_Report_Array type
-   type Mode_Report_Array is
-     array (Positive range 1 .. MAX_BATCH_MODES) of Mode_Report;
+   type Mode_Report_Array is array (Positive range 1 .. MAX_BATCH_MODES) of Mode_Report;
 
    ---------------------------------------------------------------------------
    --  Query Construction Function (FUNC-RPM-005)
@@ -199,10 +197,7 @@ is
    --  @return Byte sequence encoding CSI ? Ps $ p, length >= 6.
    --  @relation(FUNC-RPM-005): DECRPM query byte sequence construction
    function DECRPM_Query (Mode : Mode_Id) return Byte_Array
-   with
-     SPARK_Mode => On,
-     Global     => null,
-     Post       => DECRPM_Query'Result'Length >= 6;
+   with SPARK_Mode => On, Global => null, Post => DECRPM_Query'Result'Length >= 6;
 
    ---------------------------------------------------------------------------
    --  Response Recognition Function (FUNC-RPM-006)
@@ -229,13 +224,8 @@ is
    --  @param Length  Number of valid bytes in Bytes to examine.
    --  @return True when a well-formed DECRPM response is present.
    --  @relation(FUNC-RPM-006): DECRPM response recognition function
-   function Contains_DECRPM_Response
-     (Bytes  : Byte_Array;
-      Length : Natural) return Boolean
-   with
-     SPARK_Mode => On,
-     Global     => null,
-     Pre        => Length <= Bytes'Length;
+   function Contains_DECRPM_Response (Bytes : Byte_Array; Length : Natural) return Boolean
+   with SPARK_Mode => On, Global => null, Pre => Length <= Bytes'Length;
 
    ---------------------------------------------------------------------------
    --  Response Parsing Function (FUNC-RPM-007)
@@ -267,16 +257,11 @@ is
    --  @return Mode_Report with Mode > 0 and decoded status on success;
    --          Mode_Report'(Mode => 0, Status => Not_Recognized) on failure.
    --  @relation(FUNC-RPM-007): DECRPM response parsing function
-   function Parse_DECRPM_Response
-     (Bytes  : Byte_Array;
-      Length : Natural) return Mode_Report
+   function Parse_DECRPM_Response (Bytes : Byte_Array; Length : Natural) return Mode_Report
    with
      SPARK_Mode => On,
-     Global     => null,
-     Pre        => Length <= Bytes'Length
-                     and then Length <= MAX_RESPONSE_SIZE,
-     Post       =>
-       (if Contains_DECRPM_Response (Bytes, Length)
-        then Parse_DECRPM_Response'Result.Mode > 0);
+     Global => null,
+     Pre => Length <= Bytes'Length and then Length <= MAX_RESPONSE_SIZE,
+     Post => (if Contains_DECRPM_Response (Bytes, Length) then Parse_DECRPM_Response'Result.Mode > 0);
 
 end Termicap.DECRPM;

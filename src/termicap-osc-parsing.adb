@@ -59,9 +59,7 @@ is
    --  DA1 Sentinel Detection (FUNC-OSC-006)
    ---------------------------------------------------------------------------
 
-   function Contains_DA1_Response
-     (Bytes : Byte_Array; Length : Natural) return Boolean
-   is
+   function Contains_DA1_Response (Bytes : Byte_Array; Length : Natural) return Boolean is
       --  We scan for the pattern: ESC [ ? <params>* c
       --  State machine: 0=idle, 1=saw ESC, 2=saw ESC [, 3=saw ESC [ ?,
       --                 4=saw ESC [ ? <params>+ or ESC [ ? c
@@ -81,12 +79,12 @@ is
             B : constant Byte := Bytes (I);
          begin
             case State is
-               when 0      =>
+               when 0 =>
                   if B = ESC_BYTE then
                      State := 1;
                   end if;
 
-               when 1      =>
+               when 1 =>
                   if B = CSI_L then
                      State := 2;
                   elsif B = ESC_BYTE then
@@ -95,7 +93,7 @@ is
                      State := 0;
                   end if;
 
-               when 2      =>
+               when 2 =>
                   if B = QUEST then
                      State := 3;
                   elsif B = ESC_BYTE then
@@ -104,7 +102,7 @@ is
                      State := 0;
                   end if;
 
-               when 3      =>
+               when 3 =>
                   --  After ESC [ ? we accept zero or more param bytes then c
                   if B = TERM_C then
                      return True;
@@ -125,9 +123,7 @@ is
       return False;
    end Contains_DA1_Response;
 
-   function DA1_Response_Start
-     (Bytes : Byte_Array; Length : Natural) return Natural
-   is
+   function DA1_Response_Start (Bytes : Byte_Array; Length : Natural) return Natural is
       State   : Natural := 0;
       ESC_Pos : Natural := 0;  --  position of current candidate ESC byte
    begin
@@ -146,13 +142,13 @@ is
             Pos : constant Natural := I - Bytes'First + 1;
          begin
             case State is
-               when 0      =>
+               when 0 =>
                   if B = ESC_BYTE then
                      State := 1;
                      ESC_Pos := Pos;
                   end if;
 
-               when 1      =>
+               when 1 =>
                   if B = CSI_L then
                      State := 2;
                   elsif B = ESC_BYTE then
@@ -162,7 +158,7 @@ is
                      State := 0;
                   end if;
 
-               when 2      =>
+               when 2 =>
                   if B = QUEST then
                      State := 3;
                   elsif B = ESC_BYTE then
@@ -172,7 +168,7 @@ is
                      State := 0;
                   end if;
 
-               when 3      =>
+               when 3 =>
                   if B = TERM_C then
                      return ESC_Pos;
                   elsif Is_Param_Byte (B) then
@@ -197,9 +193,7 @@ is
    --  DA1 Response Parsing (FUNC-OSC-010)
    ---------------------------------------------------------------------------
 
-   function Parse_DA1_Response
-     (Bytes : Byte_Array; Length : Natural) return DA1_Params
-   is
+   function Parse_DA1_Response (Bytes : Byte_Array; Length : Natural) return DA1_Params is
       Result      : DA1_Params := (Count => 0, Values => [others => 0]);
       Current_Val : Natural := 0;
       In_Params   : Boolean := False;
@@ -237,8 +231,7 @@ is
             if Is_Digit (B) then
                --  Accumulate decimal digit; guard against overflow
                if Current_Val <= 214_748_364 then
-                  Current_Val :=
-                    Current_Val * 10 + (Natural (B) - Natural (DIG_0));
+                  Current_Val := Current_Val * 10 + (Natural (B) - Natural (DIG_0));
                end if;
                Has_Digit := True;
             elsif B = SEMI then
@@ -280,8 +273,7 @@ is
    ---------------------------------------------------------------------------
 
    --  Tmux DCS passthrough prefix: ESC P t m u x ; ESC  (8 bytes)
-   TMUX_PREFIX : constant Byte_Array (1 .. 8) :=
-     [16#1B#, 16#50#, 16#74#, 16#6D#, 16#75#, 16#78#, 16#3B#, 16#1B#];
+   TMUX_PREFIX : constant Byte_Array (1 .. 8) := [16#1B#, 16#50#, 16#74#, 16#6D#, 16#75#, 16#78#, 16#3B#, 16#1B#];
 
    --  Screen DCS passthrough prefix: ESC P  (2 bytes)
    SCREEN_PREFIX : constant Byte_Array (1 .. 2) := [16#1B#, 16#50#];
@@ -289,20 +281,17 @@ is
    --  String terminator suffix: ESC \  (2 bytes)
    ST_SUFFIX : constant Byte_Array (1 .. 2) := [16#1B#, 16#5C#];
 
-   function Wrap_For_Passthrough
-     (Query : Byte_Array; Passthrough : Passthrough_Mode) return Byte_Array is
+   function Wrap_For_Passthrough (Query : Byte_Array; Passthrough : Passthrough_Mode) return Byte_Array is
    begin
       case Passthrough is
-         when No_Passthrough     =>
+         when No_Passthrough =>
             return Query;
 
-         when Tmux_Passthrough   =>
+         when Tmux_Passthrough =>
             --  Result: TMUX_PREFIX & Query & ST_SUFFIX
             --  Total length = 8 + Query'Length + 2
             declare
-               Result :
-                 Byte_Array
-                   (1 .. TMUX_PREFIX'Length + Query'Length + ST_SUFFIX'Length);
+               Result : Byte_Array (1 .. TMUX_PREFIX'Length + Query'Length + ST_SUFFIX'Length);
                Pos    : Positive := 1;
             begin
                for I in TMUX_PREFIX'Range loop
@@ -312,21 +301,13 @@ is
                end loop;
 
                for I in Query'Range loop
-                  pragma
-                    Loop_Invariant
-                      (Pos = TMUX_PREFIX'Length + (I - Query'First) + 1);
+                  pragma Loop_Invariant (Pos = TMUX_PREFIX'Length + (I - Query'First) + 1);
                   Result (Pos) := Query (I);
                   Pos := Pos + 1;
                end loop;
 
                for I in ST_SUFFIX'Range loop
-                  pragma
-                    Loop_Invariant
-                      (Pos
-                         = TMUX_PREFIX'Length
-                           + Query'Length
-                           + (I - ST_SUFFIX'First)
-                           + 1);
+                  pragma Loop_Invariant (Pos = TMUX_PREFIX'Length + Query'Length + (I - ST_SUFFIX'First) + 1);
                   Result (Pos) := ST_SUFFIX (I);
                   Pos := Pos + 1;
                end loop;
@@ -338,10 +319,7 @@ is
             --  Result: SCREEN_PREFIX & Query & ST_SUFFIX
             --  Total length = 2 + Query'Length + 2
             declare
-               Result :
-                 Byte_Array
-                   (1
-                    .. SCREEN_PREFIX'Length + Query'Length + ST_SUFFIX'Length);
+               Result : Byte_Array (1 .. SCREEN_PREFIX'Length + Query'Length + ST_SUFFIX'Length);
                Pos    : Positive := 1;
             begin
                for I in SCREEN_PREFIX'Range loop
@@ -351,21 +329,13 @@ is
                end loop;
 
                for I in Query'Range loop
-                  pragma
-                    Loop_Invariant
-                      (Pos = SCREEN_PREFIX'Length + (I - Query'First) + 1);
+                  pragma Loop_Invariant (Pos = SCREEN_PREFIX'Length + (I - Query'First) + 1);
                   Result (Pos) := Query (I);
                   Pos := Pos + 1;
                end loop;
 
                for I in ST_SUFFIX'Range loop
-                  pragma
-                    Loop_Invariant
-                      (Pos
-                         = SCREEN_PREFIX'Length
-                           + Query'Length
-                           + (I - ST_SUFFIX'First)
-                           + 1);
+                  pragma Loop_Invariant (Pos = SCREEN_PREFIX'Length + Query'Length + (I - ST_SUFFIX'First) + 1);
                   Result (Pos) := ST_SUFFIX (I);
                   Pos := Pos + 1;
                end loop;

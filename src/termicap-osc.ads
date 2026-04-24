@@ -174,8 +174,7 @@ package Termicap.OSC is
    --  @param Session The session object being opened.
    --  @param Status  Outcome of the open sequence.
    --  @relation(FUNC-OSC-008): Full open sequence
-   procedure Open
-     (Session : in out Probe_Session; Status : out Session_Status);
+   procedure Open (Session : in out Probe_Session; Status : out Session_Status);
 
    --  @summary Return True if the session was opened successfully and not yet closed.
    --  @param Session The session to query.
@@ -270,11 +269,7 @@ package Termicap.OSC is
    --  @param Written Number of bytes actually written by write().
    --  @param Success False on partial write or write() error.
    --  @relation(FUNC-OSC-005): Query write to terminal via write()
-   procedure Write_Query
-     (Session : Probe_Session;
-      Query   : Byte_Array;
-      Written : out Natural;
-      Success : out Boolean);
+   procedure Write_Query (Session : Probe_Session; Query : Byte_Array; Written : out Natural; Success : out Boolean);
 
    --  @summary Read bytes from a file descriptor with a millisecond timeout.
    --  @description Uses select() to wait up to Timeout_Ms milliseconds for the
@@ -329,8 +324,7 @@ package Termicap.OSC is
    --  @param State Populated with the current termios on success.
    --  @param OK    False if tcgetattr() failed.
    --  @relation(FUNC-OSC-002): Termios state save via tcgetattr()
-   procedure Save_Termios
-     (FD : File_Descriptor; State : out Termios_State; OK : out Boolean);
+   procedure Save_Termios (FD : File_Descriptor; State : out Termios_State; OK : out Boolean);
 
    --  @summary Restore a previously saved termios state.
    --  @description Calls termicap_osc_restore_termios() which copies State.Data
@@ -340,8 +334,7 @@ package Termicap.OSC is
    --  @param State Saved state previously obtained from Save_Termios.
    --  @param OK    False if tcsetattr() failed.
    --  @relation(FUNC-OSC-002): Termios state restore via tcsetattr(TCSANOW)
-   procedure Restore_Termios
-     (FD : File_Descriptor; State : Termios_State; OK : out Boolean);
+   procedure Restore_Termios (FD : File_Descriptor; State : Termios_State; OK : out Boolean);
 
    --  @summary Switch a terminal file descriptor to raw mode.
    --  @description Calls termicap_osc_set_raw() which derives a raw-mode
@@ -352,8 +345,7 @@ package Termicap.OSC is
    --  @param State Saved termios state (used as the base for raw mode derivation).
    --  @param OK    False if tcsetattr() failed.
    --  @relation(FUNC-OSC-003): Raw mode activation via tcsetattr()
-   procedure Set_Raw_Mode
-     (FD : File_Descriptor; State : Termios_State; OK : out Boolean);
+   procedure Set_Raw_Mode (FD : File_Descriptor; State : Termios_State; OK : out Boolean);
 
    --  @summary Drain stale buffered bytes from a terminal file descriptor.
    --  @description Performs non-blocking Timed_Read calls (Timeout_Ms = 0),

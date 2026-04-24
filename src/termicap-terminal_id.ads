@@ -79,8 +79,7 @@ is
    --  a new multiplexer in a future version requires only updating this
    --  predicate and the Is_Multiplexer postcondition.
    --  @relation(FUNC-TID-011): Multiplexer_Kind subtype
-   subtype Multiplexer_Kind is Terminal_Kind
-   with Static_Predicate => Multiplexer_Kind in Tmux | Screen;
+   subtype Multiplexer_Kind is Terminal_Kind with Static_Predicate => Multiplexer_Kind in Tmux | Screen;
 
    ---------------------------------------------------------------------------
    --  Terminal Identity Record (FUNC-TID-002)
@@ -120,11 +119,10 @@ is
    --  @relation(FUNC-TID-005): Unknown fallback postcondition
    --  @relation(FUNC-TID-006): Is_Multiplexer derivation rule
    --  @relation(FUNC-TID-007): SPARK Silver provability
-   function Detect_Terminal_Identity
-     (Env : Termicap.Environment.Environment) return Terminal_Identity
+   function Detect_Terminal_Identity (Env : Termicap.Environment.Environment) return Terminal_Identity
    with
      Global => null,
-     Post   =>
+     Post =>
        (if not Termicap.Environment.Contains (Env, "TERM_PROGRAM")
           and then not Termicap.Environment.Contains (Env, "TERMINAL_EMULATOR")
           and then not Termicap.Environment.Contains (Env, "WT_SESSION")
@@ -132,11 +130,7 @@ is
           and then not Termicap.Environment.Contains (Env, "VTE_VERSION")
           and then not Termicap.Environment.Contains (Env, "TMUX")
           and then not Termicap.Environment.Contains (Env, "TERM")
-        then
-          Detect_Terminal_Identity'Result.Kind = Unknown
-          and then not Detect_Terminal_Identity'Result.Is_Multiplexer)
-       and then
-         (if Termicap.Environment.Contains (Env, "TMUX") then
-            Detect_Terminal_Identity'Result.Is_Multiplexer);
+        then Detect_Terminal_Identity'Result.Kind = Unknown and then not Detect_Terminal_Identity'Result.Is_Multiplexer)
+       and then (if Termicap.Environment.Contains (Env, "TMUX") then Detect_Terminal_Identity'Result.Is_Multiplexer);
 
 end Termicap.Terminal_Id;

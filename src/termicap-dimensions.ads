@@ -32,7 +32,7 @@
 with Termicap.Environment;
 
 package Termicap.Dimensions
-   with SPARK_Mode
+  with SPARK_Mode
 is
 
    ---------------------------------------------------------------------------
@@ -81,9 +81,7 @@ is
    --  @relation(FUNC-DIM-003): Environment variable fallback
    --  @relation(FUNC-DIM-004): Default fallback to 80x24
    --  @relation(FUNC-DIM-005): Pure query function signature
-   function Get_Size
-      (Env    : Termicap.Environment.Environment;
-       Is_TTY : Boolean) return Terminal_Size
-      with Global => null;
+   function Get_Size (Env : Termicap.Environment.Environment; Is_TTY : Boolean) return Terminal_Size
+   with Global => null;
 
 end Termicap.Dimensions;

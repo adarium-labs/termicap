@@ -16,8 +16,8 @@ with Termicap.Environment.Capture;
 package body Termicap.Color.BG_Query.IO is
 
    procedure Query_Color
-     (Kind        :     BG_Query.Query_Kind;
-      Timeout_Ms  :     Natural;
+     (Kind        : BG_Query.Query_Kind;
+      Timeout_Ms  : Natural;
       Response    : out BG_Query.Byte_Array;
       Resp_Length : out Natural;
       Timed_Out   : out Boolean)
@@ -25,11 +25,10 @@ package body Termicap.Color.BG_Query.IO is
       use Termicap.OSC;
       use Termicap.Terminal_Id;
 
-      Query_Bytes : constant BG_Query.Byte_Array :=
-        BG_Query.Query_Sequence (Kind);
-      Env         : Termicap.Environment.Environment;
-      Identity    : Termicap.Terminal_Id.Terminal_Identity;
-      Passthrough : Termicap.OSC.Parsing.Passthrough_Mode;
+      Query_Bytes  : constant BG_Query.Byte_Array := BG_Query.Query_Sequence (Kind);
+      Env          : Termicap.Environment.Environment;
+      Identity     : Termicap.Terminal_Id.Terminal_Identity;
+      Passthrough  : Termicap.OSC.Parsing.Passthrough_Mode;
       OSC_Response : Termicap.OSC.Response_Buffer;
       OSC_Length   : Natural;
       OSC_Timeout  : Boolean;
@@ -49,16 +48,15 @@ package body Termicap.Color.BG_Query.IO is
 
       declare
          Wrapped : constant Termicap.OSC.Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough
-             (Termicap.OSC.Byte_Array (Query_Bytes), Passthrough);
+           Termicap.OSC.Parsing.Wrap_For_Passthrough (Termicap.OSC.Byte_Array (Query_Bytes), Passthrough);
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;
       begin
          Termicap.OSC.Open (Session, Status);
          if Status /= Session_OK then
             Resp_Length := 0;
-            Timed_Out   := True;
-            Response    := [others => 0];
+            Timed_Out := True;
+            Response := [others => 0];
             return;
          end if;
 
@@ -71,7 +69,7 @@ package body Termicap.Color.BG_Query.IO is
             Timed_Out   => OSC_Timeout);
 
          Resp_Length := OSC_Length;
-         Timed_Out   := OSC_Timeout;
+         Timed_Out := OSC_Timeout;
          for I in 1 .. OSC_Length loop
             Response (I) := BG_Query.Byte (OSC_Response (I));
          end loop;

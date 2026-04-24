@@ -82,10 +82,11 @@ package Termicap.DECRPM.IO is
    --  @relation(FUNC-RPM-004): Mode_Query_Result discriminated record
    type Mode_Query_Result (Success : Boolean := False) is record
       case Success is
-         when True  =>
+         when True =>
             Report : Mode_Report;
+
          when False =>
-            Error  : Query_Error;
+            Error : Query_Error;
       end case;
    end record;
 
@@ -106,11 +107,12 @@ package Termicap.DECRPM.IO is
    --  @relation(FUNC-RPM-011): Batch_Query_Result discriminated record
    type Batch_Query_Result (Success : Boolean := False) is record
       case Success is
-         when True  =>
+         when True =>
             Reports : Mode_Report_Array;
             Count   : Positive;
+
          when False =>
-            Error   : Query_Error;
+            Error : Query_Error;
       end case;
    end record;
 
@@ -148,8 +150,8 @@ package Termicap.DECRPM.IO is
    --                     or if the Probe_Session failed to open.
    --  @relation(FUNC-RPM-008): Query_Mode I/O procedure
    procedure Query_Mode
-     (Mode        :     Mode_Id;
-      Timeout_Ms  :     Natural;
+     (Mode        : Mode_Id;
+      Timeout_Ms  : Natural;
       Response    : out Termicap.OSC.Response_Buffer;
       Resp_Length : out Natural;
       Timed_Out   : out Boolean)
@@ -177,9 +179,7 @@ package Termicap.DECRPM.IO is
    --  @return Mode_Query_Result with Success = True and the parsed Mode_Report on
    --          success; Success = False with a Query_Error on failure.
    --  @relation(FUNC-RPM-009): Detect_Mode top-level convenience function
-   function Detect_Mode
-     (Mode       : Mode_Id;
-      Timeout_Ms : Natural := 100) return Mode_Query_Result;
+   function Detect_Mode (Mode : Mode_Id; Timeout_Ms : Natural := 100) return Mode_Query_Result;
 
    ---------------------------------------------------------------------------
    --  Detect_Modes Batch Function (FUNC-RPM-011)
@@ -213,9 +213,7 @@ package Termicap.DECRPM.IO is
    --          success; Success = False with a Query_Error on session open failure.
    --  @relation(FUNC-RPM-011): Detect_Modes batch convenience function
    function Detect_Modes
-     (Modes      : Mode_Id_Array;
-      Count      : Positive;
-      Timeout_Ms : Natural := 200) return Batch_Query_Result
+     (Modes : Mode_Id_Array; Count : Positive; Timeout_Ms : Natural := 200) return Batch_Query_Result
    with Pre => Count <= MAX_BATCH_MODES;
 
 end Termicap.DECRPM.IO;

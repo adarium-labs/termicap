@@ -103,9 +103,7 @@ is
    --  the appropriate value.
    --  @relation(FUNC-DSP-007): No-color variant (Level => None)
    --  @relation(FUNC-DSP-008): Return type for general Downsample functions
-   type Downsampled_Color
-     (Level : Termicap.Color.Color_Level := Termicap.Color.Color_Level'First)
-   is record
+   type Downsampled_Color (Level : Termicap.Color.Color_Level := Termicap.Color.Color_Level'First) is record
       case Level is
          when Termicap.Color.None =>
             null;
@@ -153,8 +151,7 @@ is
    --  @param Index A 256-color palette index.
    --  @return An ANSI color index in 0 .. 15.
    --  @relation(FUNC-DSP-006): 256-color to 16-color conversion
-   function Downsample_256_To_16
-     (Index : Color_Index_256) return Color_Index_16
+   function Downsample_256_To_16 (Index : Color_Index_256) return Color_Index_16
    with Global => null;
 
    ---------------------------------------------------------------------------
@@ -175,13 +172,11 @@ is
    --  @relation(FUNC-DSP-008): General dispatch for RGB source
    --  @relation(FUNC-DSP-009): Idempotency postcondition for TrueColor source
    --  @relation(FUNC-DSP-010): Monotonicity postcondition
-   function Downsample
-     (Color : RGB; Target : Termicap.Color.Color_Level)
-      return Downsampled_Color
+   function Downsample (Color : RGB; Target : Termicap.Color.Color_Level) return Downsampled_Color
    with
      Global => null,
-     Post   =>
-       --  Idempotency / identity: TrueColor source at TrueColor target
+     Post =>
+     --  Idempotency / identity: TrueColor source at TrueColor target
        (if Target >= Termicap.Color.True_Color
         then
           Downsample'Result.Level = Termicap.Color.True_Color
@@ -189,12 +184,10 @@ is
           and then Downsample'Result.RGB_Value.Green = Color.Green
           and then Downsample'Result.RGB_Value.Blue = Color.Blue)
        --  Strip-to-None
-       and then (if Target = Termicap.Color.None
-                 then Downsample'Result.Level = Termicap.Color.None)
-       --  Monotonicity: result level never exceeds target
+       and then (if Target = Termicap.Color.None then Downsample'Result.Level = Termicap.Color.None)
+                --  Monotonicity: result level never exceeds target
        and then Color_Level_Of (Downsample'Result)
-                <= Termicap.Color.Color_Level'Min
-                     (Termicap.Color.True_Color, Target);
+                <= Termicap.Color.Color_Level'Min (Termicap.Color.True_Color, Target);
 
    --  @summary Downsample a 256-color palette index to the given target level.
    --  @description Dispatches to the appropriate conversion:
@@ -209,24 +202,18 @@ is
    --  @relation(FUNC-DSP-008): General dispatch for 256-color source
    --  @relation(FUNC-DSP-009): Idempotency postcondition for Extended_256 source
    --  @relation(FUNC-DSP-010): Monotonicity postcondition
-   function Downsample
-     (Index : Color_Index_256; Target : Termicap.Color.Color_Level)
-      return Downsampled_Color
+   function Downsample (Index : Color_Index_256; Target : Termicap.Color.Color_Level) return Downsampled_Color
    with
      Global => null,
-     Post   =>
-       --  Idempotency / identity: Extended_256 source at Extended_256 (or higher) target
+     Post =>
+     --  Idempotency / identity: Extended_256 source at Extended_256 (or higher) target
        (if Target >= Termicap.Color.Extended_256
-        then
-          Downsample'Result.Level = Termicap.Color.Extended_256
-          and then Downsample'Result.Index_256 = Index)
+        then Downsample'Result.Level = Termicap.Color.Extended_256 and then Downsample'Result.Index_256 = Index)
        --  Strip-to-None
-       and then (if Target = Termicap.Color.None
-                 then Downsample'Result.Level = Termicap.Color.None)
-       --  Monotonicity: result level never exceeds min(Extended_256, Target)
+       and then (if Target = Termicap.Color.None then Downsample'Result.Level = Termicap.Color.None)
+                --  Monotonicity: result level never exceeds min(Extended_256, Target)
        and then Color_Level_Of (Downsample'Result)
-                <= Termicap.Color.Color_Level'Min
-                     (Termicap.Color.Extended_256, Target);
+                <= Termicap.Color.Color_Level'Min (Termicap.Color.Extended_256, Target);
 
    ---------------------------------------------------------------------------
    --  Classification (FUNC-DSP-010)
@@ -239,8 +226,7 @@ is
    --  @param D A Downsampled_Color value.
    --  @return The Color_Level discriminant of D.
    --  @relation(FUNC-DSP-010): Color_Level_Of for monotonicity verification
-   function Color_Level_Of
-     (D : Downsampled_Color) return Termicap.Color.Color_Level
+   function Color_Level_Of (D : Downsampled_Color) return Termicap.Color.Color_Level
    with Global => null, Post => Color_Level_Of'Result = D.Level;
 
 end Termicap.Downsampling;

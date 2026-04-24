@@ -153,21 +153,13 @@ is
    function Parse_Color_Flag (Value : String) return Override_Mode is
       Lower : constant String := Ada.Characters.Handling.To_Lower (Value);
    begin
-      if Lower = "never"
-        or else Lower = "false"
-        or else Lower = "off"
-        or else Lower = "0"
-      then
+      if Lower = "never" or else Lower = "false" or else Lower = "off" or else Lower = "0" then
          return Force_None;
       elsif Lower = "true" or else Lower = "1" or else Lower = "16" then
          return Force_Basic;
       elsif Lower = "2" or else Lower = "256" then
          return Force_256;
-      elsif Lower = "always"
-        or else Lower = "truecolor"
-        or else Lower = "16m"
-        or else Lower = "3"
-      then
+      elsif Lower = "always" or else Lower = "truecolor" or else Lower = "16m" or else Lower = "3" then
          return Force_True_Color;
       else
          return Auto;

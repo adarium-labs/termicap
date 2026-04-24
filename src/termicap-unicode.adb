@@ -40,9 +40,7 @@ is
          return False;
       end if;
       for I in A'Range loop
-         if To_Lower_Char (A (I))
-           /= To_Lower_Char (B (B'First + (I - A'First)))
-         then
+         if To_Lower_Char (A (I)) /= To_Lower_Char (B (B'First + (I - A'First))) then
             return False;
          end if;
       end loop;
@@ -79,7 +77,7 @@ is
                elsif C in 'a' .. 'z' | '0' .. '9' then
                   State := Want_U;  --  alphanumeric break: reset
                end if;
-            --  Non-alphanumeric characters are ignored (separator tolerance)
+               --  Non-alphanumeric characters are ignored (separator tolerance)
 
             when Want_F =>
                if C = 'f' then
@@ -107,22 +105,18 @@ is
    --  Body-local helper: locale inspection (FUNC-UNI-003)
    ---------------------------------------------------------------------------
 
-   function Has_UTF8_Locale
-     (Env : Termicap.Environment.Environment) return Boolean
+   function Has_UTF8_Locale (Env : Termicap.Environment.Environment) return Boolean
    with Global => null;
    pragma Inline (Has_UTF8_Locale);
 
-   function Has_UTF8_Locale
-     (Env : Termicap.Environment.Environment) return Boolean is
+   function Has_UTF8_Locale (Env : Termicap.Environment.Environment) return Boolean is
    begin
       --  LC_ALL > LC_CTYPE > LANG (POSIX resolution order)
-      if Contains (Env, "LC_ALL") and then Value (Env, "LC_ALL")'Length > 0
-      then
+      if Contains (Env, "LC_ALL") and then Value (Env, "LC_ALL")'Length > 0 then
          return Contains_UTF8 (Value (Env, "LC_ALL"));
       end if;
 
-      if Contains (Env, "LC_CTYPE") and then Value (Env, "LC_CTYPE")'Length > 0
-      then
+      if Contains (Env, "LC_CTYPE") and then Value (Env, "LC_CTYPE")'Length > 0 then
          return Contains_UTF8 (Value (Env, "LC_CTYPE"));
       end if;
 
@@ -137,31 +131,25 @@ is
    --  Body-local helper: CI environment Unicode awareness (FUNC-UNI-006)
    ---------------------------------------------------------------------------
 
-   function Is_CI_Unicode
-     (Env : Termicap.Environment.Environment) return Boolean
+   function Is_CI_Unicode (Env : Termicap.Environment.Environment) return Boolean
    with Global => null;
    pragma Inline (Is_CI_Unicode);
 
-   function Is_CI_Unicode
-     (Env : Termicap.Environment.Environment) return Boolean is
+   function Is_CI_Unicode (Env : Termicap.Environment.Environment) return Boolean is
    begin
       return
-        Contains (Env, "GITHUB_ACTIONS")
-        or else Contains (Env, "GITEA_ACTIONS")
-        or else Contains (Env, "CIRCLECI");
+        Contains (Env, "GITHUB_ACTIONS") or else Contains (Env, "GITEA_ACTIONS") or else Contains (Env, "CIRCLECI");
    end Is_CI_Unicode;
 
    ---------------------------------------------------------------------------
    --  Body-local helper: Windows Unicode heuristics (FUNC-UNI-005)
    ---------------------------------------------------------------------------
 
-   function Detect_Windows_Unicode
-     (Env : Termicap.Environment.Environment) return Unicode_Level
+   function Detect_Windows_Unicode (Env : Termicap.Environment.Environment) return Unicode_Level
    with Global => null;
    pragma Inline (Detect_Windows_Unicode);
 
-   function Detect_Windows_Unicode
-     (Env : Termicap.Environment.Environment) return Unicode_Level is
+   function Detect_Windows_Unicode (Env : Termicap.Environment.Environment) return Unicode_Level is
    begin
       --  Windows Terminal (WT_SESSION is set by Windows Terminal)
       if Contains (Env, "WT_SESSION") then
@@ -174,21 +162,12 @@ is
       end if;
 
       --  Known Unicode-capable TERM values on Windows
-      if Value_Matches
-           (Env,
-            "TERM",
-            ["xterm-256color",
-             "alacritty",
-             "rxvt-unicode",
-             "rxvt-unicode-256color"])
-      then
+      if Value_Matches (Env, "TERM", ["xterm-256color", "alacritty", "rxvt-unicode", "rxvt-unicode-256color"]) then
          return Basic;
       end if;
 
       --  JetBrains IDE terminal
-      if Equal_Insensitive
-           (Value (Env, "TERMINAL_EMULATOR"), "JetBrains-JediTerm")
-      then
+      if Equal_Insensitive (Value (Env, "TERMINAL_EMULATOR"), "JetBrains-JediTerm") then
          return Basic;
       end if;
 
@@ -199,9 +178,7 @@ is
    --  Main detection function: 5-step priority cascade (FUNC-UNI-008)
    ---------------------------------------------------------------------------
 
-   function Detect_Unicode_Level
-     (Env : Termicap.Environment.Environment) return Unicode_Level
-   is
+   function Detect_Unicode_Level (Env : Termicap.Environment.Environment) return Unicode_Level is
       Floor : Unicode_Level := None;
    begin
       --  Step 1: Locale inspection (FUNC-UNI-003)
@@ -215,8 +192,7 @@ is
       end if;
 
       --  Step 3: TERM=linux exclusion (FUNC-UNI-004)
-      if Equal_Insensitive (Value (Env, "TERM"), "linux") and then Floor = None
-      then
+      if Equal_Insensitive (Value (Env, "TERM"), "linux") and then Floor = None then
          return None;
       end if;
 

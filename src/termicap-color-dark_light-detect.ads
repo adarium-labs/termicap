@@ -67,6 +67,7 @@ package Termicap.Color.Dark_Light.Detect is
          when True =>
             Theme : Dark_Light.Theme_Kind;
             Color : BG_Query.RGB;
+
          when False =>
             Error : Detection.Detect_Error;
       end case;
@@ -86,7 +87,6 @@ package Termicap.Color.Dark_Light.Detect is
    --  @param Timeout_Ms Millisecond timeout for the underlying OSC query (default 1000).
    --  @return Theme_Result with Theme and Color on success, Error otherwise.
    --  @relation(FUNC-DKL-005): Combined background detection and theme classification
-   function Detect_Theme
-     (Timeout_Ms : Natural := 1_000) return Theme_Result;
+   function Detect_Theme (Timeout_Ms : Natural := 1_000) return Theme_Result;
 
 end Termicap.Color.Dark_Light.Detect;

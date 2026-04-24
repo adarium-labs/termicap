@@ -85,7 +85,7 @@ package Termicap.DA1.IO is
    --  @relation(FUNC-DA1-011): Not-a-TTY guard via Probe_Session.Open
    --  @relation(FUNC-DA1-012): Multiplexer passthrough selection
    procedure Query_DA1
-     (Timeout_Ms  :     Natural;
+     (Timeout_Ms  : Natural;
       Response    : out Termicap.OSC.Response_Buffer;
       Resp_Length : out Natural;
       Timed_Out   : out Boolean)
@@ -112,7 +112,6 @@ package Termicap.DA1.IO is
    --  @return A DA1_Capabilities record; Supported = False when no response
    --          was received within the timeout or the session could not be opened.
    --  @relation(FUNC-DA1-009): Detect_DA1 convenience function
-   function Detect_DA1
-     (Timeout_Ms : Natural := 100) return DA1_Capabilities;
+   function Detect_DA1 (Timeout_Ms : Natural := 100) return DA1_Capabilities;
 
 end Termicap.DA1.IO;

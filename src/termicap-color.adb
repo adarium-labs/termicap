@@ -23,19 +23,10 @@ is
    ---------------------------------------------------------------------------
 
    --  Classifier for FORCE_COLOR raw string values (ADR-0005)
-   type Force_Color_Token is
-     (FC_Zero,
-      FC_False,
-      FC_One,
-      FC_True,
-      FC_Empty,
-      FC_Two,
-      FC_Three,
-      FC_Other);
+   type Force_Color_Token is (FC_Zero, FC_False, FC_One, FC_True, FC_Empty, FC_Two, FC_Three, FC_Other);
 
    --  Classifier for TERM_PROGRAM raw string values (FUNC-CLR-010)
-   type Term_Program_Token is
-     (TP_ITerm, TP_Apple_Terminal, TP_VSCode, TP_Other);
+   type Term_Program_Token is (TP_ITerm, TP_Apple_Terminal, TP_VSCode, TP_Other);
 
    ---------------------------------------------------------------------------
    --  Body-local helper: case-insensitive character lowering
@@ -63,16 +54,13 @@ is
          return False;
       end if;
       declare
-         Src_Slice : constant String :=
-           Source (Source'Last - Suffix'Length + 1 .. Source'Last);
+         Src_Slice : constant String := Source (Source'Last - Suffix'Length + 1 .. Source'Last);
       begin
          if Src_Slice'Length /= Suffix'Length then
             return False;
          end if;
          for I in Suffix'Range loop
-            if To_Lower_Char (Src_Slice (Src_Slice'First + (I - Suffix'First)))
-              /= To_Lower_Char (Suffix (I))
-            then
+            if To_Lower_Char (Src_Slice (Src_Slice'First + (I - Suffix'First))) /= To_Lower_Char (Suffix (I)) then
                return False;
             end if;
          end loop;
@@ -81,13 +69,11 @@ is
    end Ends_With;
 
    --  @summary Case-insensitive substring check.
-   function Contains_Substring
-     (Source : String; Pattern : String) return Boolean
+   function Contains_Substring (Source : String; Pattern : String) return Boolean
    with Global => null;
    pragma Inline (Contains_Substring);
 
-   function Contains_Substring
-     (Source : String; Pattern : String) return Boolean is
+   function Contains_Substring (Source : String; Pattern : String) return Boolean is
    begin
       if Pattern'Length = 0 then
          return True;
@@ -100,9 +86,7 @@ is
             Match : Boolean := True;
          begin
             for J in Pattern'Range loop
-               if To_Lower_Char (Source (I + (J - Pattern'First)))
-                 /= To_Lower_Char (Pattern (J))
-               then
+               if To_Lower_Char (Source (I + (J - Pattern'First))) /= To_Lower_Char (Pattern (J)) then
                   Match := False;
                   exit;
                end if;
@@ -129,13 +113,10 @@ is
          return False;
       end if;
       declare
-         Src_Slice : constant String :=
-           Source (Source'First .. Source'First + Prefix'Length - 1);
+         Src_Slice : constant String := Source (Source'First .. Source'First + Prefix'Length - 1);
       begin
          for I in Prefix'Range loop
-            if To_Lower_Char (Src_Slice (Src_Slice'First + (I - Prefix'First)))
-              /= To_Lower_Char (Prefix (I))
-            then
+            if To_Lower_Char (Src_Slice (Src_Slice'First + (I - Prefix'First))) /= To_Lower_Char (Prefix (I)) then
                return False;
             end if;
          end loop;
@@ -172,25 +153,21 @@ is
       end if;
    end Classify_Force_Color;
 
-   function Parse_Force_Color
-     (Env : Termicap.Environment.Environment) return Color_Level
+   function Parse_Force_Color (Env : Termicap.Environment.Environment) return Color_Level
    with Global => null;
    pragma Inline (Parse_Force_Color);
 
-   function Parse_Force_Color
-     (Env : Termicap.Environment.Environment) return Color_Level
-   is
-      Token : constant Force_Color_Token :=
-        Classify_Force_Color (Value (Env, "FORCE_COLOR"));
+   function Parse_Force_Color (Env : Termicap.Environment.Environment) return Color_Level is
+      Token : constant Force_Color_Token := Classify_Force_Color (Value (Env, "FORCE_COLOR"));
    begin
       case Token is
-         when FC_Zero | FC_False                     =>
+         when FC_Zero | FC_False =>
             return None;
 
-         when FC_Three                               =>
+         when FC_Three =>
             return True_Color;
 
-         when FC_Two                                 =>
+         when FC_Two =>
             return Extended_256;
 
          when FC_One | FC_True | FC_Empty | FC_Other =>
@@ -202,13 +179,11 @@ is
    --  CLICOLOR_FORCE helper (FUNC-CLR-005)
    ---------------------------------------------------------------------------
 
-   function Parse_Clicolor_Force
-     (Env : Termicap.Environment.Environment) return Color_Level
+   function Parse_Clicolor_Force (Env : Termicap.Environment.Environment) return Color_Level
    with Global => null;
    pragma Inline (Parse_Clicolor_Force);
 
-   function Parse_Clicolor_Force
-     (Env : Termicap.Environment.Environment) return Color_Level is
+   function Parse_Clicolor_Force (Env : Termicap.Environment.Environment) return Color_Level is
    begin
       if not Contains (Env, "CLICOLOR_FORCE") then
          return None;
@@ -224,13 +199,11 @@ is
    --  NO_COLOR helper (FUNC-CLR-003)
    ---------------------------------------------------------------------------
 
-   function Has_No_Color
-     (Env : Termicap.Environment.Environment) return Boolean
+   function Has_No_Color (Env : Termicap.Environment.Environment) return Boolean
    with Global => null;
    pragma Inline (Has_No_Color);
 
-   function Has_No_Color
-     (Env : Termicap.Environment.Environment) return Boolean is
+   function Has_No_Color (Env : Termicap.Environment.Environment) return Boolean is
    begin
       return Contains (Env, "NO_COLOR");
    end Has_No_Color;
@@ -239,13 +212,11 @@ is
    --  TERM=dumb helper (FUNC-CLR-006)
    ---------------------------------------------------------------------------
 
-   function Is_Dumb_Terminal
-     (Env : Termicap.Environment.Environment) return Boolean
+   function Is_Dumb_Terminal (Env : Termicap.Environment.Environment) return Boolean
    with Global => null;
    pragma Inline (Is_Dumb_Terminal);
 
-   function Is_Dumb_Terminal
-     (Env : Termicap.Environment.Environment) return Boolean is
+   function Is_Dumb_Terminal (Env : Termicap.Environment.Environment) return Boolean is
    begin
       return Equal_Case_Insensitive (Value (Env, "TERM"), "dumb");
    end Is_Dumb_Terminal;
@@ -254,18 +225,14 @@ is
    --  CI environment detection (FUNC-CLR-011)
    ---------------------------------------------------------------------------
 
-   function Detect_CI_Color
-     (Env : Termicap.Environment.Environment) return Color_Level
+   function Detect_CI_Color (Env : Termicap.Environment.Environment) return Color_Level
    with Global => null;
    pragma Inline (Detect_CI_Color);
 
-   function Detect_CI_Color
-     (Env : Termicap.Environment.Environment) return Color_Level is
+   function Detect_CI_Color (Env : Termicap.Environment.Environment) return Color_Level is
    begin
       --  Specific CI environments with TrueColor support
-      if (Contains (Env, "GITHUB_ACTIONS")
-          and then Equal_Case_Insensitive
-                     (Value (Env, "GITHUB_ACTIONS"), "true"))
+      if (Contains (Env, "GITHUB_ACTIONS") and then Equal_Case_Insensitive (Value (Env, "GITHUB_ACTIONS"), "true"))
         or else Contains (Env, "GITEA_ACTIONS")
         or else Contains (Env, "CIRCLECI")
       then
@@ -311,14 +278,11 @@ is
       end if;
    end Classify_Term_Program;
 
-   function Detect_Term_Program
-     (Env : Termicap.Environment.Environment) return Color_Level
+   function Detect_Term_Program (Env : Termicap.Environment.Environment) return Color_Level
    with Global => null;
    pragma Inline (Detect_Term_Program);
 
-   function Detect_Term_Program
-     (Env : Termicap.Environment.Environment) return Color_Level
-   is
+   function Detect_Term_Program (Env : Termicap.Environment.Environment) return Color_Level is
       TP : constant String := Value (Env, "TERM_PROGRAM");
    begin
       if not Contains (Env, "TERM_PROGRAM") then
@@ -326,7 +290,7 @@ is
       end if;
 
       case Classify_Term_Program (TP) is
-         when TP_ITerm                      =>
+         when TP_ITerm =>
             --  Version-gated: iTerm.app v3+ supports TrueColor
             declare
                Ver : constant String := Value (Env, "TERM_PROGRAM_VERSION");
@@ -340,7 +304,7 @@ is
          when TP_Apple_Terminal | TP_VSCode =>
             return Extended_256;
 
-         when TP_Other                      =>
+         when TP_Other =>
             return None;
       end case;
    end Detect_Term_Program;
@@ -349,14 +313,11 @@ is
    --  COLORTERM detection with multiplexer cap (FUNC-CLR-008, FUNC-CLR-013)
    ---------------------------------------------------------------------------
 
-   function Detect_Colorterm
-     (Env : Termicap.Environment.Environment) return Color_Level
+   function Detect_Colorterm (Env : Termicap.Environment.Environment) return Color_Level
    with Global => null;
    pragma Inline (Detect_Colorterm);
 
-   function Detect_Colorterm
-     (Env : Termicap.Environment.Environment) return Color_Level
-   is
+   function Detect_Colorterm (Env : Termicap.Environment.Environment) return Color_Level is
       CT   : constant String := Value (Env, "COLORTERM");
       Term : constant String := Value (Env, "TERM");
    begin
@@ -364,14 +325,9 @@ is
          return None;
       end if;
 
-      if Equal_Case_Insensitive (CT, "truecolor")
-        or else Equal_Case_Insensitive (CT, "24bit")
-      then
+      if Equal_Case_Insensitive (CT, "truecolor") or else Equal_Case_Insensitive (CT, "24bit") then
          --  Multiplexer cap (FUNC-CLR-013): screen cannot pass TrueColor
-         if Starts_With (Term, "screen")
-           and then not Equal_Case_Insensitive
-                          (Value (Env, "TERM_PROGRAM"), "tmux")
-         then
+         if Starts_With (Term, "screen") and then not Equal_Case_Insensitive (Value (Env, "TERM_PROGRAM"), "tmux") then
             return Extended_256;
          end if;
          return True_Color;
@@ -385,14 +341,11 @@ is
    --  TERM suffix/pattern detection (FUNC-CLR-009)
    ---------------------------------------------------------------------------
 
-   function Detect_Term_Pattern
-     (Env : Termicap.Environment.Environment) return Color_Level
+   function Detect_Term_Pattern (Env : Termicap.Environment.Environment) return Color_Level
    with Global => null;
    pragma Inline (Detect_Term_Pattern);
 
-   function Detect_Term_Pattern
-     (Env : Termicap.Environment.Environment) return Color_Level
-   is
+   function Detect_Term_Pattern (Env : Termicap.Environment.Environment) return Color_Level is
       Term : constant String := Value (Env, "TERM");
    begin
       if Term'Length = 0 then
@@ -425,13 +378,11 @@ is
    --  CLICOLOR helper (FUNC-CLR-012)
    ---------------------------------------------------------------------------
 
-   function Has_Clicolor
-     (Env : Termicap.Environment.Environment) return Boolean
+   function Has_Clicolor (Env : Termicap.Environment.Environment) return Boolean
    with Global => null;
    pragma Inline (Has_Clicolor);
 
-   function Has_Clicolor
-     (Env : Termicap.Environment.Environment) return Boolean is
+   function Has_Clicolor (Env : Termicap.Environment.Environment) return Boolean is
    begin
       if not Contains (Env, "CLICOLOR") then
          return False;
@@ -447,10 +398,7 @@ is
    --  Main detection function: 11-step priority cascade (FUNC-CLR-015)
    ---------------------------------------------------------------------------
 
-   function Detect_Color_Level
-     (Env : Termicap.Environment.Environment; Is_TTY : Boolean)
-      return Color_Level
-   is
+   function Detect_Color_Level (Env : Termicap.Environment.Environment; Is_TTY : Boolean) return Color_Level is
       Floor     : Color_Level := None;
       Force_Set : Boolean := False;
       CI_Level  : Color_Level;
@@ -458,19 +406,19 @@ is
    begin
       --  @relation(FUNC-OVR-004)
       case Termicap.Override.Get_Override is
-         when Termicap.Override.Force_None       =>
+         when Termicap.Override.Force_None =>
             return None;
 
-         when Termicap.Override.Force_Basic      =>
+         when Termicap.Override.Force_Basic =>
             return Basic_16;
 
-         when Termicap.Override.Force_256        =>
+         when Termicap.Override.Force_256 =>
             return Extended_256;
 
          when Termicap.Override.Force_True_Color =>
             return True_Color;
 
-         when Termicap.Override.Auto             =>
+         when Termicap.Override.Auto =>
             null;  --  proceed with normal detection
       end case;
 

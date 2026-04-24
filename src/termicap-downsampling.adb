@@ -82,10 +82,7 @@ is
 
    --  Reconstruct the channel value for cube index I (0..5).
    function Cube_Level (I : Natural) return Color_Component
-   with
-     Global => null,
-     Pre    => I in 0 .. 5,
-     Post   => Cube_Level'Result = CUBE_LEVELS (I);
+   with Global => null, Pre => I in 0 .. 5, Post => Cube_Level'Result = CUBE_LEVELS (I);
 
    function Cube_Level (I : Natural) return Color_Component is
    begin
@@ -168,8 +165,7 @@ is
 
    begin
       for I in Color_Index_16 loop
-         R_Mean :=
-           (Natural (Color.Red) + Natural (ANSI_16_PALETTE (I).Red)) / 2;
+         R_Mean := (Natural (Color.Red) + Natural (ANSI_16_PALETTE (I).Red)) / 2;
 
          DR := Integer (Color.Red) - Integer (ANSI_16_PALETTE (I).Red);
          DG := Integer (Color.Green) - Integer (ANSI_16_PALETTE (I).Green);
@@ -194,9 +190,7 @@ is
       return Best_Index;
    end Downsample_True_To_16;
 
-   function Downsample_256_To_16
-     (Index : Color_Index_256) return Color_Index_16
-   is
+   function Downsample_256_To_16 (Index : Color_Index_256) return Color_Index_16 is
       I          : Natural;
       RI, GI, BI : Natural range 0 .. 5;
       G          : Color_Component;
@@ -211,11 +205,7 @@ is
          RI := I / 36;
          GI := (I / 6) mod 6;
          BI := I mod 6;
-         return
-           Downsample_True_To_16
-             ((Red   => Cube_Level (RI),
-               Green => Cube_Level (GI),
-               Blue  => Cube_Level (BI)));
+         return Downsample_True_To_16 ((Red => Cube_Level (RI), Green => Cube_Level (GI), Blue => Cube_Level (BI)));
 
       else
          --  Branch 3: 232..255 grayscale ramp Ã¢ÂÂ reconstruct gray and delegate.
@@ -228,43 +218,33 @@ is
    --  General Dispatch Functions
    ---------------------------------------------------------------------------
 
-   function Downsample
-     (Color : RGB; Target : Termicap.Color.Color_Level)
-      return Downsampled_Color is
+   function Downsample (Color : RGB; Target : Termicap.Color.Color_Level) return Downsampled_Color is
    begin
       case Target is
-         when Termicap.Color.True_Color   =>
+         when Termicap.Color.True_Color =>
             return (Level => Termicap.Color.True_Color, RGB_Value => Color);
 
          when Termicap.Color.Extended_256 =>
-            return
-              (Level     => Termicap.Color.Extended_256,
-               Index_256 => Downsample_True_To_256 (Color));
+            return (Level => Termicap.Color.Extended_256, Index_256 => Downsample_True_To_256 (Color));
 
-         when Termicap.Color.Basic_16     =>
-            return
-              (Level    => Termicap.Color.Basic_16,
-               Index_16 => Downsample_True_To_16 (Color));
+         when Termicap.Color.Basic_16 =>
+            return (Level => Termicap.Color.Basic_16, Index_16 => Downsample_True_To_16 (Color));
 
-         when Termicap.Color.None         =>
+         when Termicap.Color.None =>
             return (Level => Termicap.Color.None);
       end case;
    end Downsample;
 
-   function Downsample
-     (Index : Color_Index_256; Target : Termicap.Color.Color_Level)
-      return Downsampled_Color is
+   function Downsample (Index : Color_Index_256; Target : Termicap.Color.Color_Level) return Downsampled_Color is
    begin
       case Target is
          when Termicap.Color.True_Color | Termicap.Color.Extended_256 =>
             return (Level => Termicap.Color.Extended_256, Index_256 => Index);
 
-         when Termicap.Color.Basic_16                                 =>
-            return
-              (Level    => Termicap.Color.Basic_16,
-               Index_16 => Downsample_256_To_16 (Index));
+         when Termicap.Color.Basic_16 =>
+            return (Level => Termicap.Color.Basic_16, Index_16 => Downsample_256_To_16 (Index));
 
-         when Termicap.Color.None                                     =>
+         when Termicap.Color.None =>
             return (Level => Termicap.Color.None);
       end case;
    end Downsample;
@@ -273,8 +253,7 @@ is
    --  Classification
    ---------------------------------------------------------------------------
 
-   function Color_Level_Of
-     (D : Downsampled_Color) return Termicap.Color.Color_Level is
+   function Color_Level_Of (D : Downsampled_Color) return Termicap.Color.Color_Level is
    begin
       return D.Level;
    end Color_Level_Of;

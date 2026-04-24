@@ -54,23 +54,18 @@ package body Termicap.OSC is
 
    --  tcgetattr wrapper: copies struct termios into Ada buffer (FUNC-OSC-002).
    function C_Save_Termios
-     (FD          : Interfaces.C.int;
-      Buf         : System.Address;
-      Buf_Size    : Interfaces.C.int;
-      Actual_Size : access Interfaces.C.int) return Interfaces.C.int;
+     (FD : Interfaces.C.int; Buf : System.Address; Buf_Size : Interfaces.C.int; Actual_Size : access Interfaces.C.int)
+      return Interfaces.C.int;
    pragma Import (C, C_Save_Termios, "termicap_osc_save_termios");
 
    --  tcsetattr(TCSANOW) wrapper: restores struct termios from Ada buffer (FUNC-OSC-002).
    function C_Restore_Termios
-     (FD : Interfaces.C.int; Buf : System.Address; Size : Interfaces.C.int)
-      return Interfaces.C.int;
+     (FD : Interfaces.C.int; Buf : System.Address; Size : Interfaces.C.int) return Interfaces.C.int;
    pragma Import (C, C_Restore_Termios, "termicap_osc_restore_termios");
 
    --  Raw-mode derivation and application via tcsetattr (FUNC-OSC-003).
    function C_Set_Raw
-     (FD        : Interfaces.C.int;
-      Saved_Buf : System.Address;
-      Size      : Interfaces.C.int) return Interfaces.C.int;
+     (FD : Interfaces.C.int; Saved_Buf : System.Address; Size : Interfaces.C.int) return Interfaces.C.int;
    pragma Import (C, C_Set_Raw, "termicap_osc_set_raw");
 
    --  select() + read() with millisecond timeout (FUNC-OSC-004).
@@ -85,10 +80,8 @@ package body Termicap.OSC is
 
    --  write() wrapper (FUNC-OSC-005).
    function C_Write
-     (FD      : Interfaces.C.int;
-      Buf     : System.Address;
-      Len     : Interfaces.C.int;
-      Written : access Interfaces.C.int) return Interfaces.C.int;
+     (FD : Interfaces.C.int; Buf : System.Address; Len : Interfaces.C.int; Written : access Interfaces.C.int)
+      return Interfaces.C.int;
    pragma Import (C, C_Write, "termicap_osc_write");
 
    --  ioctl(TIOCGPGRP) + getpgrp() comparison (FUNC-OSC-007).
@@ -158,9 +151,7 @@ package body Termicap.OSC is
       end if;
    end Close_Terminal;
 
-   procedure Save_Termios
-     (FD : File_Descriptor; State : out Termios_State; OK : out Boolean)
-   is
+   procedure Save_Termios (FD : File_Descriptor; State : out Termios_State; OK : out Boolean) is
       Actual_Size : aliased Interfaces.C.int := 0;
       Status      : Interfaces.C.int;
    begin
@@ -182,9 +173,7 @@ package body Termicap.OSC is
       end if;
    end Save_Termios;
 
-   procedure Restore_Termios
-     (FD : File_Descriptor; State : Termios_State; OK : out Boolean)
-   is
+   procedure Restore_Termios (FD : File_Descriptor; State : Termios_State; OK : out Boolean) is
       Status : Interfaces.C.int;
    begin
       if State.Size = 0 then
@@ -193,17 +182,12 @@ package body Termicap.OSC is
       end if;
 
       Status :=
-        C_Restore_Termios
-          (Interfaces.C.int (FD),
-           State.Data (State.Data'First)'Address,
-           Interfaces.C.int (State.Size));
+        C_Restore_Termios (Interfaces.C.int (FD), State.Data (State.Data'First)'Address, Interfaces.C.int (State.Size));
 
       OK := (Status = 0);
    end Restore_Termios;
 
-   procedure Set_Raw_Mode
-     (FD : File_Descriptor; State : Termios_State; OK : out Boolean)
-   is
+   procedure Set_Raw_Mode (FD : File_Descriptor; State : Termios_State; OK : out Boolean) is
       Status : Interfaces.C.int;
    begin
       if State.Size = 0 then
@@ -211,11 +195,7 @@ package body Termicap.OSC is
          return;
       end if;
 
-      Status :=
-        C_Set_Raw
-          (Interfaces.C.int (FD),
-           State.Data (State.Data'First)'Address,
-           Interfaces.C.int (State.Size));
+      Status := C_Set_Raw (Interfaces.C.int (FD), State.Data (State.Data'First)'Address, Interfaces.C.int (State.Size));
 
       OK := (Status = 0);
    end Set_Raw_Mode;
@@ -262,8 +242,7 @@ package body Termicap.OSC is
    end Timed_Read;
 
    function Is_Foreground_Process (FD : File_Descriptor) return Boolean is
-      Result : constant Interfaces.C.int :=
-        C_Is_Foreground (Interfaces.C.int (FD));
+      Result : constant Interfaces.C.int := C_Is_Foreground (Interfaces.C.int (FD));
    begin
       return Result = 1;
    end Is_Foreground_Process;
@@ -283,12 +262,7 @@ package body Termicap.OSC is
    --  Query Operations (FUNC-OSC-005, FUNC-OSC-006, FUNC-OSC-013)
    ---------------------------------------------------------------------------
 
-   procedure Write_Query
-     (Session : Probe_Session;
-      Query   : Byte_Array;
-      Written : out Natural;
-      Success : out Boolean)
-   is
+   procedure Write_Query (Session : Probe_Session; Query : Byte_Array; Written : out Natural; Success : out Boolean) is
       C_Written : aliased Interfaces.C.int := 0;
       Status    : Interfaces.C.int;
    begin
@@ -321,11 +295,7 @@ package body Termicap.OSC is
       Retry       : Boolean := False)
    is
 
-      procedure Do_Query
-        (Effective_Timeout : Natural;
-         Did_Time_Out      : out Boolean;
-         Out_Length        : out Natural)
-      is
+      procedure Do_Query (Effective_Timeout : Natural; Did_Time_Out : out Boolean; Out_Length : out Natural) is
          Buffer       : Response_Buffer := [others => 0];
          Length       : Natural := 0;
          Chunk        : Byte_Array (1 .. 512);
@@ -356,9 +326,7 @@ package body Termicap.OSC is
          --  Step 2: accumulate response until DA1 detected or timeout
          loop
             --  Compute elapsed time and remaining budget
-            Elapsed_Ms :=
-              Natural
-                (Ada.Calendar."-" (Ada.Calendar.Clock, Start_Time) * 1_000.0);
+            Elapsed_Ms := Natural (Ada.Calendar."-" (Ada.Calendar.Clock, Start_Time) * 1_000.0);
 
             if Elapsed_Ms >= Effective_Timeout then
                return;  --  total timeout expired
@@ -367,8 +335,7 @@ package body Termicap.OSC is
 
             Remaining_Ms := Effective_Timeout - Elapsed_Ms;
 
-            Timed_Read
-              (Session.FD, Chunk, Chunk_Len, Remaining_Ms, Chunk_Tout);
+            Timed_Read (Session.FD, Chunk, Chunk_Len, Remaining_Ms, Chunk_Tout);
 
             if Chunk_Tout or else Chunk_Len = 0 then
                return;  --  timeout or no data
@@ -387,8 +354,7 @@ package body Termicap.OSC is
 
             --  Check for DA1 sentinel in accumulated bytes
             if Termicap.OSC.Parsing.Contains_DA1_Response (Buffer, Length) then
-               Boundary :=
-                 Termicap.OSC.Parsing.DA1_Response_Start (Buffer, Length);
+               Boundary := Termicap.OSC.Parsing.DA1_Response_Start (Buffer, Length);
 
                --  Boundary is the 1-based index of the ESC that starts DA1;
                --  pre-sentinel bytes are 1 .. Boundary-1.
@@ -443,9 +409,9 @@ package body Termicap.OSC is
       Elapsed_Ms   : Natural;
       Remaining_Ms : Natural;
    begin
-      Response    := [others => 0];
+      Response := [others => 0];
       Resp_Length := 0;
-      Timed_Out   := True;
+      Timed_Out := True;
 
       --  Write the query (e.g., DA1_QUERY).
       Write_Query (Session, Query, Written, Write_OK);
@@ -455,9 +421,7 @@ package body Termicap.OSC is
 
       --  Accumulate bytes until Contains_DA1_Response or timeout.
       loop
-         Elapsed_Ms :=
-           Natural
-             (Ada.Calendar."-" (Ada.Calendar.Clock, Start_Time) * 1_000.0);
+         Elapsed_Ms := Natural (Ada.Calendar."-" (Ada.Calendar.Clock, Start_Time) * 1_000.0);
 
          exit when Elapsed_Ms >= Timeout_Ms;
 
@@ -488,8 +452,7 @@ package body Termicap.OSC is
    --  Session Lifecycle (FUNC-OSC-008)
    ---------------------------------------------------------------------------
 
-   procedure Open (Session : in out Probe_Session; Status : out Session_Status)
-   is
+   procedure Open (Session : in out Probe_Session; Status : out Session_Status) is
       Save_OK  : Boolean;
       Raw_OK   : Boolean;
       Acquired : Boolean;

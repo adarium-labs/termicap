@@ -23,13 +23,8 @@ is
    ---------------------------------------------------------------------------
 
    --  @relation(FUNC-DA1-004): Interpret_DA1 pure SPARK function
-   function Interpret_DA1
-     (Params : Termicap.OSC.Parsing.DA1_Params) return DA1_Capabilities
-   is
-      Result : DA1_Capabilities :=
-        (Supported => False,
-         Level     => Unknown,
-         Flags     => [others => False]);
+   function Interpret_DA1 (Params : Termicap.OSC.Parsing.DA1_Params) return DA1_Capabilities is
+      Result : DA1_Capabilities := (Supported => False, Level => Unknown, Flags => [others => False]);
    begin
       --  Step 1: Empty response -> return unsupported default.
       if Params.Count = 0 then
@@ -42,24 +37,41 @@ is
       --  Step 3: Decode first parameter as VT conformance level.
       Result.Level :=
         (case Params.Values (1) is
-           when 62    => VT200,
-           when 63    => VT300,
-           when 64    => VT400,
-           when 65    => VT500,
+           when 62 => VT200,
+           when 63 => VT300,
+           when 64 => VT400,
+           when 65 => VT500,
            when others => Unknown);
 
       --  Step 4: Scan remaining parameters for capability flags.
       for I in 2 .. Params.Count loop
          case Params.Values (I) is
-            when 2      => Result.Flags (Printer)            := True;
-            when 3      => Result.Flags (ReGIS_Graphics)     := True;
-            when 4      => Result.Flags (Sixel_Graphics)     := True;
-            when 6      => Result.Flags (Selective_Erase)    := True;
-            when 8      => Result.Flags (User_Defined_Keys)  := True;
-            when 18     => Result.Flags (Windowing)          := True;
-            when 22     => Result.Flags (ANSI_Color)         := True;
-            when 28     => Result.Flags (Rectangular_Editing) := True;
-            when others => null;  --  Silently ignore unrecognised Ps values.
+            when 2 =>
+               Result.Flags (Printer) := True;
+
+            when 3 =>
+               Result.Flags (ReGIS_Graphics) := True;
+
+            when 4 =>
+               Result.Flags (Sixel_Graphics) := True;
+
+            when 6 =>
+               Result.Flags (Selective_Erase) := True;
+
+            when 8 =>
+               Result.Flags (User_Defined_Keys) := True;
+
+            when 18 =>
+               Result.Flags (Windowing) := True;
+
+            when 22 =>
+               Result.Flags (ANSI_Color) := True;
+
+            when 28 =>
+               Result.Flags (Rectangular_Editing) := True;
+
+            when others =>
+               null;  --  Silently ignore unrecognised Ps values.
          end case;
       end loop;
 

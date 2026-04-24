@@ -43,18 +43,14 @@ is
          return False;
       end if;
       for I in 1 .. Pre_Len loop
-         if To_Lower (Source (Source'First + I - 1))
-           /= To_Lower (Prefix (Prefix'First + I - 1))
-         then
+         if To_Lower (Source (Source'First + I - 1)) /= To_Lower (Prefix (Prefix'First + I - 1)) then
             return False;
          end if;
       end loop;
       return True;
    end Starts_With_CI;
 
-   function Detect_Terminal_Identity
-     (Env : Termicap.Environment.Environment) return Terminal_Identity
-   is
+   function Detect_Terminal_Identity (Env : Termicap.Environment.Environment) return Terminal_Identity is
       Result : Terminal_Identity :=
         (Kind            => Unknown,
          Program_Name    => Null_Unbounded_String,
@@ -65,8 +61,7 @@ is
       --  Populate raw string fields regardless of classification outcome
       --  (FUNC-TID-004: string fields always populated from env vars).
       Result.Program_Name := To_Unbounded_String (Value (Env, "TERM_PROGRAM"));
-      Result.Program_Version :=
-        To_Unbounded_String (Value (Env, "TERM_PROGRAM_VERSION"));
+      Result.Program_Version := To_Unbounded_String (Value (Env, "TERM_PROGRAM_VERSION"));
       Result.Term_Value := To_Unbounded_String (Value (Env, "TERM"));
 
       --  Step 1: TERM_PROGRAM (FUNC-TID-004, priority 1)
@@ -91,11 +86,8 @@ is
       end if;
 
       --  Step 2: TERMINAL_EMULATOR (FUNC-TID-004, priority 2)
-      if Result.Kind = Unknown and then Contains (Env, "TERMINAL_EMULATOR")
-      then
-         if Equal_Case_Insensitive
-              (Value (Env, "TERMINAL_EMULATOR"), "JetBrains-JediTerm")
-         then
+      if Result.Kind = Unknown and then Contains (Env, "TERMINAL_EMULATOR") then
+         if Equal_Case_Insensitive (Value (Env, "TERMINAL_EMULATOR"), "JetBrains-JediTerm") then
             Result.Kind := JediTerm;
          end if;
       end if;
@@ -143,9 +135,7 @@ is
                Result.Kind := WezTerm;
             elsif Starts_With_CI (T, "rxvt") then
                Result.Kind := Rxvt;
-            elsif Equal_Case_Insensitive (T, "foot")
-              or else Equal_Case_Insensitive (T, "foot-extra")
-            then
+            elsif Equal_Case_Insensitive (T, "foot") or else Equal_Case_Insensitive (T, "foot-extra") then
                Result.Kind := Foot;
             elsif Starts_With_CI (T, "xterm") then
                Result.Kind := Xterm;

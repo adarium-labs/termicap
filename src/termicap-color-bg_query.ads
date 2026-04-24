@@ -135,10 +135,14 @@ is
    --  X11 OSC 11 protocol.
    --  @relation(FUNC-BGC-003): OSC 11 background query constant
    OSC_BG_QUERY : constant Byte_Array :=
-     [16#1B#, 16#5D#,                                                    --  ESC ]
-      Character'Pos ('1'), Character'Pos ('1'), Character'Pos (';'),     --  1 1 ;
+     [16#1B#,
+      16#5D#,                                                    --  ESC ]
+      Character'Pos ('1'),
+      Character'Pos ('1'),
+      Character'Pos (';'),     --  1 1 ;
       Character'Pos ('?'),                                               --  ?
-      16#1B#, 16#5C#];                                                   --  ESC \ (ST)
+      16#1B#,
+      16#5C#];                                                   --  ESC \ (ST)
 
    --  @summary OSC 10 foreground color query byte sequence.
    --  @description Encodes the string ESC ] 1 0 ; ? ESC \ (ST-terminated).
@@ -146,10 +150,14 @@ is
    --  X11 OSC 10 protocol.
    --  @relation(FUNC-BGC-004): OSC 10 foreground query constant
    OSC_FG_QUERY : constant Byte_Array :=
-     [16#1B#, 16#5D#,                                                    --  ESC ]
-      Character'Pos ('1'), Character'Pos ('0'), Character'Pos (';'),     --  1 0 ;
+     [16#1B#,
+      16#5D#,                                                    --  ESC ]
+      Character'Pos ('1'),
+      Character'Pos ('0'),
+      Character'Pos (';'),     --  1 0 ;
       Character'Pos ('?'),                                               --  ?
-      16#1B#, 16#5C#];                                                   --  ESC \ (ST)
+      16#1B#,
+      16#5C#];                                                   --  ESC \ (ST)
 
    ---------------------------------------------------------------------------
    --  Result Types
@@ -162,8 +170,11 @@ is
    --  @relation(FUNC-BGC-007): Parse_Result type
    type Parse_Result (Success : Boolean := False) is record
       case Success is
-         when True  => Color : RGB;
-         when False => null;
+         when True =>
+            Color : RGB;
+
+         when False =>
+            null;
       end case;
    end record;
 
@@ -173,8 +184,11 @@ is
    --  @relation(FUNC-BGC-009): Channel_Result type
    type Channel_Result (Success : Boolean := False) is record
       case Success is
-         when True  => Value : Natural range 0 .. 255;
-         when False => null;
+         when True =>
+            Value : Natural range 0 .. 255;
+
+         when False =>
+            null;
       end case;
    end record;
 
@@ -197,7 +211,9 @@ is
          when True =>
             Offset         : Positive;
             Payload_Length : Natural;
-         when False => null;
+
+         when False =>
+            null;
       end case;
    end record;
 
@@ -228,21 +244,36 @@ is
    --  @relation(FUNC-BGC-012): ANSI_COLOR_TABLE constant
    --  @relation(FUNC-BGC-018): Canonical xterm defaults
    ANSI_COLOR_TABLE : constant ANSI_Color_Array :=
-     [0  => (Red =>   0, Green =>   0, Blue =>   0),   --  Black
-      1  => (Red => 128, Green =>   0, Blue =>   0),   --  Dark Red
-      2  => (Red =>   0, Green => 128, Blue =>   0),   --  Dark Green
-      3  => (Red => 128, Green => 128, Blue =>   0),   --  Dark Yellow (Olive)
-      4  => (Red =>   0, Green =>   0, Blue => 128),   --  Dark Blue
-      5  => (Red => 128, Green =>   0, Blue => 128),   --  Dark Magenta
-      6  => (Red =>   0, Green => 128, Blue => 128),   --  Dark Cyan
-      7  => (Red => 192, Green => 192, Blue => 192),   --  Light Grey
-      8  => (Red => 128, Green => 128, Blue => 128),   --  Dark Grey
-      9  => (Red => 255, Green =>   0, Blue =>   0),   --  Bright Red
-      10 => (Red =>   0, Green => 255, Blue =>   0),   --  Bright Green
-      11 => (Red => 255, Green => 255, Blue =>   0),   --  Bright Yellow
-      12 => (Red =>   0, Green =>   0, Blue => 255),   --  Bright Blue
-      13 => (Red => 255, Green =>   0, Blue => 255),   --  Bright Magenta
-      14 => (Red =>   0, Green => 255, Blue => 255),   --  Bright Cyan
+     [0  => (Red => 0, Green => 0, Blue => 0),
+      --  Black
+      1  => (Red => 128, Green => 0, Blue => 0),
+      --  Dark Red
+      2  => (Red => 0, Green => 128, Blue => 0),
+      --  Dark Green
+      3  => (Red => 128, Green => 128, Blue => 0),
+      --  Dark Yellow (Olive)
+      4  => (Red => 0, Green => 0, Blue => 128),
+      --  Dark Blue
+      5  => (Red => 128, Green => 0, Blue => 128),
+      --  Dark Magenta
+      6  => (Red => 0, Green => 128, Blue => 128),
+      --  Dark Cyan
+      7  => (Red => 192, Green => 192, Blue => 192),
+      --  Light Grey
+      8  => (Red => 128, Green => 128, Blue => 128),
+      --  Dark Grey
+      9  => (Red => 255, Green => 0, Blue => 0),
+      --  Bright Red
+      10 => (Red => 0, Green => 255, Blue => 0),
+      --  Bright Green
+      11 => (Red => 255, Green => 255, Blue => 0),
+      --  Bright Yellow
+      12 => (Red => 0, Green => 0, Blue => 255),
+      --  Bright Blue
+      13 => (Red => 255, Green => 0, Blue => 255),
+      --  Bright Magenta
+      14 => (Red => 0, Green => 255, Blue => 255),
+      --  Bright Cyan
       15 => (Red => 255, Green => 255, Blue => 255)];  --  White
 
    ---------------------------------------------------------------------------
@@ -274,17 +305,15 @@ is
    --  @param Length Number of valid bytes in Bytes to examine.
    --  @return Parse_Result with Success => True and a Color if parsing succeeds.
    --  @relation(FUNC-BGC-007): X11 rgb: response parsing
-   function Parse_RGB_Response
-     (Bytes  : Byte_Array;
-      Length : Natural)
-      return Parse_Result
+   function Parse_RGB_Response (Bytes : Byte_Array; Length : Natural) return Parse_Result
    with
-     Pre  => Length <= Bytes'Length,
+     Pre => Length <= Bytes'Length,
      Post =>
        (if Parse_RGB_Response'Result.Success
-        then Parse_RGB_Response'Result.Color.Red   in 0 .. 255
-             and then Parse_RGB_Response'Result.Color.Green in 0 .. 255
-             and then Parse_RGB_Response'Result.Color.Blue  in 0 .. 255);
+        then
+          Parse_RGB_Response'Result.Color.Red in 0 .. 255
+          and then Parse_RGB_Response'Result.Color.Green in 0 .. 255
+          and then Parse_RGB_Response'Result.Color.Blue in 0 .. 255);
 
    ---------------------------------------------------------------------------
    --  RGB Prefix Detection (FUNC-BGC-008)
@@ -305,16 +334,10 @@ is
    --  @param Offset Set to the first channel byte index when Found is True.
    --  @param Found  True if "rgb:" or "rgba:" was located in the buffer.
    --  @relation(FUNC-BGC-008): rgb: / rgba: prefix detection
-   procedure Find_RGB_Prefix
-     (Bytes  :     Byte_Array;
-      Length :     Natural;
-      Offset : out Natural;
-      Found  : out Boolean)
+   procedure Find_RGB_Prefix (Bytes : Byte_Array; Length : Natural; Offset : out Natural; Found : out Boolean)
    with
-     Pre  => Length <= Bytes'Length,
-     Post =>
-       (if Found
-        then Offset < Bytes'First + Length and then Offset >= Bytes'First + 4);
+     Pre => Length <= Bytes'Length,
+     Post => (if Found then Offset < Bytes'First + Length and then Offset >= Bytes'First + 4);
 
    --  @summary Extract three '/' delimited channel substrings from a Byte_Array.
    --  @description Scans Bytes starting at Start up to Start + Length - 1 for
@@ -330,23 +353,21 @@ is
    --  @param Success False if fewer than two '/' separators were found.
    --  @relation(FUNC-BGC-008): RGB channel splitting
    procedure Split_RGB_Channels
-     (Bytes             :     Byte_Array;
-      Start             :     Natural;
-      Length            :     Natural;
+     (Bytes            : Byte_Array;
+      Start            : Natural;
+      Length           : Natural;
       Ch_R, Ch_G, Ch_B : out Channel_Slice;
-      Success           : out Boolean)
+      Success          : out Boolean)
    with
-     Pre  =>
-       Start >= Bytes'First
-       and then Start + Length - 1 <= Bytes'Last
-       and then Length > 0,
+     Pre => Start >= Bytes'First and then Start + Length - 1 <= Bytes'Last and then Length > 0,
      Post =>
        (if Success
-        then Ch_R.Length in 1 .. MAX_CHANNEL_LENGTH
-             and then Ch_G.Length in 1 .. MAX_CHANNEL_LENGTH
-             and then Ch_B.Length in 1 .. MAX_CHANNEL_LENGTH
-             and then Ch_R.Start >= Bytes'First
-             and then Ch_B.Start + Ch_B.Length - 1 <= Bytes'Last);
+        then
+          Ch_R.Length in 1 .. MAX_CHANNEL_LENGTH
+          and then Ch_G.Length in 1 .. MAX_CHANNEL_LENGTH
+          and then Ch_B.Length in 1 .. MAX_CHANNEL_LENGTH
+          and then Ch_R.Start >= Bytes'First
+          and then Ch_B.Start + Ch_B.Length - 1 <= Bytes'Last);
 
    ---------------------------------------------------------------------------
    --  Hex Channel Parsing (FUNC-BGC-009)
@@ -365,19 +386,10 @@ is
    --  @param Length Number of hex digit bytes (1..MAX_CHANNEL_LENGTH).
    --  @return Channel_Result with Value in 0..255 when Success is True.
    --  @relation(FUNC-BGC-009): Hex channel parsing and 8-bit normalisation
-   function Parse_Hex_Channel
-     (Bytes  : Byte_Array;
-      Start  : Natural;
-      Length : Natural)
-      return Channel_Result
+   function Parse_Hex_Channel (Bytes : Byte_Array; Start : Natural; Length : Natural) return Channel_Result
    with
-     Pre  =>
-       Length in 1 .. MAX_CHANNEL_LENGTH
-       and then Start >= Bytes'First
-       and then Start + Length - 1 <= Bytes'Last,
-     Post =>
-       (if Parse_Hex_Channel'Result.Success
-        then Parse_Hex_Channel'Result.Value in 0 .. 255);
+     Pre => Length in 1 .. MAX_CHANNEL_LENGTH and then Start >= Bytes'First and then Start + Length - 1 <= Bytes'Last,
+     Post => (if Parse_Hex_Channel'Result.Success then Parse_Hex_Channel'Result.Value in 0 .. 255);
 
    ---------------------------------------------------------------------------
    --  OSC Header Stripping (FUNC-BGC-010)
@@ -395,20 +407,16 @@ is
    --  @param Kind   Expected query kind, used to verify the OSC response number.
    --  @return Strip_Result with Offset and Payload_Length when Success is True.
    --  @relation(FUNC-BGC-010): OSC response prefix stripping
-   function Strip_OSC_Header
-     (Bytes  : Byte_Array;
-      Length : Natural;
-      Kind   : Query_Kind)
-      return Strip_Result
+   function Strip_OSC_Header (Bytes : Byte_Array; Length : Natural; Kind : Query_Kind) return Strip_Result
    with
-     Pre  => Length <= Bytes'Length,
+     Pre => Length <= Bytes'Length,
      Post =>
        (if Strip_OSC_Header'Result.Success
-        then Strip_OSC_Header'Result.Offset >= Bytes'First + 5
-             and then Strip_OSC_Header'Result.Payload_Length > 0
-             and then Strip_OSC_Header'Result.Offset
-                      + Strip_OSC_Header'Result.Payload_Length - 1
-                      <= Bytes'First + Length - 1);
+        then
+          Strip_OSC_Header'Result.Offset >= Bytes'First + 5
+          and then Strip_OSC_Header'Result.Payload_Length > 0
+          and then Strip_OSC_Header'Result.Offset + Strip_OSC_Header'Result.Payload_Length - 1
+                   <= Bytes'First + Length - 1);
 
    ---------------------------------------------------------------------------
    --  COLORFGBG Parsing (FUNC-BGC-011)
@@ -424,15 +432,12 @@ is
    --  @param Value The raw COLORFGBG environment variable string.
    --  @return Colorfgbg_Result; both index fields are in 0..15 when Success is True.
    --  @relation(FUNC-BGC-011): COLORFGBG string parsing
-   function Parse_Colorfgbg
-     (Value : String)
-      return Colorfgbg_Result
+   function Parse_Colorfgbg (Value : String) return Colorfgbg_Result
    with
-     Pre  => Value'Length <= MAX_COLORFGBG_LENGTH,
+     Pre => Value'Length <= MAX_COLORFGBG_LENGTH,
      Post =>
        (if Parse_Colorfgbg'Result.Success
-        then Parse_Colorfgbg'Result.Foreground in 0 .. 15
-             and then Parse_Colorfgbg'Result.Background in 0 .. 15);
+        then Parse_Colorfgbg'Result.Foreground in 0 .. 15 and then Parse_Colorfgbg'Result.Background in 0 .. 15);
 
    ---------------------------------------------------------------------------
    --  ANSI Color Index to RGB (FUNC-BGC-012)
@@ -454,8 +459,8 @@ is
    function Ansi_To_RGB (Index : ANSI_Index) return RGB
    with
      Post =>
-       Ansi_To_RGB'Result.Red   in 0 .. 255
+       Ansi_To_RGB'Result.Red in 0 .. 255
        and then Ansi_To_RGB'Result.Green in 0 .. 255
-       and then Ansi_To_RGB'Result.Blue  in 0 .. 255;
+       and then Ansi_To_RGB'Result.Blue in 0 .. 255;
 
 end Termicap.Color.BG_Query;

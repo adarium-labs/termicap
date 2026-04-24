@@ -74,10 +74,7 @@ package Termicap.XTVERSION.IO is
    --  @relation(FUNC-XTV-011): Not-a-TTY guard via Probe_Session.Open
    --  @relation(FUNC-XTV-012): Multiplexer passthrough selection
    procedure Query_XTVERSION
-     (Timeout_Ms  :     Natural;
-      Response    : out XTVERSION.Byte_Array;
-      Resp_Length : out Natural;
-      Timed_Out   : out Boolean)
+     (Timeout_Ms : Natural; Response : out XTVERSION.Byte_Array; Resp_Length : out Natural; Timed_Out : out Boolean)
    with Pre => Response'Length >= XTVERSION.MAX_RESPONSE_SIZE;
 
    ---------------------------------------------------------------------------
@@ -98,7 +95,6 @@ package Termicap.XTVERSION.IO is
    --  @return XTVERSION_Result with Status = Success, Timeout, or Parse_Error.
    --  @relation(FUNC-XTV-013): Query_And_Identify convenience function
    --  @relation(FUNC-XTV-015): Timed_Out => True maps to Status = Timeout
-   function Query_And_Identify
-     (Timeout_Ms : Natural := 100) return XTVERSION_Result;
+   function Query_And_Identify (Timeout_Ms : Natural := 100) return XTVERSION_Result;
 
 end Termicap.XTVERSION.IO;

@@ -119,8 +119,7 @@ is
    --  (rather than individual Boolean fields) enables iteration with a for loop
    --  and ensures that future enumeration additions automatically default to False.
    --  @relation(FUNC-DA1-003): Capability_Flags array type
-   type Capability_Flags is
-     array (DA1_Capability) of Boolean;
+   type Capability_Flags is array (DA1_Capability) of Boolean;
 
    --  @summary Aggregated result of a DA1 response interpretation.
    --  @description Plain (non-discriminated) record.  Supported acts as a
@@ -130,8 +129,8 @@ is
    --  safe "no DA1 response" value without requiring a named aggregate.
    --  @relation(FUNC-DA1-003): DA1_Capabilities aggregate record
    type DA1_Capabilities is record
-      Supported : Boolean          := False;
-      Level     : VT_Level         := Unknown;
+      Supported : Boolean := False;
+      Level     : VT_Level := Unknown;
       Flags     : Capability_Flags := [others => False];
    end record;
 
@@ -186,18 +185,13 @@ is
    --  @param Params  Parsed DA1 response from Parse_DA1_Response.
    --  @return A DA1_Capabilities record reflecting the parsed response.
    --  @relation(FUNC-DA1-004): Interpret_DA1 pure SPARK function
-   function Interpret_DA1
-     (Params : Termicap.OSC.Parsing.DA1_Params) return DA1_Capabilities
+   function Interpret_DA1 (Params : Termicap.OSC.Parsing.DA1_Params) return DA1_Capabilities
    with
      SPARK_Mode => On,
-     Global     => null,
-     Post       =>
-       (if Params.Count = 0
-        then not Interpret_DA1'Result.Supported
-               and then Interpret_DA1'Result.Level = Unknown)
-       and then
-       (if Params.Count > 0
-        then Interpret_DA1'Result.Supported);
+     Global => null,
+     Post =>
+       (if Params.Count = 0 then not Interpret_DA1'Result.Supported and then Interpret_DA1'Result.Level = Unknown)
+       and then (if Params.Count > 0 then Interpret_DA1'Result.Supported);
 
    ---------------------------------------------------------------------------
    --  Capability Query Functions (FUNC-DA1-005, FUNC-DA1-006)
@@ -212,14 +206,9 @@ is
    --  @param Cap   The specific capability to test.
    --  @return True when Caps.Supported is True and Caps.Flags (Cap) is True.
    --  @relation(FUNC-DA1-005): Has_Capability convenience expression function
-   function Has_Capability
-     (Caps : DA1_Capabilities; Cap : DA1_Capability) return Boolean
+   function Has_Capability (Caps : DA1_Capabilities; Cap : DA1_Capability) return Boolean
    is (Caps.Supported and then Caps.Flags (Cap))
-   with
-     SPARK_Mode => On,
-     Global     => null,
-     Post       =>
-       Has_Capability'Result = (Caps.Supported and then Caps.Flags (Cap));
+   with SPARK_Mode => On, Global => null, Post => Has_Capability'Result = (Caps.Supported and then Caps.Flags (Cap));
 
    --  @summary Return the VT conformance level from a DA1_Capabilities record.
    --  @description Returns Caps.Level directly.  When Caps.Supported is False,
@@ -230,15 +219,11 @@ is
    --  @param Caps  The DA1_Capabilities record to query.
    --  @return The VT conformance level (Unknown when Supported is False).
    --  @relation(FUNC-DA1-006): VT_Level_Of convenience expression function
-   function VT_Level_Of
-     (Caps : DA1_Capabilities) return VT_Level
+   function VT_Level_Of (Caps : DA1_Capabilities) return VT_Level
    is (Caps.Level)
    with
      SPARK_Mode => On,
-     Global     => null,
-     Post       =>
-       VT_Level_Of'Result = Caps.Level
-       and then (if not Caps.Supported
-                 then VT_Level_Of'Result = Unknown);
+     Global => null,
+     Post => VT_Level_Of'Result = Caps.Level and then (if not Caps.Supported then VT_Level_Of'Result = Unknown);
 
 end Termicap.DA1;

@@ -8,7 +8,7 @@
 with Interfaces.C;
 
 package body Termicap.Dimensions
-   with SPARK_Mode => Off
+  with SPARK_Mode => Off
 is
 
    ---------------------------------------------------------------------------
@@ -16,12 +16,11 @@ is
    ---------------------------------------------------------------------------
 
    function C_Get_Winsize
-      (Fd      : Interfaces.C.int;
-       Cols    : access Interfaces.C.unsigned_short;
-       Rows    : access Interfaces.C.unsigned_short;
-       X_Pixel : access Interfaces.C.unsigned_short;
-       Y_Pixel : access Interfaces.C.unsigned_short)
-       return Interfaces.C.int;
+     (Fd      : Interfaces.C.int;
+      Cols    : access Interfaces.C.unsigned_short;
+      Rows    : access Interfaces.C.unsigned_short;
+      X_Pixel : access Interfaces.C.unsigned_short;
+      Y_Pixel : access Interfaces.C.unsigned_short) return Interfaces.C.int;
    pragma Import (C, C_Get_Winsize, "termicap_get_winsize");
 
    STDOUT_FD : constant Interfaces.C.int := 1;
@@ -65,18 +64,11 @@ is
    --  Get_Size (FUNC-DIM-002 through FUNC-DIM-008)
    ---------------------------------------------------------------------------
 
-   function Get_Size
-      (Env    : Termicap.Environment.Environment;
-       Is_TTY : Boolean) return Terminal_Size
-   is
+   function Get_Size (Env : Termicap.Environment.Environment; Is_TTY : Boolean) return Terminal_Size is
       use type Interfaces.C.int;
       use type Interfaces.C.unsigned_short;
 
-      Result : Terminal_Size :=
-         (Rows         => DEFAULT_ROWS,
-          Columns      => DEFAULT_COLUMNS,
-          Pixel_Width  => 0,
-          Pixel_Height => 0);
+      Result : Terminal_Size := (Rows => DEFAULT_ROWS, Columns => DEFAULT_COLUMNS, Pixel_Width => 0, Pixel_Height => 0);
    begin
       --  Step 1: If Is_TTY, attempt ioctl via C wrapper (FUNC-DIM-002)
       if Is_TTY then
@@ -87,28 +79,30 @@ is
             C_Y_Pixel : aliased Interfaces.C.unsigned_short := 0;
             Status    : Interfaces.C.int;
          begin
-            Status := C_Get_Winsize
-               (Fd      => STDOUT_FD,
-                Cols    => C_Cols'Access,
-                Rows    => C_Rows'Access,
-                X_Pixel => C_X_Pixel'Access,
-                Y_Pixel => C_Y_Pixel'Access);
+            Status :=
+              C_Get_Winsize
+                (Fd      => STDOUT_FD,
+                 Cols    => C_Cols'Access,
+                 Rows    => C_Rows'Access,
+                 X_Pixel => C_X_Pixel'Access,
+                 Y_Pixel => C_Y_Pixel'Access);
 
             if Status = 0 and then C_Cols > 0 and then C_Rows > 0 then
-               return (Columns      => Positive (C_Cols),
-                       Rows         => Positive (C_Rows),
-                       Pixel_Width  => Natural (C_X_Pixel),
-                       Pixel_Height => Natural (C_Y_Pixel));
+               return
+                 (Columns      => Positive (C_Cols),
+                  Rows         => Positive (C_Rows),
+                  Pixel_Width  => Natural (C_X_Pixel),
+                  Pixel_Height => Natural (C_Y_Pixel));
             end if;
          end;
          --  ioctl failed or returned zero dims; fall through to env vars
+
       end if;
 
       --  Step 2: Parse COLUMNS from Environment (FUNC-DIM-003)
       if Termicap.Environment.Contains (Env, "COLUMNS") then
          declare
-            Parsed : constant Natural :=
-               Try_Parse_Positive (Termicap.Environment.Value (Env, "COLUMNS"));
+            Parsed : constant Natural := Try_Parse_Positive (Termicap.Environment.Value (Env, "COLUMNS"));
          begin
             if Parsed > 0 then
                Result.Columns := Parsed;
@@ -119,8 +113,7 @@ is
       --  Step 3: Parse LINES from Environment (FUNC-DIM-003)
       if Termicap.Environment.Contains (Env, "LINES") then
          declare
-            Parsed : constant Natural :=
-               Try_Parse_Positive (Termicap.Environment.Value (Env, "LINES"));
+            Parsed : constant Natural := Try_Parse_Positive (Termicap.Environment.Value (Env, "LINES"));
          begin
             if Parsed > 0 then
                Result.Rows := Parsed;

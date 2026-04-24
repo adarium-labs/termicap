@@ -16,17 +16,14 @@ with Termicap.Environment.Capture;
 package body Termicap.XTVERSION.IO is
 
    procedure Query_XTVERSION
-     (Timeout_Ms  :     Natural;
-      Response    : out XTVERSION.Byte_Array;
-      Resp_Length : out Natural;
-      Timed_Out   : out Boolean)
+     (Timeout_Ms : Natural; Response : out XTVERSION.Byte_Array; Resp_Length : out Natural; Timed_Out : out Boolean)
    is
       use Termicap.OSC;
       use Termicap.Terminal_Id;
 
-      Env         : Termicap.Environment.Environment;
-      Identity    : Termicap.Terminal_Id.Terminal_Identity;
-      Passthrough : Termicap.OSC.Parsing.Passthrough_Mode;
+      Env          : Termicap.Environment.Environment;
+      Identity     : Termicap.Terminal_Id.Terminal_Identity;
+      Passthrough  : Termicap.OSC.Parsing.Passthrough_Mode;
       OSC_Response : Termicap.OSC.Response_Buffer;
       OSC_Length   : Natural;
       OSC_Timeout  : Boolean;
@@ -46,16 +43,15 @@ package body Termicap.XTVERSION.IO is
 
       declare
          Wrapped : constant Termicap.OSC.Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough
-             (Termicap.OSC.Byte_Array (CSI_XTVERSION_QUERY), Passthrough);
+           Termicap.OSC.Parsing.Wrap_For_Passthrough (Termicap.OSC.Byte_Array (CSI_XTVERSION_QUERY), Passthrough);
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;
       begin
          Termicap.OSC.Open (Session, Status);
          if Status /= Session_OK then
             Resp_Length := 0;
-            Timed_Out   := True;
-            Response    := [others => 0];
+            Timed_Out := True;
+            Response := [others => 0];
             return;
          end if;
 
@@ -69,25 +65,20 @@ package body Termicap.XTVERSION.IO is
             Retry       => False);
 
          Resp_Length := OSC_Length;
-         Timed_Out   := OSC_Timeout;
+         Timed_Out := OSC_Timeout;
          for I in 1 .. OSC_Length loop
             Response (I) := XTVERSION.Byte (OSC_Response (I));
          end loop;
       end;
    end Query_XTVERSION;
 
-   function Query_And_Identify
-     (Timeout_Ms : Natural := 100) return XTVERSION_Result
-   is
+   function Query_And_Identify (Timeout_Ms : Natural := 100) return XTVERSION_Result is
       Resp_Buffer : XTVERSION.Byte_Array (1 .. XTVERSION.MAX_RESPONSE_SIZE);
       Resp_Len    : Natural;
       Timed_Out   : Boolean;
    begin
       Query_XTVERSION
-        (Timeout_Ms  => Timeout_Ms,
-         Response    => Resp_Buffer,
-         Resp_Length => Resp_Len,
-         Timed_Out   => Timed_Out);
+        (Timeout_Ms => Timeout_Ms, Response => Resp_Buffer, Resp_Length => Resp_Len, Timed_Out => Timed_Out);
 
       if Timed_Out then
          return (Status => Timeout);

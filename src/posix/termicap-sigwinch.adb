@@ -61,9 +61,7 @@ package body Termicap.Sigwinch is
    --  C trampoline: install SIGWINCH handler via sigaction, perform initial
    --  ioctl query, store pipe write FD for use in the signal handler.
    --  Returns 0 on success, -1 on error (FUNC-SWC-001, FUNC-SWC-010).
-   function C_Sigwinch_Install
-     (Fd : Interfaces.C.int; Write_FD : Interfaces.C.int)
-      return Interfaces.C.int;
+   function C_Sigwinch_Install (Fd : Interfaces.C.int; Write_FD : Interfaces.C.int) return Interfaces.C.int;
    pragma Import (C, C_Sigwinch_Install, "termicap_sigwinch_install");
 
    --  C trampoline: restore the previous SIGWINCH disposition and reset
@@ -110,13 +108,12 @@ package body Termicap.Sigwinch is
       function Has_Resize return Boolean;
       procedure Acknowledge_Resize;
       function Get_Pipe_Read_FD return Interfaces.C.int;
-      procedure Query_Cached_Size
-        (Result : out Termicap.Dimensions.Terminal_Size);
+      procedure Query_Cached_Size (Result : out Termicap.Dimensions.Terminal_Size);
    private
-      Installed   : Boolean := False;
+      Installed : Boolean := False;
       Cached_Size : Termicap.Dimensions.Terminal_Size := DEFAULT_SIZE;
-      Pipe_Read   : Interfaces.C.int := INVALID_FD;
-      Pipe_Write  : Interfaces.C.int := INVALID_FD;
+      Pipe_Read : Interfaces.C.int := INVALID_FD;
+      Pipe_Write : Interfaces.C.int := INVALID_FD;
    end State_Handler;
 
    ---------------------------------------------------------------------------
@@ -163,8 +160,7 @@ package body Termicap.Sigwinch is
             C_Xpixel : aliased Interfaces.C.unsigned_short := 0;
             C_Ypixel : aliased Interfaces.C.unsigned_short := 0;
          begin
-            C_Sigwinch_Get_Size
-              (C_Cols'Access, C_Rows'Access, C_Xpixel'Access, C_Ypixel'Access);
+            C_Sigwinch_Get_Size (C_Cols'Access, C_Rows'Access, C_Xpixel'Access, C_Ypixel'Access);
             if C_Cols > 0 and then C_Rows > 0 then
                Cached_Size :=
                  (Columns      => Positive (C_Cols),
@@ -233,9 +229,7 @@ package body Termicap.Sigwinch is
          return Pipe_Read;
       end Get_Pipe_Read_FD;
 
-      procedure Query_Cached_Size
-        (Result : out Termicap.Dimensions.Terminal_Size)
-      is
+      procedure Query_Cached_Size (Result : out Termicap.Dimensions.Terminal_Size) is
          C_Cols   : aliased Interfaces.C.unsigned_short := 0;
          C_Rows   : aliased Interfaces.C.unsigned_short := 0;
          C_Xpixel : aliased Interfaces.C.unsigned_short := 0;
@@ -248,8 +242,7 @@ package body Termicap.Sigwinch is
 
          --  Re-read from C-side volatile storage to capture any signal-handler
          --  update since the last call (FUNC-SWC-002, FUNC-SWC-010).
-         C_Sigwinch_Get_Size
-           (C_Cols'Access, C_Rows'Access, C_Xpixel'Access, C_Ypixel'Access);
+         C_Sigwinch_Get_Size (C_Cols'Access, C_Rows'Access, C_Xpixel'Access, C_Ypixel'Access);
 
          if C_Cols > 0 and then C_Rows > 0 then
             Cached_Size :=

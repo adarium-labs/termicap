@@ -31,14 +31,8 @@ is
    --  Internal helper: convert a Byte_Array slice to an Ada String
    ---------------------------------------------------------------------------
 
-   function Bytes_To_String
-     (Bytes  : Byte_Array;
-      Offset : Positive;
-      Length : Natural) return String
-   with
-     Pre => Length > 0
-              and then Offset >= Bytes'First
-              and then Offset + Length - 1 <= Bytes'Last
+   function Bytes_To_String (Bytes : Byte_Array; Offset : Positive; Length : Natural) return String
+   with Pre => Length > 0 and then Offset >= Bytes'First and then Offset + Length - 1 <= Bytes'Last
    is
       Result : String (1 .. Length);
    begin
@@ -53,10 +47,7 @@ is
    --  DCS Response Recognition (FUNC-XTV-003)
    ---------------------------------------------------------------------------
 
-   function Contains_XTVERSION_Response
-     (Bytes  : Byte_Array;
-      Length : Natural) return Boolean
-   is
+   function Contains_XTVERSION_Response (Bytes : Byte_Array; Length : Natural) return Boolean is
       First : constant Positive := Bytes'First;
    begin
       --  Minimum valid: 4-byte prefix + 1 payload byte + 1 BEL = 6 bytes
@@ -65,7 +56,7 @@ is
       end if;
 
       --  Check 4-byte prefix: ESC P > |
-      if Bytes (First)     /= BYTE_ESC
+      if Bytes (First) /= BYTE_ESC
         or else Bytes (First + 1) /= BYTE_DCS_P
         or else Bytes (First + 2) /= BYTE_GT
         or else Bytes (First + 3) /= BYTE_PIPE
@@ -83,10 +74,7 @@ is
          if Bytes (I) = BYTE_BEL then
             --  BEL terminator found; at least one payload byte precedes it
             return True;
-         elsif I >= First + 6
-           and then Bytes (I - 1) = BYTE_ESC
-           and then Bytes (I) = BYTE_ST
-         then
+         elsif I >= First + 6 and then Bytes (I - 1) = BYTE_ESC and then Bytes (I) = BYTE_ST then
             --  ESC \ terminator found; payload byte at First+4 exists
             return True;
          end if;
@@ -99,10 +87,7 @@ is
    --  Payload Extraction (FUNC-XTV-004)
    ---------------------------------------------------------------------------
 
-   function Extract_XTV_Payload
-     (Bytes  : Byte_Array;
-      Length : Natural) return Payload_Slice
-   is
+   function Extract_XTV_Payload (Bytes : Byte_Array; Length : Natural) return Payload_Slice is
       First         : constant Positive := Bytes'First;
       Payload_Start : constant Positive := First + 4;
       Last          : constant Positive := First + Length - 1;
@@ -112,10 +97,7 @@ is
       if Bytes (Last) = BYTE_BEL then
          --  BEL: exclude 1 byte
          Payload_End := Last - 1;
-      elsif Last >= First + 1
-        and then Bytes (Last - 1) = BYTE_ESC
-        and then Bytes (Last) = BYTE_ST
-      then
+      elsif Last >= First + 1 and then Bytes (Last - 1) = BYTE_ESC and then Bytes (Last) = BYTE_ST then
          --  ESC \: exclude 2 bytes
          Payload_End := Last - 2;
       else
@@ -123,19 +105,14 @@ is
          Payload_End := Last;
       end if;
 
-      return (Offset => Payload_Start,
-              Length => Payload_End - Payload_Start + 1);
+      return (Offset => Payload_Start, Length => Payload_End - Payload_Start + 1);
    end Extract_XTV_Payload;
 
    ---------------------------------------------------------------------------
    --  Payload Tokenisation (FUNC-XTV-005)
    ---------------------------------------------------------------------------
 
-   function Split_XTV_Payload
-     (Bytes  : Byte_Array;
-      Offset : Positive;
-      Length : Natural) return Token_Pair
-   is
+   function Split_XTV_Payload (Bytes : Byte_Array; Offset : Positive; Length : Natural) return Token_Pair is
       use Ada.Strings.Unbounded;
 
       Last : constant Natural := Offset + Length - 1;
@@ -150,9 +127,7 @@ is
             declare
                Name_Len    : constant Natural := I - Offset;
                Name_Str    : constant String :=
-                 (if Name_Len > 0
-                  then Bytes_To_String (Bytes, Offset, Name_Len)
-                  else "");
+                 (if Name_Len > 0 then Bytes_To_String (Bytes, Offset, Name_Len) else "");
                Version_End : Natural := Last;
             begin
                --  Find closing ')' after '('
@@ -169,17 +144,11 @@ is
                --  Version = Bytes(I+1 .. Version_End)
                declare
                   V_Start     : constant Natural := I + 1;
-                  V_Length    : constant Natural :=
-                    (if Version_End >= V_Start
-                     then Version_End - V_Start + 1
-                     else 0);
+                  V_Length    : constant Natural := (if Version_End >= V_Start then Version_End - V_Start + 1 else 0);
                   Version_Str : constant String :=
-                    (if V_Length > 0
-                     then Bytes_To_String (Bytes, V_Start, V_Length)
-                     else "");
+                    (if V_Length > 0 then Bytes_To_String (Bytes, V_Start, V_Length) else "");
                begin
-                  return (Name    => To_Unbounded_String (Name_Str),
-                          Version => To_Unbounded_String (Version_Str));
+                  return (Name => To_Unbounded_String (Name_Str), Version => To_Unbounded_String (Version_Str));
                end;
             end;
          end if;
@@ -195,36 +164,26 @@ is
             declare
                Name_Len    : constant Natural := I - Offset;
                Name_Str    : constant String :=
-                 (if Name_Len > 0
-                  then Bytes_To_String (Bytes, Offset, Name_Len)
-                  else "");
+                 (if Name_Len > 0 then Bytes_To_String (Bytes, Offset, Name_Len) else "");
                V_Start     : constant Natural := I + 1;
-               V_Length    : constant Natural :=
-                 (if V_Start <= Last then Last - V_Start + 1 else 0);
+               V_Length    : constant Natural := (if V_Start <= Last then Last - V_Start + 1 else 0);
                Version_Str : constant String :=
-                 (if V_Length > 0
-                  then Bytes_To_String (Bytes, V_Start, V_Length)
-                  else "");
+                 (if V_Length > 0 then Bytes_To_String (Bytes, V_Start, V_Length) else "");
             begin
-               return (Name    => To_Unbounded_String (Name_Str),
-                       Version => To_Unbounded_String (Version_Str));
+               return (Name => To_Unbounded_String (Name_Str), Version => To_Unbounded_String (Version_Str));
             end;
          end if;
       end loop;
 
       --  Step 3: no delimiter — entire payload is the name
-      return (Name    => To_Unbounded_String (Bytes_To_String (Bytes, Offset, Length)),
-              Version => Null_Unbounded_String);
+      return (Name => To_Unbounded_String (Bytes_To_String (Bytes, Offset, Length)), Version => Null_Unbounded_String);
    end Split_XTV_Payload;
 
    ---------------------------------------------------------------------------
    --  Top-Level Parse Function (FUNC-XTV-006)
    ---------------------------------------------------------------------------
 
-   function Parse_XTVERSION_Response
-     (Bytes  : Byte_Array;
-      Length : Natural) return XTVERSION_Result
-   is
+   function Parse_XTVERSION_Response (Bytes : Byte_Array; Length : Natural) return XTVERSION_Result is
    begin
       --  Step 1: reject empty input
       if Length = 0 then
@@ -242,8 +201,7 @@ is
       begin
          --  Step 4: tokenise name and version from payload
          declare
-            Tokens : constant Token_Pair :=
-              Split_XTV_Payload (Bytes, Slice.Offset, Slice.Length);
+            Tokens : constant Token_Pair := Split_XTV_Payload (Bytes, Slice.Offset, Slice.Length);
          begin
             --  Step 5: reject empty name
             if Ada.Strings.Unbounded.Length (Tokens.Name) = 0 then
@@ -251,9 +209,7 @@ is
             end if;
 
             --  Step 6: success
-            return (Status           => Success,
-                    Terminal_Name    => Tokens.Name,
-                    Terminal_Version => Tokens.Version);
+            return (Status => Success, Terminal_Name => Tokens.Name, Terminal_Version => Tokens.Version);
          end;
       end;
    end Parse_XTVERSION_Response;
