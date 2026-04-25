@@ -16,5 +16,6 @@ aggregate project Termicap_Examples is
                           "win32_color_demo/win32_color_demo.gpr",
                           "cygwin_pty_demo/cygwin_pty_demo.gpr",
                           "keyboard_protocol_demo/keyboard_protocol_demo.gpr",
-                          "mouse_protocol_demo/mouse_protocol_demo.gpr");
+                          "mouse_protocol_demo/mouse_protocol_demo.gpr",
+                          "graphics_demo/graphics_demo.gpr");
 end Termicap_Examples;

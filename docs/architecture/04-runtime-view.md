@@ -2218,6 +2218,196 @@ Termicap.Mouse.IO.Detect_Mouse_Protocols      [SPARK_Mode => Off]
 
 ---
 
+## Scenario 28: Sixel / Kitty Graphics Detection
+
+End-to-end scenario for `Detect_Graphics`. Shows the Win32 Console gate (Windows only), the non-TTY guard, passive Kitty and Sixel env-var harvests, the DA1 active probe for Sixel Ps=4 (reusing `Termicap.DA1.IO.Detect_DA1`), the XTVERSION name-substring Sixel fallback, the optional Kitty APC active probe (independent session), and the per-process cache. Unlike the MOUSE batched-sentinel approach, each active probe (DA1, APC) runs as an **independent session** with its own 1 000 ms budget (ADR-0028). Worst-case cold-start latency is 2 s (both probes time out). Cached calls return in < 1 µs.
+
+### Phase A — Cache Check and Platform Gate
+
+```
+Caller (application)
+  │
+  │  Detect_Graphics
+  ▼
+Termicap.Graphics.IO.Detect_Graphics      [SPARK_Mode => Off]
+  │
+  │  Step 1: Cache check (protected object)
+  │    Is_Cached = True?
+  │      Yes → return Cached_Result immediately  (< 1 µs)
+  │      No  → continue
+  │
+  │  [Windows body only]
+  │  Step 2: Win32 Console gate
+  │    GetConsoleMode (STD_OUTPUT_HANDLE)
+  │      Succeeds?
+  │        Yes → run passive env-var harvests (Steps 3–4) only;
+  │              Probed := False; store in cache; return
+  │        No  → handle is Cygwin/MSYS2 PTY; continue to Step 3
+  │  [End Windows-only block]
+  │
+  └──► Proceed to Phase B
+```
+
+### Phase B — Passive Harvests and TTY Guard
+
+```
+  │
+  │  Step 3: Passive Kitty env-var harvest  (FUNC-SXL-009)
+  │    [Termicap.Environment — SPARK Silver, Global => null]
+  │    Contains (Env, "KITTY_WINDOW_ID")?
+  │      → Kitty_Graphics_Supported := True
+  │    Value (Env, "TERM") = "xterm-kitty"?
+  │      → Kitty_Graphics_Supported := True
+  │    Value_Matches (Env, "TERM_PROGRAM", "WezTerm", Case_Insensitive)?
+  │      → Kitty_Graphics_Supported := True
+  │    (Passive only — no I/O; runs regardless of TTY status)
+  │
+  │  Step 4: Passive Sixel env-var harvest  (FUNC-SXL-008)
+  │    [Termicap.Environment — SPARK Silver, Global => null]
+  │    Value_Matches (Env, "TERM_PROGRAM", "WezTerm", Case_Insensitive)?
+  │      → Sixel_Supported := True
+  │    Value (Env, "TERM_PROGRAM") = "iTerm.app"?
+  │      → Sixel_Supported := True
+  │    Value (Env, "TERM") in {"xterm-kitty", "foot", "foot-extra",
+  │                             "mlterm", "yaft"}?
+  │      → Sixel_Supported := True
+  │    Starts_With (Value (Env, "TERM"), "xterm")?
+  │      → Sixel_Supported := True  (heuristic; DA1 probe provides authoritative answer)
+  │    (Passive only — no I/O; runs regardless of TTY status)
+  │
+  │  Step 5: Non-TTY guard
+  │    Is_TTY (Stdout) = False?          [Termicap.TTY — SPARK_Mode => Off]
+  │      → Caps.Probed := False; return passive results (no active probes)
+  │
+  └──► Proceed to Phase C
+```
+
+### Phase C — DA1 Active Probe for Sixel
+
+```
+  │
+  │  Step 6: Open DA1 Probe_Session (independent session 1)
+  │    [Termicap.OSC — SPARK_Mode => Off]
+  │    → /dev/tty open; foreground guard (Is_Foreground_Process)
+  │    → Save termios, set raw mode, drain input
+  │    Fails (not foreground, /dev/tty unopenable)?
+  │      → Caps.Probed := False; return passive results
+  │
+  │  Step 7: DA1 probe for Sixel Ps=4  (FUNC-SXL-005, FUNC-SXL-006)
+  │    Termicap.DA1.IO.Detect_DA1         [SPARK_Mode => Off]
+  │      → Write DA1_QUERY (ESC [ c)
+  │      → Timeout_Query (/dev/tty, GRAPHICS_PROBE_TIMEOUT_MS = 1_000 ms)
+  │      → Parse_DA1_Response + Interpret_DA1
+  │      [Termicap.DA1 — SPARK Silver, Global => null]
+  │      Has_Capability (DA1_Result, Sixel_Graphics)?
+  │        Yes → Caps.Sixel_Supported := True
+  │              Caps.Sixel_Via_DA1    := True
+  │              Caps.Probed           := True
+  │        No  → (Sixel_Supported remains as set by passive harvest)
+  │              Caps.Probed           := True
+  │
+  │  Session 1 closed:
+  │    Probe_Session.Finalize (unconditional RAII)
+  │      → Restore_Termios, close /dev/tty, release single-session guard
+  │
+  └──► Proceed to Phase D
+```
+
+### Phase D — XTVERSION Name-Substring Fallback
+
+```
+  │
+  │  Step 8: XTVERSION Sixel fallback  (FUNC-SXL-007)
+  │    Skipped when Caps.Sixel_Via_DA1 = True
+  │    (DA1 result is authoritative; XTVERSION fallback is unnecessary)
+  │
+  │    When Sixel_Via_DA1 = False:
+  │      Termicap.XTVERSION.IO.Query_And_Identify
+  │        [SPARK_Mode => Off — opens its own internal session]
+  │      Name_Contains (XTVERSION_Result, "kitty", Case_Insensitive)?
+  │        → Caps.Sixel_Supported := True
+  │      Name_Contains (XTVERSION_Result, "WezTerm", Case_Insensitive)?
+  │        → Caps.Sixel_Supported := True
+  │
+  └──► Proceed to Phase E
+```
+
+### Phase E — Optional Kitty APC Active Probe
+
+```
+  │
+  │  Step 9: Kitty APC active probe  (FUNC-SXL-010)
+  │    Skipped when Caps.Kitty_Graphics_Supported = True
+  │    (passive env-var harvest already confirmed Kitty support)
+  │
+  │    When Kitty_Graphics_Supported = False:
+  │      Open DA1 Probe_Session (independent session 2)
+  │        [Termicap.OSC — SPARK_Mode => Off]
+  │        → /dev/tty open, foreground guard, raw mode
+  │        Fails?
+  │          → skip APC probe; retain current Caps
+  │
+  │      Step 10: Write APC query + DA1 sentinel
+  │        [Termicap.OSC.Write_Query / Sentinel_Query — SPARK_Mode => Off]
+  │        ┌──────────────────────────────────────────────────────────────┐
+  │        │  Write KITTY_APC_QUERY (ESC _ G i=1,a=q ESC \)             │
+  │        │  Write DA1 sentinel    (ESC [ c)  — response boundary       │
+  │        └──────────────────────────────────────────────────────────────┘
+  │
+  │      Step 11: Sentinel-bounded read loop  (GRAPHICS_PROBE_TIMEOUT_MS = 1_000 ms)
+  │        ┌──────────────────────────────────────────────────────────────┐
+  │        │  Accumulation loop:                                          │
+  │        │    Timed_Read (/dev/tty) → append to Response buffer        │
+  │        │    Contains_DA1_Response (Response, Length)  [SPARK Silver] │
+  │        │      → if found: record pre-sentinel length; exit loop      │
+  │        │    if timeout or overflow: Timed_Out := True; exit loop     │
+  │        └──────────────────────────────────────────────────────────────┘
+  │
+  │      Step 12: Parse Kitty APC response
+  │        Parse_Kitty_APC_Response (Response, Pre_Sentinel_Length)
+  │          [Termicap.Graphics — SPARK Silver, Global => null]
+  │          → scan for ESC _ G <params> ESC \ (APC G envelope)
+  │          → APC_Parse_Result:
+  │              OK           → Caps.Kitty_Graphics_Supported  := True
+  │                             Caps.Kitty_Via_Active_Probe    := True
+  │                             Caps.Probed                    := True
+  │              Not_Present  → Kitty_Graphics_Supported remains False
+  │              Error        → Kitty_Graphics_Supported remains False
+  │
+  │      Session 2 closed:
+  │        Probe_Session.Finalize (unconditional RAII)
+  │          → Restore_Termios, close /dev/tty, release single-session guard
+  │
+  └──► Proceed to Phase F
+```
+
+### Phase F — Cache and Return
+
+```
+  │
+  │  Step 13: Cache and return
+  │    Store Caps in protected-object cache
+  │    Return Caps to caller
+  │
+  └──► Graphics_Capabilities returned to caller
+```
+
+**Key properties:**
+
+- **Worst-case latency:** 2 s cold-start (DA1 probe + APC probe, both timing out at 1 s each). Typical < 200 ms when the terminal responds. Cached calls < 1 µs.
+- **Independent sessions (ADR-0028):** Unlike the Mouse batched probe, each active probe (DA1 for Sixel, APC for Kitty) runs in its own `Probe_Session` with its own 1 s budget. This avoids APC response pollution in the DA1 accumulation buffer and simplifies per-probe error handling.
+- **DA1 reuse (ADR-0027):** The Sixel DA1 probe calls `Termicap.DA1.IO.Detect_DA1` directly rather than issuing a new low-level probe. This reuses the existing timeout-only loop, parsing, and interpretation logic and ensures the DA1 result is consistent with what `Termicap.Capabilities` would obtain independently.
+- **Passive-first ordering:** Env-var harvests (Steps 3–4) run before any TTY guard, so callers that set `KITTY_WINDOW_ID` or `TERM=xterm-kitty` in non-TTY contexts still receive a useful result.
+- **APC skip condition:** If the passive harvest already set `Kitty_Graphics_Supported = True`, the APC probe session is never opened (zero I/O overhead). This is the common case for kitty, WezTerm, and any terminal with `KITTY_WINDOW_ID` set.
+- **XTVERSION skip condition:** If the DA1 probe already set `Sixel_Via_DA1 = True`, the XTVERSION query is skipped (DA1 is the authoritative source for Sixel support).
+- **Cached calls:** The protected-object cache is populated on the first call. All subsequent calls return the cached `Graphics_Capabilities` without entering the probe cascade. Latency < 1 µs.
+- **Windows fast path:** `GetConsoleMode (STD_OUTPUT_HANDLE)` is checked before any active probe. A native Windows console returns passive env-var results only (`Probed = False`).
+- **Graceful degradation:** On any error — non-TTY, background process, `Probe_Session` open failure, total timeout — the function returns passive env-var results or `NO_GRAPHICS_CAPABILITIES` without raising an exception (FUNC-SXL-016).
+- **Termios safety:** `Probe_Session.Finalize` is called unconditionally on every exit path of each session. Terminal state is always restored regardless of probe outcome (FUNC-SXL-014).
+- **SPARK boundary:** `Termicap.Graphics` (spec and body) is fully SPARK Silver — one pure parser function with `Global => null`, no FFI, no global state. `Termicap.Graphics.IO` is `SPARK_Mode => Off` throughout (session management, terminal I/O, protected cache object).
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -2258,4 +2448,8 @@ Termicap.Mouse.IO.Detect_Mouse_Protocols      [SPARK_Mode => Off]
 - **ADR-0023** (`docs/adr/0023-mouse-encoding-cascade-order.md`): Rationale for the SGR_Pixels > SGR > URXVT > X10 > None cascade order
 - **ADR-0024** (`docs/adr/0024-gpm-detection-heuristic.md`): Rationale for the `TERM=linux` + `/dev/gpmctl` GPM detection heuristic
 - **ADR-0026** (`docs/adr/0026-defer-mouse-capability-integration.md`): Rationale for deferring `Mouse_Capabilities` integration into `Terminal_Capabilities` and the migration path
-- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018
+- **Tech Spec SIXEL** (`docs/tech-specs/sixel-graphics.md`): Sixel / Kitty Graphics detection design rationale — DA1 Ps=4 probe, APC active probe, XTVERSION name fallback, env-var heuristics, independent session strategy, SPARK boundary
+- **ADR-0027** (`docs/adr/0027-da1-reuse-vs-fresh-probe.md`): Rationale for reusing `Termicap.DA1.IO.Detect_DA1` for the Sixel DA1 probe rather than issuing a fresh low-level probe
+- **ADR-0028** (`docs/adr/0028-graphics-independent-probe-sessions.md`): Rationale for using two independent probe sessions rather than a batched single-sentinel approach
+- **ADR-0029** (`docs/adr/0029-graphics-package-naming.md`): Rationale for the `Termicap.Graphics` / `Termicap.Graphics.IO` package naming and deferred integration
+- **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018, FUNC-SXL-001 through FUNC-SXL-019

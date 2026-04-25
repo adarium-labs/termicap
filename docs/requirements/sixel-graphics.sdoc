@@ -1,0 +1,836 @@
+[DOCUMENT]
+TITLE: SIXEL — Sixel / Kitty Graphics Detection
+UID: REQ-SXL
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[TEXT]
+STATEMENT: >>>
+This document specifies the functional requirements for Sixel / Kitty Graphics Detection
+(feature id SIXEL, Tier 4 Stretch Goal). The feature detects, at process startup, whether
+the controlling terminal supports Sixel graphics (DEC bitmap image encoding) and/or the
+Kitty graphics protocol (APC-based image rendering).
+
+Sixel support is detectable via the DA1 Primary Device Attributes response: extension
+parameter Ps=4 in the CSI ? <class> ; 4 ; ... c response signals sixel capability. This
+is the most reliable active-probe path. A passive fallback uses environment variables
+(TERM, TERM_PROGRAM) and the XTVERSION response (terminal name string) to infer sixel
+support when active probing is unavailable (no TTY) or as a confirmation heuristic.
+
+Kitty graphics protocol has no standard query mechanism. Detection is purely passive:
+the TERM environment variable value "xterm-kitty" and the presence of the KITTY_WINDOW_ID
+environment variable are the canonical identifiers for the kitty terminal emulator, which
+is currently the only terminal to have originated the Kitty graphics protocol. WezTerm
+also implements the protocol and is identified via TERM_PROGRAM=WezTerm or
+XTVERSION terminal name. An optional active probe using an APC query (ESC _ G i=1,a=q ESC \)
+may be used when the terminal is a TTY and the name has not been definitively established by
+passive means; its response "OK" or "EINVAL" confirms support.
+
+Sixel detection reuses the existing Termicap.DA1 package output: the DA1_Capabilities
+record (FUNC-DA1-003) already carries the Sixel_Graphics flag via Has_Capability
+(FUNC-DA1-005). This feature therefore does not duplicate DA1 probing; it consumes
+DA1's output and adds passive and APC-probe layers on top.
+
+SPARK Silver is the target for pure logic (DA1 flag extraction, XTVERSION name matching,
+env-var cascade, APC response parsing). All I/O and OS dispatch are classified Ada FFI
+(SPARK_Mode => Off), consistent with OSC-INFRA, MOUSE, and KITTY-KB patterns.
+<<<
+
+[SECTION]
+TITLE: Result Types
+
+[REQUIREMENT]
+UID: FUNC-SXL-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Graphics_Capabilities Result Record
+STATEMENT: >>>
+The library shall provide a record type Graphics_Capabilities that aggregates the complete
+graphics protocol detection result. The record shall contain at minimum:
+
+  -- Sixel support:
+  Sixel_Supported        : Boolean
+    -- True when Sixel graphics are available on the controlling terminal, established
+    -- by any of the three detection paths: DA1 active probe (FUNC-SXL-005),
+    -- XTVERSION name match (FUNC-SXL-007), or env-var heuristic (FUNC-SXL-008).
+    -- False by default (safe: unsupported sixel renders as visible garbage).
+
+  -- Kitty graphics protocol support:
+  Kitty_Graphics_Supported : Boolean
+    -- True when the Kitty graphics protocol is available, established by passive
+    -- env-var identification (FUNC-SXL-009) or the optional APC active probe
+    -- (FUNC-SXL-010).  False by default.
+
+  -- Detection provenance flags (informational):
+  Sixel_Via_DA1          : Boolean
+    -- True when Sixel_Supported was set via a successful DA1 probe (Ps=4 present).
+    -- False when set via passive heuristics only, or when Sixel_Supported is False.
+  Kitty_Via_Active_Probe : Boolean
+    -- True when Kitty_Graphics_Supported was confirmed via the APC active probe
+    -- (FUNC-SXL-010).  False when set via passive env-var heuristics only, or
+    -- when Kitty_Graphics_Supported is False.
+
+  -- Probe metadata:
+  Probed                 : Boolean
+    -- True when at least one active probe (DA1 or APC) was attempted.  False when
+    -- the result was determined entirely by passive env-var heuristics (no TTY,
+    -- or active probing was suppressed by a guard).
+
+The type shall be declared with SPARK_Mode => On.
+
+The canonical "no result / safe default" value shall be:
+  Sixel_Supported = False, Kitty_Graphics_Supported = False,
+  Sixel_Via_DA1 = False, Kitty_Via_Active_Probe = False, Probed = False.
+<<<
+COMMENT: >>>
+Independent Boolean fields are preferred over a compound enum for SPARK provability and
+extensibility: each field can be individually tested and reasoned about. The Safe-default
+policy (all False) follows the wezterm-analysis lesson: "sixel defaults to false (visible
+garbage if unsupported)". Provenance flags (Sixel_Via_DA1, Kitty_Via_Active_Probe) give
+callers and test harnesses visibility into which detection path fired, enabling
+differentiation between "confirmed by active probe" and "inferred from heuristics".
+This mirrors the Probed flag pattern from Mouse_Capabilities (FUNC-MSE-002) and
+Keyboard_Capability (FUNC-KKB-003).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SXL-002
+STATUS: Approved
+PRIORITY: Should
+TITLE: Sixel_Color_Registers Optional Field
+STATEMENT: >>>
+The Graphics_Capabilities record (FUNC-SXL-001) should include an optional field for the
+number of color registers available to sixel graphics:
+
+  Sixel_Color_Registers  : Natural
+    -- The number of simultaneous colors available for sixel rendering, or 0 when
+    -- unknown.  Common values: 256 (most terminals), 1024, 65536 (WezTerm).
+    -- Populated via XTSMGRAPHICS query (CSI ? 1 ; 1 S) when Sixel_Supported is True
+    -- and the terminal is a TTY.  Defaults to 0 (unknown) when not queried.
+
+When XTSMGRAPHICS probing is not implemented in this version, the field shall default to 0
+and the requirement is satisfied by its presence in the record. Active population via
+XTSMGRAPHICS is deferred and tracked as a separate work item.
+<<<
+COMMENT: >>>
+XTSMGRAPHICS (CSI ? Pm ; Pn ; Pv S) is supported by xterm, WezTerm, kitty, and foot
+for querying sixel geometry constraints. A color-register count of 256 is the historical
+minimum; WezTerm supports 65536. Having this field in the record now, even defaulting to 0,
+allows callers to adapt their sixel rendering without a breaking API change when XTSMGRAPHICS
+probing is added. The Should priority reflects that 0 (unknown) is a valid and safe default
+for v1 — callers that need a precise count should treat 0 as "assume the minimum (256)".
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SXL-003
+STATUS: Approved
+PRIORITY: Could
+TITLE: Kitty_Graphics_Protocol_Version Optional Field
+STATEMENT: >>>
+The Graphics_Capabilities record (FUNC-SXL-001) may include an optional field for the
+Kitty graphics protocol version supported by the terminal:
+
+  Kitty_Graphics_Version : Natural
+    -- The protocol version number, or 0 when not determinable.  kitty terminal
+    -- reports its version via XTVERSION (e.g., "kitty 0.35.2"); the major-minor
+    -- version can be parsed from the XTVERSION result.  Defaults to 0 (unknown).
+
+If this field is included, it shall default to 0. Population from XTVERSION version string
+parsing is optional for v1; the field presence ensures API stability for future
+version-gated feature decisions (e.g., animation support requires kitty >= 0.20.0 per
+notcurses analysis).
+<<<
+COMMENT: >>>
+notcurses uses compare_versions() to gate kitty animation features to kitty >= 0.20.0.
+Having a version field, even defaulting to 0, lets future callers make version-gated
+decisions without an API break. The Could priority reflects that version-gated logic is
+not needed for basic graphics detection; it is included for forward-compatibility.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Known Terminal Constants
+
+[REQUIREMENT]
+UID: FUNC-SXL-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Named Constants for Known Graphics-Capable Terminal Identifiers
+STATEMENT: >>>
+The library shall define named string constants for the terminal identifier values used
+in passive detection (FUNC-SXL-007, FUNC-SXL-008, FUNC-SXL-009). The following constants
+shall be defined in the Termicap.Graphics package (or a dedicated child package) with
+SPARK_Mode => On:
+
+  -- TERM values for terminals with known Sixel support:
+  TERM_XTERM_KITTY   : constant String := "xterm-kitty";
+    -- kitty GPU terminal; supports Kitty graphics protocol and Sixel.
+  TERM_FOOT          : constant String := "foot";
+    -- foot Wayland terminal; supports Sixel via DA1 Ps=4.
+  TERM_FOOT_EXTRA    : constant String := "foot-extra";
+    -- foot extra-capabilities build; same sixel support as foot.
+  TERM_XTERM         : constant String := "xterm";
+    -- xterm (prefix match); supports Sixel when compiled with --enable-sixel.
+  TERM_MLTERM        : constant String := "mlterm";
+    -- MLterm; supports Sixel natively.
+  TERM_YAFT          : constant String := "yaft";
+    -- yaft framebuffer terminal; supports Sixel.
+
+  -- TERM_PROGRAM values for terminals with known Sixel or Kitty graphics support:
+  TERM_PROGRAM_WEZTERM  : constant String := "WezTerm";
+    -- WezTerm GPU terminal; supports both Sixel and Kitty graphics protocol.
+  TERM_PROGRAM_ITERM2   : constant String := "iTerm.app";
+    -- iTerm2 for macOS; supports Sixel (via iTerm2 image protocol, closely related).
+
+  -- KITTY_WINDOW_ID environment variable name:
+  ENV_KITTY_WINDOW_ID   : constant String := "KITTY_WINDOW_ID";
+    -- Set by kitty terminal for each window; presence confirms running inside kitty.
+
+  -- XTVERSION terminal name substrings (case-insensitive match):
+  XTVERSION_NAME_KITTY   : constant String := "kitty";
+    -- XTVERSION name token for kitty terminal.
+  XTVERSION_NAME_WEZTERM : constant String := "WezTerm";
+    -- XTVERSION name token for WezTerm terminal.
+
+All constants shall follow ALL_CAPS_WITH_UNDERSCORES naming per the Ada coding standard.
+<<<
+COMMENT: >>>
+Centralising terminal name strings as named constants (rather than magic literals scattered
+across detection functions) follows the pattern established by mode constants in FUNC-MSE-003
+and terminal kind strings in the passive identification feature (FUNC-TID-001 through
+FUNC-TID-004). It also makes the constants independently testable. The list is derived from
+the global synthesis (§2.13) and the notcurses terminal heuristics, which explicitly handle
+foot, kitty, mlterm, and WezTerm for sixel/kitty graphics selection. Sixel support in xterm
+is conditional on compile-time options, but XTVERSION or DA1 probing resolves this
+ambiguity; the constant is still needed for passive heuristics when probing is unavailable.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Detection Algorithm — DA1 Active Probe
+
+[REQUIREMENT]
+UID: FUNC-SXL-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sixel Detection via DA1 Ps=4
+STATEMENT: >>>
+The library shall detect Sixel graphics support via the DA1 Primary Device Attributes
+response by checking whether extension parameter Ps=4 (Sixel_Graphics) is present in the
+DA1 capabilities.
+
+The detection shall reuse the existing Termicap.DA1 package (FUNC-DA1-003 through
+FUNC-DA1-005): specifically, it shall call
+
+  Termicap.DA1.Has_Capability (DA1_Caps, Sixel_Graphics)
+
+on the DA1_Capabilities record obtained from a DA1 probe session (FUNC-SXL-006). When
+Has_Capability returns True, the library shall set:
+
+  Graphics_Capabilities.Sixel_Supported   := True
+  Graphics_Capabilities.Sixel_Via_DA1     := True
+  Graphics_Capabilities.Probed            := True
+
+This shall be the primary and highest-confidence Sixel detection path. Passive heuristics
+(FUNC-SXL-007, FUNC-SXL-008) are only applied when Sixel_Via_DA1 is False after the probe.
+
+The DA1 Sixel detection shall not duplicate the DA1 probe session: if a DA1 result is
+already available from a prior Termicap.DA1 detection call in the same process, the cached
+DA1_Capabilities record shall be reused rather than issuing a new ESC [ c query.
+<<<
+COMMENT: >>>
+DA1 Ps=4 is the authoritative, standardised mechanism for terminals to advertise Sixel
+support. It is implemented by xterm, foot, WezTerm, mlterm, and others that genuinely
+support Sixel. The key design decision is to consume DA1's output rather than issuing a
+second DA1 probe: this avoids a redundant round trip and keeps the detection fast. If a
+prior DA1 probe was performed (e.g., by the DA1 feature itself or as part of another query
+batch), its result is used directly. If no prior DA1 result is available, this feature
+initiates its own DA1 probe session (FUNC-SXL-006). The DA1 path is classified as
+Sixel_Via_DA1 = True to distinguish it from passive heuristics, which may have false
+positives (e.g., TERM=xterm does not guarantee sixel without the right compile option).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SXL-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: DA1 Probe Session for Sixel Detection
+STATEMENT: >>>
+When no prior DA1_Capabilities result is available (i.e., Termicap.DA1.IO has not been
+called earlier in the process), the Sixel detection function shall initiate a DA1 probe
+session using the OSC-INFRA session lifecycle (FUNC-OSC-001 through FUNC-OSC-006):
+
+  1. Open /dev/tty via FUNC-OSC-001 (Open_TTY).
+  2. Save terminal attributes via FUNC-OSC-002 (Save_Termios).
+  3. Enter raw mode via FUNC-OSC-003 (Set_Raw_Mode).
+  4. Write the DA1_QUERY bytes (FUNC-DA1-007) to the terminal file descriptor via
+     FUNC-OSC-005 (Write_Query).
+  5. Read the response until the DA1 response pattern (CSI ? <params> c) is recognised,
+     or until the configured timeout (FUNC-SXL-015) expires, via FUNC-OSC-006 (Sentinel_Query).
+  6. Restore terminal attributes unconditionally via FUNC-OSC-002 (Restore_Termios).
+  7. Close /dev/tty via FUNC-OSC-001 (Close_TTY).
+
+The raw response bytes shall be passed to Termicap.OSC.Parsing.Parse_DA1_Response
+(FUNC-OSC-010) and then to Termicap.DA1.Interpret_DA1 (FUNC-DA1-004) to produce a
+DA1_Capabilities record, which is then consumed by FUNC-SXL-005.
+
+This probe session shall only be initiated after all pre-condition guards have passed
+(FUNC-SXL-012). On total timeout (no DA1 response within the deadline), the session
+shall return a zeroed DA1_Capabilities (Supported = False) and passive heuristics
+(FUNC-SXL-007, FUNC-SXL-008) shall be applied.
+<<<
+COMMENT: >>>
+The DA1 probe for Sixel reuses the same OSC-INFRA machinery used by the Kitty Keyboard
+(FUNC-KKB-012) and Mouse (FUNC-MSE-005) features. Rather than defining a new query
+infrastructure, this feature is a thin consumer layer on top of the existing DA1 package.
+The DA1 query is self-sentinelling: its own response (CSI ? ... c) is the terminator, so
+no separate DA1 sentinel is appended. This differs from the OSC-INFRA pattern for other
+queries (e.g., XTVERSION) where DA1 is appended as a boundary marker.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Detection Algorithm — XTVERSION and Passive Heuristics
+
+[REQUIREMENT]
+UID: FUNC-SXL-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sixel Passive Detection via XTVERSION Terminal Name
+STATEMENT: >>>
+When Sixel_Via_DA1 is False after the active probe (or when no active probe was performed),
+the library shall apply a passive XTVERSION-based heuristic: if the XTVERSION query was
+performed (or cached from a prior call) and the terminal name token (from
+Termicap.XTVERSION.Parse_XTVERSION_Response, FUNC-XTV-006) contains one of the following
+known-sixel terminal name substrings, the library shall set Sixel_Supported := True:
+
+  - "kitty"   (constant XTVERSION_NAME_KITTY, FUNC-SXL-004)
+  - "WezTerm" (constant XTVERSION_NAME_WEZTERM, FUNC-SXL-004)
+
+The name comparison shall be case-insensitive. Sixel_Via_DA1 shall remain False when
+support is inferred via this path (provenance is XTVERSION, not DA1).
+
+If the XTVERSION result is not available (prior call returned Timeout or no XTVERSION
+probe was performed), this heuristic is skipped and env-var heuristics (FUNC-SXL-008)
+are applied instead.
+<<<
+COMMENT: >>>
+XTVERSION name matching is a secondary confirmation path: it catches terminals that support
+Sixel but whose DA1 probe could not be completed (e.g., timeout in a slow network session).
+kitty and WezTerm both advertise their names via XTVERSION and both implement Sixel.
+Case-insensitive comparison follows the pattern established in FUNC-TID-010 (terminal
+identification case-insensitive rules). The provenance flag (Sixel_Via_DA1 = False) is
+preserved to distinguish confirmed-by-DA1 from inferred-by-name.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SXL-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sixel Passive Detection via Environment Variable Heuristics
+STATEMENT: >>>
+When neither DA1 probing nor XTVERSION name matching has confirmed Sixel support, the
+library shall apply the following environment-variable-based heuristics in the stated
+priority order. Each step shall read the relevant environment variable via the existing
+Termicap environment access mechanism:
+
+  Step 1 — TERM_PROGRAM match:
+    If the TERM_PROGRAM environment variable equals TERM_PROGRAM_WEZTERM ("WezTerm",
+    case-insensitive), set Sixel_Supported := True. WezTerm implements Sixel.
+
+  Step 2 — TERM value match:
+    If the TERM environment variable equals one of the following known-sixel terminals
+    (exact or prefix match as specified), set Sixel_Supported := True:
+      - TERM_XTERM_KITTY ("xterm-kitty"): exact match
+      - TERM_FOOT ("foot"): exact match
+      - TERM_FOOT_EXTRA ("foot-extra"): exact match
+      - TERM_MLTERM ("mlterm"): exact match
+      - TERM_YAFT ("yaft"): exact match
+      - Prefix "xterm": the TERM value starts with "xterm" (xterm compiled with Sixel support)
+
+    Note: xterm prefix matching is intentionally imprecise — not all xterm builds include
+    Sixel support. The DA1 path (FUNC-SXL-005) provides the definitive answer for xterm.
+    Env-var matching for "xterm" prefix is a best-effort fallback only.
+
+When any step sets Sixel_Supported := True, subsequent steps shall not be evaluated.
+The Sixel_Via_DA1 and Probed fields shall remain False when support was inferred via
+this env-var path (not confirmed by any active probe).
+
+If none of the env-var heuristics match, Sixel_Supported remains False.
+<<<
+COMMENT: >>>
+Environment variable heuristics are the last-resort fallback, used when the terminal is
+not a TTY (so no active probe is possible) or when a prior active probe failed. The TERM
+prefix "xterm" match is deliberately imprecise and documented as such: xterm supports
+Sixel only when compiled with --enable-sixel, and the TERM string does not encode this.
+In practice, most modern xterm packages on major distros include Sixel, so the heuristic
+has a low false-positive rate. Callers that need certainty should use the DA1 result
+(Sixel_Via_DA1 = True). The WezTerm TERM_PROGRAM match is included here even though
+WezTerm also appears in the XTVERSION path (FUNC-SXL-007), because TERM_PROGRAM is
+available without any active probe and is more broadly set in WezTerm sessions.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SXL-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Kitty Graphics Passive Detection via Environment Variables
+STATEMENT: >>>
+The library shall detect Kitty graphics protocol support via the following passive
+environment-variable checks, evaluated in the stated priority order:
+
+  Step 1 — KITTY_WINDOW_ID environment variable:
+    If the environment variable named ENV_KITTY_WINDOW_ID ("KITTY_WINDOW_ID",
+    FUNC-SXL-004) is present and non-empty, set Kitty_Graphics_Supported := True.
+    This is the most reliable passive indicator: kitty sets this variable for every
+    window it manages.
+
+  Step 2 — TERM value equals TERM_XTERM_KITTY:
+    If the TERM environment variable equals "xterm-kitty" (exact match), set
+    Kitty_Graphics_Supported := True.
+
+  Step 3 — TERM_PROGRAM value equals TERM_PROGRAM_WEZTERM:
+    If the TERM_PROGRAM environment variable equals "WezTerm" (case-insensitive),
+    set Kitty_Graphics_Supported := True. WezTerm implements the Kitty graphics protocol.
+
+When any step sets Kitty_Graphics_Supported := True, subsequent steps shall not be
+evaluated. The Kitty_Via_Active_Probe and Probed fields shall remain False when support
+was inferred via this env-var path.
+
+If none of the env-var checks match, Kitty_Graphics_Supported remains False (the optional
+APC probe in FUNC-SXL-010 may then be applied when the terminal is a TTY).
+<<<
+COMMENT: >>>
+KITTY_WINDOW_ID is the canonical kitty presence indicator, analogous to KONSOLE_VERSION
+for Konsole (FUNC-TID-001). It is set even when TERM has been overridden to something
+other than "xterm-kitty" (e.g., TERM=screen-256color inside tmux running inside kitty).
+The TERM="xterm-kitty" check is a direct, reliable signal when KITTY_WINDOW_ID is absent.
+WezTerm's Kitty graphics protocol implementation is documented in the wezterm-analysis.md:
+wezterm-escape-parser/src/apc.rs implements the full Kitty graphics protocol including
+transmit, place, delete, and animate commands. Unlike the kitty terminal itself, WezTerm
+does not set KITTY_WINDOW_ID, hence the separate TERM_PROGRAM check.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Detection Algorithm — Kitty APC Active Probe (Optional)
+
+[REQUIREMENT]
+UID: FUNC-SXL-010
+STATUS: Approved
+PRIORITY: Should
+TITLE: Kitty Graphics Active Probe via APC Query
+STATEMENT: >>>
+When passive env-var detection (FUNC-SXL-009) has not confirmed Kitty graphics support
+and the terminal is a TTY, the library should perform an optional active probe using the
+Kitty graphics APC query protocol:
+
+  Query sequence (write to terminal):
+    ESC _ G i=1,a=q ESC \
+    (APC: ESC _ = 0x1B 0x5F; content "Gi=1,a=q"; ST: ESC \ = 0x1B 0x5C)
+    followed immediately by a DA1 sentinel (ESC [ c) as a response boundary.
+
+  Response patterns:
+    Success:   APC response containing "OK"   -> Kitty_Graphics_Supported := True
+    No Kitty:  APC response containing "EINVAL" -> Kitty_Graphics_Supported := False
+    DA1 first: Only DA1 response received (no APC response before DA1 sentinel) ->
+               Kitty_Graphics_Supported := False (terminal did not recognise the APC query)
+
+The probe shall reuse the OSC-INFRA session lifecycle (FUNC-OSC-001 through FUNC-OSC-006)
+with the same TTY guard, raw-mode entry, DA1 sentinel boundary, and unconditional termios
+restore pattern used by FUNC-SXL-006. On success (OK response received), the library
+shall set:
+
+  Graphics_Capabilities.Kitty_Graphics_Supported := True
+  Graphics_Capabilities.Kitty_Via_Active_Probe   := True
+  Graphics_Capabilities.Probed                   := True
+
+The APC probe shall only be performed when:
+  - Kitty_Graphics_Supported is False after passive detection.
+  - The terminal passes all pre-condition guards (FUNC-SXL-012).
+  - The implementation has APC probe support enabled (this probe is optional; an
+    implementation that omits it still satisfies the MUST requirements of this document).
+
+The response parser for the APC query shall be a pure SPARK function (FUNC-SXL-011).
+<<<
+COMMENT: >>>
+The APC query "ESC _ G i=1,a=q ESC \" is described in notcurses-analysis.md (§5.e:
+"Kitty graphics query (APC Gi=1,a=q)"). It is the only active probe mechanism for Kitty
+graphics; there is no DECRPM mode equivalent. The DA1 sentinel boundary pattern is the
+standard OSC-INFRA mechanism used by all active probes in this library. The Should
+priority reflects that env-var detection alone is sufficient for the common cases (kitty
+and WezTerm); the APC probe adds robustness for obscure or future terminals that implement
+the protocol without setting standard env vars. An implementation that omits the APC probe
+still satisfies all MUST requirements by relying on passive detection.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SXL-011
+STATUS: Approved
+PRIORITY: Should
+TITLE: APC Kitty Graphics Response Parser (SPARK Silver)
+STATEMENT: >>>
+The library shall provide a pure SPARK function that parses an APC Kitty graphics query
+response buffer and determines whether the terminal accepted the query:
+
+  type APC_Parse_Result is (Not_Present, OK, Error);
+
+  function Parse_Kitty_APC_Response
+     (Buffer : Byte_Array;
+      Length : Natural)
+      return APC_Parse_Result
+  with SPARK_Mode => On,
+       Global     => null,
+       Pre        => Length <= Buffer'Length,
+       Post       => True;
+
+The function shall scan Buffer (1 .. Length) for an APC response of the form:
+  ESC _ G <params> ESC \
+where <params> contains the substring "OK"   -> return OK
+  or where <params> contains the substring "EINVAL" -> return Error
+  or when no APC G response is present in the buffer -> return Not_Present
+
+The function shall treat both Not_Present and Error as "not supported" for the purpose
+of FUNC-SXL-010. The APC introducer is ESC _ (0x1B 0x5F); the params end at the next
+ESC \ (0x1B 0x5C); ESC (0x1B) followed by any other byte (ST or BEL) terminates
+the APC sequence.
+
+The function shall not raise for any buffer content.
+<<<
+COMMENT: >>>
+A dedicated pure SPARK APC response parser follows the structural pattern of
+Parse_Mouse_DECRPM_Response (FUNC-MSE-007) and Parse_Kitty_Response (FUNC-KKB-006):
+pure parsing logic in a SPARK Silver function, independently testable with synthetic
+byte arrays. The three-way APC_Parse_Result distinguishes "no response" (DA1 arrived
+first, terminal does not support the query) from "response but error" (terminal answered
+but reported EINVAL). Both map to Kitty_Graphics_Supported = False, but the distinction
+is useful for debugging and test assertions.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Platform Gating and TTY Guards
+
+[REQUIREMENT]
+UID: FUNC-SXL-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Pre-Conditions and TTY Guards
+STATEMENT: >>>
+The graphics detection function shall apply the following guards before initiating any
+active probe (DA1 session or APC probe), in order:
+
+  Guard 1 — Not a TTY:
+    If Termicap.TTY.Is_TTY (Stdout) returns False, the function shall skip all active
+    probes, apply passive heuristics only (FUNC-SXL-007, FUNC-SXL-008, FUNC-SXL-009),
+    and return Graphics_Capabilities with Probed = False (see also FUNC-SXL-013).
+
+  Guard 2 — Not the foreground process:
+    If Is_Foreground_Process (FUNC-OSC-007) returns False, the function shall skip all
+    active probes, apply passive heuristics only, and return with Probed = False.
+
+  Guard 3 — /dev/tty not openable:
+    If Open_TTY (FUNC-OSC-001) fails, the function shall skip all active probes, apply
+    passive heuristics only, and return with Probed = False.
+
+  Guard 4 — Win32 Platform Gate:
+    On Windows, if GetConsoleMode returns True (genuine Win32 Console, not Cygwin/MSYS2),
+    the function shall skip all active probes (no ESC sequences on Win32 Console) and
+    apply passive env-var heuristics only. On Windows, Sixel and Kitty graphics are not
+    available via Win32 Console; the function shall return with Probed = False and both
+    Sixel_Supported and Kitty_Graphics_Supported as determined by env-var heuristics.
+
+Guards 1–3 are evaluated before Guard 4 on POSIX. On Windows, Guard 4 is evaluated first.
+If all guards pass, the active probe sequence is initiated (FUNC-SXL-006, FUNC-SXL-010).
+<<<
+COMMENT: >>>
+The guard ordering follows the pattern established in FUNC-MSE-009 and FUNC-KKB-009.
+The TTY and foreground guards are placed early to avoid the overhead of opening /dev/tty
+in non-interactive contexts. The Win32 Console gate prevents sending escape sequences to
+a terminal that cannot interpret them. Note that even when guards suppress active probing,
+passive heuristics are still applied (unlike Mouse, where Win32 Console has its own
+Win32_Console_Mouse flag): for graphics, the result is always a Boolean pair, and the
+passive heuristics may still return meaningful results (e.g., a kitty terminal inside a
+non-TTY pipeline still sets KITTY_WINDOW_ID).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SXL-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: No-TTY Passive Fallback
+STATEMENT: >>>
+When stdout is not a TTY (Guard 1 in FUNC-SXL-012 fires), the detection function shall:
+
+  1. Skip all active probes (no DA1 session, no APC probe).
+  2. Apply the XTVERSION passive heuristic (FUNC-SXL-007) if a cached XTVERSION result
+     is available from a prior call in the same process; otherwise skip FUNC-SXL-007.
+  3. Apply env-var heuristics for Sixel (FUNC-SXL-008) and Kitty (FUNC-SXL-009).
+  4. Return Graphics_Capabilities with Probed = False, Sixel_Via_DA1 = False,
+     Kitty_Via_Active_Probe = False, and Sixel_Supported / Kitty_Graphics_Supported
+     as determined by steps 2–3.
+
+The returned Graphics_Capabilities shall represent the best estimate possible from
+passive signals. When no passive signal is available, the safe default (all False) applies.
+<<<
+COMMENT: >>>
+The no-TTY passive fallback is consistent with the no-exception, graceful-degradation
+policy of the library. Programs using piped output still benefit from passive detection:
+a kitty terminal piping output to a file still sets KITTY_WINDOW_ID, allowing image-
+capable rendering to be inferred even without an active probe. This is analogous to
+NO_COLOR compliance, which also applies without a TTY check.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-SXL-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: Termios Restore on All Exit Paths
+STATEMENT: >>>
+When active probing is performed (DA1 session or APC probe), the implementation shall
+restore terminal attributes (via FUNC-OSC-002 Restore_Termios) on every exit path from
+the raw-mode section, including:
+
+  - Normal exit after the DA1 response is received.
+  - Normal exit after the APC response is received.
+  - Exit due to a timeout (no response within the deadline).
+  - Exit due to a write failure (Write_Query returns Success = False).
+  - Exit due to any other I/O error during the probe session.
+
+Terminal attributes shall be restored before the /dev/tty file descriptor is closed,
+preserving the ordering: open -> save -> set-raw -> [probe] -> restore -> close.
+Under no circumstances shall the function exit the raw-mode section without first
+attempting Restore_Termios, even if Restore_Termios itself fails.
+
+This requirement mirrors FUNC-MSE-015 and FUNC-KKB-015.
+<<<
+COMMENT: >>>
+Unconditional termios restore is the single most critical safety invariant of any
+raw-mode probe and is restated for completeness in every active-probe feature.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Timeout Behaviour
+
+[REQUIREMENT]
+UID: FUNC-SXL-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Probe Session Timeout
+STATEMENT: >>>
+Each active probe session (DA1 for Sixel, APC for Kitty graphics) shall use a timeout of
+1000 milliseconds (1 second) for the entire session (from writing the query to receiving
+the response or sentinel), applied via the OSC-INFRA timeout mechanism (FUNC-OSC-004).
+
+On total timeout (no response received within the deadline):
+  - DA1 probe timeout: the function shall return DA1_Capabilities with Supported = False
+    and proceed to passive heuristics (FUNC-SXL-007, FUNC-SXL-008).
+  - APC probe timeout: the function shall treat the result as Not_Present (Kitty_Graphics_Supported
+    remains as determined by passive detection; Kitty_Via_Active_Probe remains False).
+
+Implementations may use a shorter timeout (minimum 100 milliseconds) on platforms where
+round-trip latency to the terminal is known to be negligible (local PTY).
+
+When the DA1 probe and APC probe are both performed in the same detection call, they shall
+be performed as separate sessions with independent timeouts, not as a single batched session.
+<<<
+COMMENT: >>>
+The 1000 ms default matches FUNC-MSE-013 and FUNC-OSC-004. The DA1 probe and APC probe
+are independent sessions (unlike the batched DECRPM mouse probes) because they have
+different response patterns and the APC probe is optional. Separating them avoids
+complicating the response parser with APC and DA1 responses interleaved in a single buffer.
+If performance is a concern in future versions, the two queries could be batched (DA1 as
+boundary for both responses) — this is not required for v1.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Error Handling
+
+[REQUIREMENT]
+UID: FUNC-SXL-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: No-Exception Guarantee for Detect_Graphics
+STATEMENT: >>>
+The top-level graphics detection function Detect_Graphics shall never propagate an
+exception to its caller under any circumstances, including:
+
+  - /dev/tty cannot be opened (FUNC-OSC-001 returns an error).
+  - tcgetattr fails (FUNC-OSC-002 returns an error).
+  - tcsetattr fails during raw-mode entry (FUNC-OSC-003 returns an error).
+  - Write_Query returns Success = False for the DA1 query or APC query.
+  - The DA1 probe session times out entirely.
+  - The APC probe session times out entirely.
+  - DA1 response buffer cannot be parsed (Interpret_DA1 receives Count = 0).
+  - APC response buffer does not contain a valid Kitty response.
+  - Any environment variable read raises or returns an unexpected value.
+  - GetConsoleMode raises on Windows (treated as gate-not-fired).
+
+All failure modes shall cause the function to return Graphics_Capabilities with the
+fields reflecting the best available information from paths that did not fail, with
+defaulting to False for any field that could not be determined. The function shall not
+log or signal errors to the caller; graceful degradation is the sole response.
+<<<
+COMMENT: >>>
+The no-exception policy is universal across all Termicap detection functions (FUNC-MSE-014,
+FUNC-KKB-014). Sixel and Kitty graphics detection failures are silent: the consequence is
+that the caller assumes no graphics support and omits image rendering, which is the safe
+choice ("sixel defaults to false: visible garbage if unsupported" — wezterm-analysis).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Caching
+
+[REQUIREMENT]
+UID: FUNC-SXL-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: One-Probe-Per-Process Caching
+STATEMENT: >>>
+The library shall cache the Graphics_Capabilities result after the first call to
+Detect_Graphics and return the cached value on all subsequent calls without re-probing.
+The cache shall be stored as package-level state in a protected object or equivalent
+thread-safe structure, consistent with FUNC-MSE-016 and FUNC-KKB-017.
+
+The cache shall be initialised lazily: no probe is performed until the first call to
+Detect_Graphics (or an equivalent public entry point). Eager probing at library
+elaboration time is not permitted.
+
+A caller that needs a fresh result (e.g., after a terminal change or for testing) may
+use a separate Detect_Graphics_Uncached function that bypasses the cache. This bypass
+is classified as a Should requirement.
+
+The cache shall not be invalidated by SIGWINCH: Sixel and Kitty graphics protocol
+support is a property of the terminal emulator, not the terminal size.
+<<<
+COMMENT: >>>
+One-probe-per-process caching is the universal pattern for all Termicap capability
+detections (FUNC-CAP-003, FUNC-MSE-016, FUNC-KKB-017). Graphics protocol support
+does not change during a process's lifetime. Lazy initialisation avoids OS calls during
+library elaboration. The SIGWINCH exclusion mirrors FUNC-MSE-016 for the same reason.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Package Structure and SPARK Boundary
+
+[REQUIREMENT]
+UID: FUNC-SXL-018
+STATUS: Approved
+PRIORITY: Must
+TITLE: Package Structure and SPARK Boundary
+STATEMENT: >>>
+The Sixel / Kitty graphics detection feature shall be implemented in a new package
+Termicap.Graphics, structured as follows:
+
+Package specification (src/termicap-graphics.ads):
+  - SPARK_Mode => On at the package level.
+  - Declares Graphics_Capabilities (FUNC-SXL-001) and its optional sub-fields
+    (FUNC-SXL-002, FUNC-SXL-003) as public types.
+  - Declares the named constants (FUNC-SXL-004) as public String constants.
+  - Declares APC_Parse_Result enumeration and Parse_Kitty_APC_Response function
+    (FUNC-SXL-011) with SPARK_Mode => On and Global => null contracts.
+  - Declares the public function Detect_Graphics with SPARK_Mode => Off
+    (it calls FFI-dependent OSC-INFRA, DA1.IO, and environment-access operations).
+
+Package body (src/termicap-graphics.adb):
+  - SPARK_Mode => Off at the package level.
+  - Contains the body of Detect_Graphics and all OS-facing helpers.
+  - Contains the body of Parse_Kitty_APC_Response with SPARK_Mode => On applied
+    locally (mixed SPARK pattern, consistent with FUNC-KKB-018 and FUNC-MSE-017).
+  - Contains the protected cache object for one-probe-per-process caching (FUNC-SXL-017).
+  - Withed packages: Termicap.OSC (or its I/O subpackage), Termicap.TTY, Termicap.DA1,
+    Termicap.XTVERSION, Termicap.Environment.
+
+Platform-specific I/O bodies:
+  - POSIX path: src/posix/termicap-graphics-io.adb (SPARK_Mode => Off).
+  - Windows path: src/windows/termicap-graphics-io.adb (SPARK_Mode => Off), which
+    adds the Win32 Console gate (FUNC-SXL-012, Guard 4).
+
+File naming shall follow the project convention: lowercase with dashes matching the
+package hierarchy (termicap-graphics.ads, termicap-graphics.adb).
+<<<
+COMMENT: >>>
+The package structure mirrors Termicap.Mouse (FUNC-MSE-017) and Termicap.Keyboard
+(FUNC-KKB-018) exactly: SPARK_Mode => On specification with pure types and parse
+functions, SPARK_Mode => Off body with mixed local SPARK_Mode => On on pure subprogram
+bodies, and per-OS I/O body files. Withing Termicap.DA1 and Termicap.XTVERSION avoids
+redefinition of DA1_Capabilities and XTVERSION_Result, ensuring interoperability with
+those features without circular dependencies. The package name Termicap.Graphics is
+chosen over Termicap.Sixel to accommodate both Sixel and Kitty graphics protocols
+without implying a hierarchy between them.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with Capability Record
+
+[REQUIREMENT]
+UID: FUNC-SXL-019
+STATUS: Approved
+PRIORITY: Could
+TITLE: Graphics_Capabilities Field in Terminal_Capabilities (Deferred)
+STATEMENT: >>>
+The Terminal_Capabilities record (FUNC-CAP-001) should be extended with a field:
+
+  Graphics : Termicap.Graphics.Graphics_Capabilities
+    -- The detected graphics protocol capabilities, populated by Detect_Graphics
+    -- on the first call to Get or Detect (FUNC-CAP-003, FUNC-CAP-004). Defaults to
+    -- the canonical all-False value when graphics detection has not been performed.
+
+Integration into Terminal_Capabilities is OUT OF SCOPE for this feature specification
+and is deferred as an explicit non-goal. The integration shall be tracked as a separate
+work item when SIXEL is promoted from Draft to Approved and the Tier 4 capability
+record update is scheduled.
+
+The Detect function for Terminal_Capabilities (FUNC-CAP-004) shall invoke Detect_Graphics
+as part of the sub-detector sequence when this field is present.
+<<<
+COMMENT: >>>
+Deferring integration into Terminal_Capabilities follows the same pattern as FUNC-MSE-018
+and FUNC-KKB-019: the core detection function Detect_Graphics is fully usable as a
+standalone API. The Could priority reflects that standalone use is sufficient for Tier 4.
+The deferred note is stated explicitly to prevent implementors from feeling obligated to
+modify capability_record.sdoc as part of this feature.
+<<<
+
+[/SECTION]
