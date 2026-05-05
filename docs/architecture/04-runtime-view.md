@@ -2408,6 +2408,123 @@ Termicap.Graphics.IO.Detect_Graphics      [SPARK_Mode => Off]
 
 ---
 
+## Scenario 29: Terminfo Database Lookup and Parsing
+
+Executed on demand when an application calls `Parse_Terminfo` to read the compiled terminfo database entry for the active terminal. No TTY device is opened; the operation is safe in non-TTY contexts.
+
+```
+Caller (application code)
+  │
+  │  Result : Terminfo_Result :=
+  │    Termicap.Terminfo.IO.Parse_Terminfo (Env)
+  ▼
+Termicap.Terminfo.IO                    [SPARK_Mode => Off]
+  │
+  │  Step 1: Read TERM from Env          -- Contains / Value (SPARK Silver)
+  │    TERM absent or empty?
+  │      → return (Success => False, Error => Error_No_Term)
+  │
+  │  Step 2: Build candidate directory list
+  │    $TERMINFO                         -- if set and non-empty
+  │    each entry in $TERMINFO_DIRS      -- colon-separated, if set
+  │    $HOME/.terminfo                   -- if HOME is set
+  │    /usr/share/terminfo
+  │    /etc/terminfo
+  │    /lib/terminfo
+  │
+  │  Step 3: For each candidate directory D:
+  │    │
+  │    │  Primary path:   D / T(1) / T
+  │    │  Alternate path: D / HH  / T   (HH = hex encoding of T[1])
+  │    │
+  │    │  Read_File (Path, Buffer, Size, Error)
+  │    ▼
+  │  Termicap.Terminfo.IO.Read_File      [POSIX open/read/close]
+  │    │
+  │    │  open (Path, O_RDONLY)
+  │    │  read (FD, Buffer, MAX_TERMINFO_FILE_SIZE)
+  │    │  close (FD)
+  │    │
+  │    │  Read_Not_Found  → continue to next candidate
+  │    │  Read_IO_Error   → continue to next candidate
+  │    │  Read_Too_Large  → continue to next candidate
+  │    └──► Read_OK       → commit; proceed to Step 4
+  │
+  │  All candidates exhausted without Read_OK?
+  │    → return (Success => False, Error => Error_File_Not_Found)
+  │
+  │  Step 4: Parse_Buffer (Buffer, Size)
+  ▼
+Termicap.Terminfo                       [SPARK Silver]
+  │
+  │  Detect_Format (Buffer, Size)
+  │    Unknown → return Error_Invalid_Magic
+  │    Legacy_16bit | Extended_32bit → continue
+  │
+  │  Parse_Header (Buffer, Size, Format, Header, Success)
+  │    Success = False → return Error_Header_Corrupt
+  │    Header_Is_Valid (Buffer, Header) holds (ghost, machine-verified)
+  │
+  │  Get_Numeric (Buffer, Header, Format, COLORS_INDEX)
+  │    → Snapshot.Colors (ABSENT_NUMERIC if out of range)
+  │
+  │  Get_String (Buffer, Header, SETAF_INDEX, Setaf, Has_Setaf)
+  │    → Snapshot.Setaf, Snapshot.Has_Setaf
+  │
+  │  Get_String (Buffer, Header, SETAB_INDEX, Setab, Has_Setab)
+  │    → Snapshot.Setab, Snapshot.Has_Setab
+  │
+  │  Extract_Term_Name (Buffer, Header)
+  │    → Snapshot.Term_Name (bounded 64-char string)
+  │
+  │  Parse_Extended_Header (Buffer, Size, Header, Ext, Success)
+  │    Success = False → extended section absent (non-fatal)
+  │                      Snapshot.Has_RGB_Flag := False
+  │                      Snapshot.Has_Tc_Flag  := False
+  │    Extended_Is_Valid (Buffer, Header, Ext) holds (ghost)
+  │
+  │  Extract_Truecolor_Flags (Buffer, Header, Ext, Format,
+  │                            Has_RGB, Has_Tc)
+  │    Iterates extended capability names (bounded loop, Loop_Variant)
+  │    Compares each name against "RGB" and "Tc" (case-sensitive)
+  │    → Snapshot.Has_RGB_Flag, Snapshot.Has_Tc_Flag
+  │
+  └──► return (Success => True, Snapshot => Snapshot)
+```
+
+**Key properties:**
+
+- `Parse_Terminfo` is the sole entry point; all OS interaction is confined to `Read_File`.
+- No `Probe_Session`, no TTY device; safe to call when `Is_TTY = False`.
+- Per-path `Read_Not_Found`, `Read_IO_Error`, and `Read_Too_Large` results are non-fatal; the search continues to the next candidate (FUNC-TIF-020).
+- A found-but-corrupt file (e.g., `Error_Invalid_Magic` or `Error_Header_Corrupt`) does not fall back to a lower-priority candidate; the error is returned immediately.
+- All array-index proofs in `Termicap.Terminfo` are discharged by GNATprove at Silver level using the ghost predicates `Header_Is_Valid` and `Extended_Is_Valid`, which bundle the full set of structural invariants so downstream functions need only assert a single predicate in their preconditions.
+- The `Terminfo_Result` discriminated type forces callers to test `Success` before accessing `Snapshot` or `Error` — no unchecked access is possible.
+- `Parse_Terminfo` never propagates an Ada exception under any input condition (FUNC-TIF-019).
+
+### Testability pattern
+
+Tests construct a deterministic `Byte_Array` containing a synthetic terminfo binary and call `Parse_Buffer` directly, bypassing `Termicap.Terminfo.IO` entirely. No filesystem access is required. `Read_File` can be tested independently with paths to fixture files under `tests/data/`.
+
+```
+Test body
+  │
+  │  Buffer : Byte_Array := [...]   -- synthetic terminfo binary
+  │  Size   : Natural    := Buffer'Length
+  │
+  │  Result : Terminfo_Result :=
+  │    Termicap.Terminfo.Parse_Buffer (Buffer, Size)
+  │
+  ▼
+Termicap.Terminfo                    [SPARK Silver, no OS calls]
+  │  Detect_Format → Parse_Header → Get_Numeric → Get_String(×2)
+  │  → Extract_Term_Name → Parse_Extended_Header
+  │  → Extract_Truecolor_Flags → Terminfo_Result
+  └──► deterministic, reproducible, OS-independent
+```
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -2452,4 +2569,5 @@ Termicap.Graphics.IO.Detect_Graphics      [SPARK_Mode => Off]
 - **ADR-0027** (`docs/adr/0027-da1-reuse-vs-fresh-probe.md`): Rationale for reusing `Termicap.DA1.IO.Detect_DA1` for the Sixel DA1 probe rather than issuing a fresh low-level probe
 - **ADR-0028** (`docs/adr/0028-graphics-independent-probe-sessions.md`): Rationale for using two independent probe sessions rather than a batched single-sentinel approach
 - **ADR-0029** (`docs/adr/0029-graphics-package-naming.md`): Rationale for the `Termicap.Graphics` / `Termicap.Graphics.IO` package naming and deferred integration
+- **Tech Spec TERMINFO** (`docs/tech-specs/terminfo.md`): Terminfo database parsing design rationale — binary format variants, ghost predicate SPARK strategy, search-path resolution order, path construction algorithm, truecolor flag extraction
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018, FUNC-SXL-001 through FUNC-SXL-019

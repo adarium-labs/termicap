@@ -12,6 +12,7 @@ with AUnit.Test_Suites;
 with Test_BG_Query;
 with Test_Capabilities;
 with Test_DA1;
+with Test_Terminfo;
 with Test_DECRPM;
 with Test_Dark_Light;
 with Test_Color;
@@ -57,6 +58,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_Keyboard_Parsers.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Mouse.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Graphics.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_Terminfo.Test_Case);
       return Result;
    end All_Tests;
 

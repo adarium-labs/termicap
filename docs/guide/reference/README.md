@@ -25,6 +25,9 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Termicap.Keyboard / Termicap.Keyboard.IO](keyboard.md)**
   Kitty Keyboard Protocol detection — `Keyboard_Protocol` enum, `Kitty_Flags` record, `Keyboard_Capability` result; pure SPARK Silver parsers (`Parse_Kitty_Response`, `Parse_Kitty_Flags`, `Parse_XTerm_Keyboard_Response`); cached entry point (`Detect_Keyboard_Protocol`) and uncached variant (`Probe_Keyboard_Protocol`) implementing the Win32 → Kitty → XTerm → Legacy cascade
 
+- **[Termicap.Terminfo / Termicap.Terminfo.IO](terminfo.md)**
+  Terminfo database parsing — `Terminfo_Snapshot` result record, `Terminfo_Result` discriminated type, SPARK Silver binary parser (`Parse_Buffer`, `Detect_Format`, `Parse_Header`, `Get_Numeric`, `Get_String`, `Extract_Truecolor_Flags`), POSIX file I/O entry point (`Parse_Terminfo`, `Read_File`)
+
 - **[Termicap.Dimensions](termicap-dimensions.md)**
   Terminal dimensions detection — `Terminal_Size` type, `Get_Size` function, ioctl/env-var/default fallback chain
 

@@ -1,0 +1,998 @@
+{
+  "_comment": "Termicap feature roadmap \u2014 single source of truth for development progression. Update 'status' as features are implemented. The /dev command reads this file to suggest the next feature.",
+  "version": "1.0",
+  "project": "Termicap",
+  "generated": "2026-04-03",
+  "statuses": [
+    "done",
+    "next",
+    "in_progress",
+    "pending",
+    "skipped"
+  ],
+  "tiers": [
+    {
+      "tier": 1,
+      "name": "Foundation",
+      "description": "Core detection pipeline. All Tier 1 features must be complete before Tier 2.",
+      "doc_refs": [
+        {
+          "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+          "section": "4. Recommended Feature Set for the Ada/SPARK Library \u2014 Tier 1 Foundation",
+          "approx_line": 547
+        },
+        {
+          "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+          "section": "Recommended feature set with prioritization \u2014 Must-have features (P0)",
+          "approx_line": 279
+        }
+      ],
+      "features": [
+        {
+          "id": "ENV",
+          "name": "Environment Variable Abstraction",
+          "summary": "SPARK-provable snapshot type for env vars; immutable after capture; foundation for all detection logic",
+          "status": "done",
+          "spark_level": "Silver",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-ENV-001",
+            "FUNC-ENV-002",
+            "FUNC-ENV-003",
+            "FUNC-ENV-004",
+            "FUNC-ENV-005",
+            "FUNC-ENV-006",
+            "FUNC-ENV-007",
+            "FUNC-ENV-008"
+          ],
+          "source_files": [
+            "src/termicap-environment.ads",
+            "src/termicap-environment.adb",
+            "src/termicap-environment-capture.ads",
+            "src/termicap-environment-capture.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 1.1 Environment Variable Abstraction",
+              "approx_line": 603
+            },
+            {
+              "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+              "section": "Ada/SPARK implementation architecture \u2014 SPARK boundary strategy",
+              "approx_line": 200
+            }
+          ]
+        },
+        {
+          "id": "TTY",
+          "name": "TTY Detection",
+          "summary": "Per-stream isatty() binding for stdin/stdout/stderr; SPARK spec, Ada FFI body",
+          "status": "done",
+          "spark_level": "Silver (spec only)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-TTY-001",
+            "FUNC-TTY-002",
+            "FUNC-TTY-003",
+            "FUNC-TTY-004",
+            "FUNC-TTY-005",
+            "FUNC-TTY-006"
+          ],
+          "source_files": [
+            "src/termicap-tty.ads",
+            "src/termicap-tty.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.1 TTY Detection",
+              "approx_line": 9
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 1.2 TTY Detection",
+              "approx_line": 608
+            },
+            {
+              "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+              "section": "Platform-specific implementation details \u2014 Unix/Linux/macOS implementation",
+              "approx_line": 90
+            }
+          ]
+        },
+        {
+          "id": "COLOR",
+          "name": "Color Level Detection",
+          "summary": "11-step priority cascade: FORCE_COLOR, CLICOLOR_FORCE, NO_COLOR, TERM=dumb, CI, TTY gate, COLORTERM, TERM_PROGRAM, TERM, CLICOLOR, default. Includes multiplexer awareness.",
+          "status": "done",
+          "spark_level": "Silver",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-CLR-001",
+            "FUNC-CLR-002",
+            "FUNC-CLR-003",
+            "FUNC-CLR-004",
+            "FUNC-CLR-005",
+            "FUNC-CLR-006",
+            "FUNC-CLR-007",
+            "FUNC-CLR-008",
+            "FUNC-CLR-009",
+            "FUNC-CLR-010",
+            "FUNC-CLR-011",
+            "FUNC-CLR-012",
+            "FUNC-CLR-013",
+            "FUNC-CLR-014",
+            "FUNC-CLR-015"
+          ],
+          "source_files": [
+            "src/termicap-color.ads",
+            "src/termicap-color.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.2 Color Level (4 levels)",
+              "approx_line": 43
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.14 NO_COLOR / FORCE_COLOR / CLICOLOR Compliance",
+              "approx_line": 418
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 1.3 Color Level Detection",
+              "approx_line": 615
+            },
+            {
+              "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+              "section": "Color support detection priority order",
+              "approx_line": 33
+            }
+          ]
+        },
+        {
+          "id": "DIM",
+          "name": "Terminal Dimensions",
+          "summary": "ioctl(TIOCGWINSZ) with fallback chain: /dev/tty \u2192 COLUMNS/LINES env vars \u2192 80x24. Includes pixel dimensions (ws_xpixel/ws_ypixel).",
+          "status": "done",
+          "spark_level": "Silver (spec only)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-DIM-001",
+            "FUNC-DIM-002",
+            "FUNC-DIM-003",
+            "FUNC-DIM-004",
+            "FUNC-DIM-005",
+            "FUNC-DIM-006",
+            "FUNC-DIM-007",
+            "FUNC-DIM-008"
+          ],
+          "source_files": [
+            "src/termicap-dimensions.ads",
+            "src/termicap-dimensions.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.5 Terminal Dimensions + Resize",
+              "approx_line": 230
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 2.1 Terminal Dimensions",
+              "approx_line": 629
+            },
+            {
+              "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+              "section": "Platform-specific implementation details \u2014 Unix ioctl(TIOCGWINSZ)",
+              "approx_line": 100
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tier": 2,
+      "name": "Core Capabilities",
+      "description": "Structural detection features. Depend on Tier 1. SPARK-provable (Silver) for passive detection; Ada FFI for resize and pixel probing.",
+      "doc_refs": [
+        {
+          "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+          "section": "4. Recommended Feature Set for the Ada/SPARK Library \u2014 Tier 2 Core Capabilities",
+          "approx_line": 557
+        },
+        {
+          "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+          "section": "Recommended feature set with prioritization \u2014 Nice-to-have features (P1)",
+          "approx_line": 292
+        }
+      ],
+      "features": [
+        {
+          "id": "UNI",
+          "name": "Unicode Support Detection",
+          "summary": "5-step cascade: locale (LC_ALL/LC_CTYPE/LANG), CI awareness, TERM=linux exclusion, Windows terminal heuristics (WT_SESSION, TERM_PROGRAM). Three levels: None/Basic/Extended.",
+          "status": "done",
+          "spark_level": "Silver",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-UNI-001",
+            "FUNC-UNI-002",
+            "FUNC-UNI-003",
+            "FUNC-UNI-004",
+            "FUNC-UNI-005",
+            "FUNC-UNI-006",
+            "FUNC-UNI-007",
+            "FUNC-UNI-008"
+          ],
+          "source_files": [
+            "src/termicap-unicode.ads",
+            "src/termicap-unicode.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.10 Unicode/Wide Char Support",
+              "approx_line": 353
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 2.2 Unicode Support Detection",
+              "approx_line": 636
+            }
+          ]
+        },
+        {
+          "id": "TERM-ID",
+          "name": "Terminal Identification (Passive)",
+          "summary": "Classify terminal from TERM, TERM_PROGRAM, TERM_PROGRAM_VERSION, TERMINAL_EMULATOR, WT_SESSION env vars into a structured Terminal_Identity record. Enables terminal-specific heuristics downstream. Fully SPARK-provable.",
+          "status": "done",
+          "spark_level": "Silver",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-TID-001",
+            "FUNC-TID-002",
+            "FUNC-TID-003",
+            "FUNC-TID-004",
+            "FUNC-TID-005",
+            "FUNC-TID-006",
+            "FUNC-TID-007",
+            "FUNC-TID-008",
+            "FUNC-TID-009",
+            "FUNC-TID-010",
+            "FUNC-TID-011",
+            "FUNC-TID-012"
+          ],
+          "source_files": [
+            "src/termicap-terminal_id.ads",
+            "src/termicap-terminal_id.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.13 Terminal Identification",
+              "approx_line": 398
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 2.3 Terminal Identification (Passive)",
+              "approx_line": 642
+            }
+          ]
+        },
+        {
+          "id": "DOWNSAMPLE",
+          "name": "Color Downsampling",
+          "summary": "Perceptual color conversion: TrueColor\u2192256 (nearest 6\u00d76\u00d76 cube + 24-step grayscale), 256\u219216 (HSLuv distance search), 16\u2192None (strip). Gold-level SPARK provability (pure arithmetic).",
+          "status": "done",
+          "spark_level": "Gold",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-DSP-001",
+            "FUNC-DSP-002",
+            "FUNC-DSP-003",
+            "FUNC-DSP-004",
+            "FUNC-DSP-005",
+            "FUNC-DSP-006",
+            "FUNC-DSP-007",
+            "FUNC-DSP-008",
+            "FUNC-DSP-009",
+            "FUNC-DSP-010",
+            "FUNC-DSP-011",
+            "FUNC-DSP-012"
+          ],
+          "source_files": [
+            "src/termicap-downsampling.ads",
+            "src/termicap-downsampling.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "3.3 Best Degradation Strategies",
+              "approx_line": 494
+            }
+          ]
+        },
+        {
+          "id": "SIGWINCH",
+          "name": "SIGWINCH Resize Notification",
+          "summary": "Ada protected object wrapping SIGWINCH signal handler; re-queries ioctl(TIOCGWINSZ) on resize. Self-pipe trick for I/O loop integration.",
+          "status": "done",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-SWC-001",
+            "FUNC-SWC-002",
+            "FUNC-SWC-003",
+            "FUNC-SWC-004",
+            "FUNC-SWC-005",
+            "FUNC-SWC-006",
+            "FUNC-SWC-007",
+            "FUNC-SWC-008",
+            "FUNC-SWC-009",
+            "FUNC-SWC-010",
+            "FUNC-SWC-011"
+          ],
+          "source_files": [
+            "src/termicap-sigwinch.ads",
+            "src/termicap-sigwinch.adb",
+            "src/c/termicap_sigwinch.c"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.5 Terminal Dimensions + Resize \u2014 Resize detection",
+              "approx_line": 258
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 3.1 SIGWINCH Resize Handling",
+              "approx_line": 657
+            }
+          ]
+        },
+        {
+          "id": "OVERRIDE",
+          "name": "Global Enable/Disable Override",
+          "summary": "Five-state model (Auto/Force_None/Force_Basic/Force_256/Force_True_Color) for --color flag support. Thread-safe via protected object. Scoped override with RAII cleanup. Parse_Color_Flag for string parsing.",
+          "status": "done",
+          "spark_level": "Silver",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-OVR-001",
+            "FUNC-OVR-002",
+            "FUNC-OVR-003",
+            "FUNC-OVR-004",
+            "FUNC-OVR-005",
+            "FUNC-OVR-006",
+            "FUNC-OVR-007",
+            "FUNC-OVR-008",
+            "FUNC-OVR-009",
+            "FUNC-OVR-010",
+            "FUNC-OVR-011",
+            "FUNC-OVR-012",
+            "FUNC-OVR-013",
+            "FUNC-OVR-014"
+          ],
+          "source_files": [
+            "src/termicap-override.ads",
+            "src/termicap-override.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 3.2 Global Override API",
+              "approx_line": 663
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "3.5 Caching and Initialization Patterns",
+              "approx_line": 525
+            }
+          ]
+        },
+        {
+          "id": "CAPABILITY-RECORD",
+          "name": "Capability Record Assembly",
+          "summary": "Single immutable Terminal_Capabilities record combining all Tier 1+2 detection results. Cached after first call; provides Detect function for re-evaluation. Wezterm/termwiz Capabilities struct pattern.",
+          "status": "done",
+          "spark_level": "Silver",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-CAP-001",
+            "FUNC-CAP-002",
+            "FUNC-CAP-003",
+            "FUNC-CAP-004",
+            "FUNC-CAP-005",
+            "FUNC-CAP-006",
+            "FUNC-CAP-007",
+            "FUNC-CAP-008",
+            "FUNC-CAP-009",
+            "FUNC-CAP-010",
+            "FUNC-CAP-011",
+            "FUNC-CAP-012",
+            "FUNC-CAP-013",
+            "FUNC-CAP-014",
+            "FUNC-CAP-015"
+          ],
+          "source_files": [
+            "src/termicap-capabilities.ads",
+            "src/termicap-capabilities.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 3.3 Capability Record Assembly",
+              "approx_line": 671
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "3.2 Most Elegant Capability Enum/Type Hierarchies",
+              "approx_line": 472
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tier": 3,
+      "name": "Advanced Capabilities",
+      "description": "Active probing via escape sequences. Require I/O with timeouts; Ada FFI boundary. Depend on all Tier 1+2 features.",
+      "doc_refs": [
+        {
+          "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+          "section": "4. Recommended Feature Set for the Ada/SPARK Library \u2014 Tier 3 Advanced Capabilities",
+          "approx_line": 570
+        }
+      ],
+      "features": [
+        {
+          "id": "OSC-INFRA",
+          "name": "OSC Query Infrastructure",
+          "summary": "Termios save/restore, raw mode, select() with timeout, sentinel pattern (send query + DA1 as boundary marker), foreground process group check via ioctl(TIOCGPGRP). Foundation for all active probing.",
+          "status": "done",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-OSC-001",
+            "FUNC-OSC-002",
+            "FUNC-OSC-003",
+            "FUNC-OSC-004",
+            "FUNC-OSC-005",
+            "FUNC-OSC-006",
+            "FUNC-OSC-007",
+            "FUNC-OSC-008",
+            "FUNC-OSC-009",
+            "FUNC-OSC-010",
+            "FUNC-OSC-011",
+            "FUNC-OSC-012",
+            "FUNC-OSC-013",
+            "FUNC-OSC-014",
+            "FUNC-OSC-015"
+          ],
+          "source_files": [
+            "src/termicap-osc.ads",
+            "src/termicap-osc.adb",
+            "src/termicap-osc-parsing.ads",
+            "src/termicap-osc-parsing.adb",
+            "src/c/termicap_osc.c"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 4.1 OSC Query Infrastructure",
+              "approx_line": 679
+            }
+          ]
+        },
+        {
+          "id": "BG-COLOR",
+          "name": "Background / Foreground Color Query",
+          "summary": "OSC 11 (background) / OSC 10 (foreground) queries with DA1 sentinel, COLORFGBG env var fallback, X11 rgb:RRRR/GGGG/BBBB parsing, multiplexer passthrough (tmux DCS wrapping).",
+          "status": "done",
+          "spark_level": "Silver (parsing); N/A (I/O)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-BGC-001",
+            "FUNC-BGC-002",
+            "FUNC-BGC-003",
+            "FUNC-BGC-004",
+            "FUNC-BGC-005",
+            "FUNC-BGC-006",
+            "FUNC-BGC-007",
+            "FUNC-BGC-008",
+            "FUNC-BGC-009",
+            "FUNC-BGC-010",
+            "FUNC-BGC-011",
+            "FUNC-BGC-012",
+            "FUNC-BGC-013",
+            "FUNC-BGC-014",
+            "FUNC-BGC-015",
+            "FUNC-BGC-016",
+            "FUNC-BGC-017",
+            "FUNC-BGC-018",
+            "FUNC-BGC-019"
+          ],
+          "source_files": [
+            "src/termicap-color-bg_query.ads",
+            "src/termicap-color-bg_query.adb",
+            "src/termicap-color-bg_query-io.ads",
+            "src/termicap-color-bg_query-io.adb",
+            "src/termicap-color-detection.ads",
+            "src/termicap-color-detection.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.3 Background Color (Dark/Light + RGB)",
+              "approx_line": 160
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 4.2 Background/Foreground Color Detection",
+              "approx_line": 687
+            }
+          ]
+        },
+        {
+          "id": "DARK-LIGHT",
+          "name": "Dark / Light Theme Classification",
+          "summary": "Derive dark/light from background RGB using ITU-R BT.601 luminance (Y = 0.299R + 0.587G + 0.114B). Lightness < 0.5 = dark. Pure arithmetic, Gold SPARK.",
+          "status": "done",
+          "spark_level": "Gold",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-DKL-001",
+            "FUNC-DKL-002",
+            "FUNC-DKL-003",
+            "FUNC-DKL-004",
+            "FUNC-DKL-005",
+            "FUNC-DKL-006",
+            "FUNC-DKL-007"
+          ],
+          "source_files": [
+            "src/termicap-color-dark_light.ads",
+            "src/termicap-color-dark_light-detect.ads",
+            "src/termicap-color-dark_light-detect.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.3 Background Color \u2014 Dark/light classification",
+              "approx_line": 211
+            }
+          ]
+        },
+        {
+          "id": "TERM-ID-ACTIVE",
+          "name": "Terminal Identification (Active: XTVERSION)",
+          "summary": "XTVERSION query (CSI > q) with DA1 sentinel, parse DCS >| name version ST response. More accurate than env vars for capability inference.",
+          "status": "done",
+          "spark_level": "Silver (parsing); N/A (I/O)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-XTV-001",
+            "FUNC-XTV-002",
+            "FUNC-XTV-003",
+            "FUNC-XTV-004",
+            "FUNC-XTV-005",
+            "FUNC-XTV-006",
+            "FUNC-XTV-007",
+            "FUNC-XTV-008",
+            "FUNC-XTV-009",
+            "FUNC-XTV-010",
+            "FUNC-XTV-011",
+            "FUNC-XTV-012",
+            "FUNC-XTV-013",
+            "FUNC-XTV-014",
+            "FUNC-XTV-015",
+            "FUNC-XTV-016",
+            "FUNC-XTV-017"
+          ],
+          "source_files": [
+            "src/termicap-xtversion.ads",
+            "src/termicap-xtversion.adb",
+            "src/termicap-xtversion-io.ads",
+            "src/termicap-xtversion-io.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.13 Terminal Identification \u2014 Layer 5 XTVERSION",
+              "approx_line": 406
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "5. Suggested Development Order \u2014 4.3 Terminal Identification (Active)",
+              "approx_line": 695
+            }
+          ]
+        },
+        {
+          "id": "DA1",
+          "name": "DA1 Response Parsing",
+          "summary": "Primary Device Attributes (CSI c) query; response reveals sixel support (Ps=4), clipboard (Ps=52), 256-color (Ps=22). Silver SPARK for parsing; Ada for I/O.",
+          "status": "done",
+          "spark_level": "Silver (parsing); N/A (I/O)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-DA1-001",
+            "FUNC-DA1-002",
+            "FUNC-DA1-003",
+            "FUNC-DA1-004",
+            "FUNC-DA1-005",
+            "FUNC-DA1-006",
+            "FUNC-DA1-007",
+            "FUNC-DA1-008",
+            "FUNC-DA1-009",
+            "FUNC-DA1-010",
+            "FUNC-DA1-011",
+            "FUNC-DA1-012",
+            "FUNC-DA1-013",
+            "FUNC-DA1-014",
+            "FUNC-DA1-015"
+          ],
+          "source_files": [
+            "src/termicap-da1.ads",
+            "src/termicap-da1.adb",
+            "src/termicap-da1-io.ads",
+            "src/termicap-da1-io.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.13 Terminal Identification \u2014 Layer 6 DA1",
+              "approx_line": 407
+            }
+          ]
+        },
+        {
+          "id": "DECRPM",
+          "name": "DECRPM Queries",
+          "summary": "DEC Private Mode Request for runtime detection of mouse (1000/1006), bracketed paste (2004), synchronized output (2026). Response: CSI ? mode ; status $ y.",
+          "status": "done",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-RPM-001",
+            "FUNC-RPM-002",
+            "FUNC-RPM-003",
+            "FUNC-RPM-004",
+            "FUNC-RPM-005",
+            "FUNC-RPM-006",
+            "FUNC-RPM-007",
+            "FUNC-RPM-008",
+            "FUNC-RPM-009",
+            "FUNC-RPM-010",
+            "FUNC-RPM-011",
+            "FUNC-RPM-012",
+            "FUNC-RPM-013",
+            "FUNC-RPM-014",
+            "FUNC-RPM-015",
+            "FUNC-RPM-016",
+            "FUNC-RPM-017"
+          ],
+          "source_files": [
+            "src/termicap-decrpm.ads",
+            "src/termicap-decrpm.adb",
+            "src/termicap-decrpm-io.ads",
+            "src/termicap-decrpm-io.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.6 Mouse Input \u2014 Detection",
+              "approx_line": 278
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.9 Bracketed Paste",
+              "approx_line": 342
+            }
+          ]
+        },
+        {
+          "id": "MUX-OSC",
+          "name": "Multiplexer OSC Passthrough",
+          "summary": "Wrap OSC queries for tmux (ESC Ptmux; ESC <query> ESC\\) and screen (ESC P <query> ESC\\). Required for background color detection through multiplexers.",
+          "status": "done",
+          "spark_level": "Silver",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-OSC-014"
+          ],
+          "source_files": [
+            "src/termicap-osc-parsing.ads",
+            "src/termicap-osc-parsing.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.3 Background Color \u2014 Multiplexer passthrough",
+              "approx_line": 206
+            }
+          ]
+        },
+        {
+          "id": "WIN32",
+          "name": "Windows Console API Integration",
+          "summary": "GetConsoleMode for TTY check; GetConsoleScreenBufferInfo for dimensions; Windows build number detection for color level (10586=256, 14931=TrueColor); VT mode enabling via ENABLE_VIRTUAL_TERMINAL_PROCESSING.",
+          "status": "done",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [],
+          "source_files": [],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+              "section": "Platform-specific implementation details \u2014 Windows implementation",
+              "approx_line": 110
+            },
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.3 Background Color \u2014 Windows platform-specific considerations",
+              "approx_line": 215
+            }
+          ]
+        },
+        {
+          "id": "CYGWIN",
+          "name": "Cygwin / MSYS2 PTY Detection",
+          "summary": "Detect Cygwin/MSYS2 PTY via pipe name inspection (\\cygwin-*-pty*-{from,to}-master). Needed for correct is_tty result on Windows with these compatibility layers.",
+          "status": "done",
+          "spark_level": "Silver (Is_Cygwin_Pipe_Name); N/A (Is_Cygwin_Terminal)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-CYG-001",
+            "FUNC-CYG-002",
+            "FUNC-CYG-003",
+            "FUNC-CYG-004",
+            "FUNC-CYG-005",
+            "FUNC-CYG-006",
+            "FUNC-CYG-007",
+            "FUNC-CYG-008",
+            "FUNC-CYG-009",
+            "FUNC-CYG-010",
+            "FUNC-CYG-011",
+            "FUNC-CYG-012",
+            "FUNC-CYG-013",
+            "FUNC-CYG-014",
+            "FUNC-CYG-015",
+            "FUNC-CYG-016",
+            "FUNC-CYG-017"
+          ],
+          "source_files": [
+            "src/windows/termicap-win32_cygwin.ads",
+            "src/windows/termicap-win32_cygwin.adb",
+            "src/windows/termicap-win32_ntdll.ads",
+            "src/windows/termicap-win32_ntdll.adb",
+            "src/windows/termicap-tty.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.1 TTY Detection \u2014 Platform-specific considerations Windows Cygwin/MSYS2",
+              "approx_line": 29
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tier": 4,
+      "name": "Stretch Goals",
+      "description": "Advanced I/O and rendering features. Low priority; implement only after Tier 3 is stable.",
+      "doc_refs": [
+        {
+          "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+          "section": "4. Recommended Feature Set for the Ada/SPARK Library \u2014 Tier 4 Stretch Goals",
+          "approx_line": 583
+        }
+      ],
+      "features": [
+        {
+          "id": "KITTY-KB",
+          "name": "Kitty Keyboard Protocol Detection",
+          "summary": "Query CSI ? u; if DA1 response arrives first, protocol unsupported. Priority: Win32 > Kitty > XTerm > Legacy.",
+          "status": "done",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-KKB-001",
+            "FUNC-KKB-002",
+            "FUNC-KKB-003",
+            "FUNC-KKB-004",
+            "FUNC-KKB-005",
+            "FUNC-KKB-006",
+            "FUNC-KKB-007",
+            "FUNC-KKB-008",
+            "FUNC-KKB-009",
+            "FUNC-KKB-010",
+            "FUNC-KKB-011",
+            "FUNC-KKB-012",
+            "FUNC-KKB-013",
+            "FUNC-KKB-014",
+            "FUNC-KKB-015",
+            "FUNC-KKB-016",
+            "FUNC-KKB-017",
+            "FUNC-KKB-018",
+            "FUNC-KKB-019"
+          ],
+          "source_files": [
+            "src/termicap-keyboard.ads",
+            "src/termicap-keyboard.adb",
+            "src/termicap-keyboard-io.ads",
+            "src/posix/termicap-keyboard-io.adb",
+            "src/windows/termicap-keyboard-io.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.7 Keyboard Input (Raw + Decoded)",
+              "approx_line": 306
+            }
+          ]
+        },
+        {
+          "id": "MOUSE",
+          "name": "Mouse Protocol Detection",
+          "summary": "DECRPM queries for X10 (1000), SGR (1006), pixel (1016) mouse encoding modes. Linux console: GPM daemon fallback.",
+          "status": "done",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [],
+          "source_files": [],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.6 Mouse Input",
+              "approx_line": 276
+            }
+          ]
+        },
+        {
+          "id": "SIXEL",
+          "name": "Sixel / Kitty Graphics Detection",
+          "summary": "Detect via DA1 Ps=4 (sixel) or terminal-specific env vars / XTVERSION strings. No standard query for Kitty graphics protocol.",
+          "status": "done",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [
+            "FUNC-SXL-001",
+            "FUNC-SXL-002",
+            "FUNC-SXL-003",
+            "FUNC-SXL-004",
+            "FUNC-SXL-005",
+            "FUNC-SXL-006",
+            "FUNC-SXL-007",
+            "FUNC-SXL-008",
+            "FUNC-SXL-009",
+            "FUNC-SXL-010",
+            "FUNC-SXL-011",
+            "FUNC-SXL-012",
+            "FUNC-SXL-013",
+            "FUNC-SXL-014",
+            "FUNC-SXL-015",
+            "FUNC-SXL-016",
+            "FUNC-SXL-017",
+            "FUNC-SXL-018",
+            "FUNC-SXL-019"
+          ],
+          "source_files": [
+            "src/termicap-graphics.ads",
+            "src/termicap-graphics.adb",
+            "src/termicap-graphics-io.ads",
+            "src/posix/termicap-graphics-io.adb",
+            "src/windows/termicap-graphics-io.adb",
+            "examples/graphics_demo/src/graphics_demo.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.13 Terminal Identification \u2014 Layer 6 DA1 sixel Ps=4",
+              "approx_line": 407
+            }
+          ]
+        },
+        {
+          "id": "TERMINFO",
+          "name": "Terminfo Database Parsing",
+          "summary": "Read /usr/share/terminfo/$TERMINFO/$TERM binary file (ncurses format). Key capabilities: colors (numeric), setaf/setab, RGB/Tc truecolor flag.",
+          "status": "done",
+          "spark_level": "Silver (binary parser)",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-TIF-001", "FUNC-TIF-002", "FUNC-TIF-003", "FUNC-TIF-004",
+            "FUNC-TIF-005", "FUNC-TIF-006", "FUNC-TIF-007", "FUNC-TIF-008",
+            "FUNC-TIF-009", "FUNC-TIF-010", "FUNC-TIF-011", "FUNC-TIF-012",
+            "FUNC-TIF-013", "FUNC-TIF-014", "FUNC-TIF-015", "FUNC-TIF-016",
+            "FUNC-TIF-017", "FUNC-TIF-018", "FUNC-TIF-019", "FUNC-TIF-020"
+          ],
+          "source_files": [
+            "src/termicap-terminfo.ads",
+            "src/termicap-terminfo.adb",
+            "src/termicap-terminfo-io.ads",
+            "src/termicap-terminfo-io.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+              "section": "Platform-specific implementation details \u2014 Unix Terminfo database",
+              "approx_line": 107
+            }
+          ]
+        },
+        {
+          "id": "OSC52",
+          "name": "OSC 52 Clipboard Detection",
+          "summary": "Detect clipboard integration support via OSC 52 query. Only a subset of terminals support read-back.",
+          "status": "next",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [],
+          "source_files": [],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.13 Terminal Identification \u2014 Layer 6 DA1 clipboard Ps=52",
+              "approx_line": 407
+            }
+          ]
+        },
+        {
+          "id": "WCWIDTH",
+          "name": "wcwidth() Probing for Unicode Level",
+          "summary": "Call wcwidth() on sentinel codepoints to detect Unicode version: U+28FF (Braille, Unicode 3), U+1FB38 (sextant, Unicode 13), U+1CD00 (octant, Unicode 16).",
+          "status": "pending",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [],
+          "source_files": [],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.10 Unicode/Wide Char Support \u2014 Method 3: wcwidth() probing",
+              "approx_line": 370
+            }
+          ]
+        },
+        {
+          "id": "CELL-WIDTH",
+          "name": "Cell Width Measurement Tables",
+          "summary": "Binary search over precomputed Unicode width tables for correct text layout. ZWJ and VS16 handling. UNICODE_VERSION env var to select table version. Gold SPARK (pure lookup + arithmetic).",
+          "status": "pending",
+          "spark_level": "Gold",
+          "ffi": false,
+          "requirement_uids": [],
+          "source_files": [],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.10 Unicode/Wide Char Support \u2014 Cell width measurement",
+              "approx_line": 375
+            }
+          ]
+        },
+        {
+          "id": "FGPGRP",
+          "name": "Foreground Process Group Check",
+          "summary": "ioctl(TIOCGPGRP) to verify caller is foreground process before sending OSC queries. Prevents query contaminating background process output.",
+          "status": "pending",
+          "spark_level": "N/A (Ada FFI)",
+          "ffi": true,
+          "requirement_uids": [],
+          "source_files": [],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.3 Background Color \u2014 function detect_background_color guard checks",
+              "approx_line": 166
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

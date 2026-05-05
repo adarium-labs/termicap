@@ -1,0 +1,1018 @@
+[DOCUMENT]
+TITLE: TERMINFO — Terminfo Database Parsing
+UID: REQ-TIF
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[TEXT]
+STATEMENT: >>>
+This document specifies the functional requirements for Terminfo Database Parsing
+(feature id TERMINFO, Tier 4). The feature reads the compiled terminfo binary database
+file (ncurses format) to extract terminal capabilities that are authoritative inputs to
+the Termicap color detection cascade.
+
+The primary capabilities of interest are: `colors` (numeric — maximum number of colors
+supported), `setaf`/`setab` (string — ANSI color-setting escape sequences for foreground
+and background), and the user-defined extended capabilities `RGB` and `Tc` (boolean/string
+flags that signal truecolor support in tmux-style terminfo extensions).
+
+The parser locates the correct terminfo file by reading the `TERM` environment variable,
+then searching the standard directory hierarchy: `$TERMINFO`, each directory in
+`$TERMINFO_DIRS`, `~/.terminfo`, `/usr/share/terminfo`, `/etc/terminfo`,
+`/lib/terminfo`. Within each directory the file is sought at
+`<dir>/<first-char-of-TERM>/<TERM>` (standard ncurses layout on most Unix systems) and,
+as a fallback, `<dir>/<two-hex-digits-of-first-char>/<TERM>` (used by some BSDs and
+older Solaris installations).
+
+The ncurses compiled terminfo binary format consists of a fixed-size header followed by
+five data sections: names, booleans, numerics, strings (including a string table), and an
+optional extended (user-defined) section. Two format variants are supported:
+  - Legacy (magic 0x011A): numeric fields are 16-bit signed integers.
+  - Extended-numeric (magic 0x021E): numeric fields are 32-bit signed integers.
+
+This feature has no FFI dependency. All parsing is pure Ada operating on an in-memory
+byte array loaded by a thin file-read binding. The binary parser shall be SPARK Silver
+provable: no exceptions, bounded loops, and pre/post contracts on all public operations.
+The file-read binding itself shall be declared with SPARK_Mode => Off, consistent with
+all other Termicap FFI boundaries.
+
+Integration: the parsed Terminfo_Snapshot record is consumed by the color detection
+cascade as a complementary passive source, alongside environment variable heuristics,
+to produce or refine the Color_Level result.
+<<<
+
+[SECTION]
+TITLE: Result Types
+
+[REQUIREMENT]
+UID: FUNC-TIF-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminfo_Snapshot Result Record
+STATEMENT: >>>
+The library shall provide an immutable record type Terminfo_Snapshot that represents the
+subset of a parsed terminfo database entry relevant to Termicap's capability detection.
+The record shall contain at minimum:
+
+  Colors         : Integer
+    -- Value of the `colors` numeric capability (maximum colors the terminal supports).
+    -- -1 (ABSENT_NUMERIC) when the capability is not present in the database entry.
+    -- -2 (CANCELLED_NUMERIC) when the capability has been explicitly cancelled.
+
+  Has_Setaf      : Boolean
+    -- True when the `setaf` string capability is present and non-empty.
+
+  Has_Setab      : Boolean
+    -- True when the `setab` string capability is present and non-empty.
+
+  Setaf          : String (bounded, max MAX_CAPABILITY_STRING_LENGTH characters)
+    -- Raw value of the `setaf` string capability, or empty string when absent.
+
+  Setab          : String (bounded, max MAX_CAPABILITY_STRING_LENGTH characters)
+    -- Raw value of the `setab` string capability, or empty string when absent.
+
+  Has_RGB_Flag   : Boolean
+    -- True when the extended capability `RGB` (truecolor flag) is present and set.
+    -- This flag appears in tmux-style terminfo extensions and signals that the terminal
+    -- uses direct RGB (24-bit) colour for setaf/setab sequences.
+
+  Has_Tc_Flag    : Boolean
+    -- True when the extended capability `Tc` (truecolor flag used by some terminals
+    -- including tmux itself and foot) is present and set.
+
+  Term_Name      : String (bounded, max MAX_TERM_NAME_LENGTH characters)
+    -- Primary terminal name extracted from the names section of the terminfo entry.
+
+MAX_CAPABILITY_STRING_LENGTH shall be at least 64. MAX_TERM_NAME_LENGTH shall be at
+least 64.
+
+The Terminfo_Snapshot type shall carry the annotation SPARK_Mode => On and shall be
+declared in a package spec that is fully SPARK-provable.
+<<<
+COMMENT: >>>
+Restricting the snapshot to the five capabilities of interest (colors, setaf, setab, RGB,
+Tc) avoids the overhead of representing the full terminfo capability set (ncurses defines
+several hundred capabilities). These five are the only terminfo capabilities that the
+Termicap color cascade consults. Recording Has_Setaf/Has_Setab as explicit booleans
+alongside the string values simplifies callers: they do not need to test for empty string.
+The -1/-2 sentinel convention for absent/cancelled numeric capabilities follows the ncurses
+specification (ABSENT_NUMERIC = -1, CANCELLED_NUMERIC = -2) so that the distinction
+between "database doesn't mention this capability" and "database explicitly disables this
+capability" is preserved at the type level rather than collapsed into a single zero.
+Bounded strings are required for SPARK provability (unbounded strings involve heap
+allocation and dynamic dispatch, both outside the SPARK subset).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminfo_Result Error Enumeration
+STATEMENT: >>>
+The library shall provide a result type Terminfo_Result that wraps either a
+Terminfo_Snapshot (on success) or one of the following error codes (on failure):
+
+  Error_No_Term
+    -- The TERM environment variable is not set or is empty.
+
+  Error_File_Not_Found
+    -- No terminfo file was found for the current TERM value in any searched directory.
+
+  Error_IO_Failure
+    -- The terminfo file was found but could not be read (permissions, I/O error).
+
+  Error_Invalid_Magic
+    -- The file's first two bytes do not match a recognised terminfo magic number
+    -- (0x011A for legacy format, 0x021E for extended-numeric format).
+
+  Error_Header_Corrupt
+    -- The header section sizes are internally inconsistent or cause an out-of-bounds
+    -- access into the file data.
+
+  Error_File_Too_Large
+    -- The file size exceeds MAX_TERMINFO_FILE_SIZE and is rejected as a safety guard.
+
+  Error_Encoding
+    -- A string capability contains bytes outside the expected range.
+
+No operation in the Terminfo feature shall raise an Ada exception. All error conditions
+shall be represented by a Terminfo_Result error variant. Callers shall test the result
+discriminant before accessing the snapshot value.
+
+MAX_TERMINFO_FILE_SIZE shall be at least 32 768 bytes (32 KiB) and shall be a named
+constant declared in the Terminfo package spec so that callers can reason about the bound.
+<<<
+COMMENT: >>>
+A disjoint result type (rather than raising exceptions) is the established Termicap
+convention for all fallible operations and is required for SPARK Silver provability.
+The error enumeration is exhaustive by design: each error code maps to a distinct failure
+mode that a caller may want to handle differently. For example, Error_No_Term and
+Error_File_Not_Found are expected conditions in many environments (containers, minimal
+chroot environments, CI systems without terminfo packages) and should be silently ignored
+by the cascade; Error_Invalid_Magic and Error_Header_Corrupt indicate a corrupt or
+foreign-format file and may warrant a diagnostic log entry. Bounding file size at 32 KiB
+provides a SPARK-provable upper bound on the byte array used for parsing; the largest
+known real terminfo file (rxvt-unicode with extensions) is under 8 KiB.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Search Path Resolution
+
+[REQUIREMENT]
+UID: FUNC-TIF-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: TERM Environment Variable Read
+STATEMENT: >>>
+Before any file system access, the Terminfo feature shall read the TERM environment
+variable from the caller-supplied Environment snapshot (FUNC-ENV-001). If TERM is not
+present in the snapshot (FUNC-ENV-002) or its value is the empty string, the feature shall
+return Error_No_Term immediately without performing any file system search.
+
+The TERM value shall be used exactly as retrieved from the snapshot with no case folding,
+no whitespace trimming, and no validation beyond checking for empty string. The value may
+contain hyphens (e.g., "xterm-256color") and digits; it shall not be expected to be a
+valid file name component on all platforms.
+<<<
+COMMENT: >>>
+Reading TERM from the Environment snapshot rather than from the live process environment
+is the Termicap convention: the snapshot was captured at program start and is immutable,
+making the entire detection cascade deterministic and testable without modifying the
+process environment. Rejecting empty TERM before any I/O is correct: an empty TERM is
+ambiguous (it usually means the program is running without a controlling terminal, e.g.
+in a pipeline or cron job) and there is no meaningful terminfo entry to look up.
+Case folding is intentionally absent: TERM values are case-sensitive on Unix file systems;
+lowercasing "XTERM" would produce a wrong path on case-sensitive systems.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Standard Search Directory Order
+STATEMENT: >>>
+The Terminfo feature shall search for the terminfo file by consulting the following
+directories in the order listed, stopping at the first directory that yields a readable
+file:
+
+  1. The directory named by the TERMINFO environment variable (if set and non-empty).
+  2. Each colon-separated directory listed in the TERMINFO_DIRS environment variable
+     (if set and non-empty), processed left to right.
+  3. The directory ~/.terminfo (where ~ is expanded to the value of the HOME environment
+     variable; if HOME is not set, this entry is skipped).
+  4. /usr/share/terminfo
+  5. /etc/terminfo
+  6. /lib/terminfo
+
+If none of the directories yields a readable file, the feature shall return
+Error_File_Not_Found.
+
+The feature shall not follow symbolic links that resolve to paths outside the searched
+directory (i.e., it shall use the OS-level open/read operations which follow symlinks by
+default; no special symlink filtering is required). The feature shall not create, modify,
+or delete any file or directory during the search.
+<<<
+COMMENT: >>>
+This search order is the one documented by the ncurses(3X) manual and implemented by
+ncurses, termenv (Go), and blessed (Node.js). Honouring $TERMINFO first gives the user
+or application full override capability (useful in containers or when testing with a
+custom terminfo database). $TERMINFO_DIRS (colon-separated, like PATH) is the ncurses
+mechanism for adding multiple extra search roots. ~/.terminfo is the per-user override.
+The three system directories (/usr/share/terminfo, /etc/terminfo, /lib/terminfo) cover
+the installation paths used by Debian/Ubuntu, Red Hat/Fedora, Arch Linux, macOS
+Homebrew, and FreeBSD respectively. Stopping at the first match mirrors ncurses behaviour
+and prevents a corrupt entry in a higher-priority directory from being silently superseded
+by a valid one lower in the hierarchy (if the file is found but corrupt, the error is
+surfaced).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminfo File Path Construction
+STATEMENT: >>>
+For each candidate directory D and a TERM value T, the Terminfo feature shall attempt
+to construct and probe the following two file paths, in order:
+
+  Primary path:   D / T(1) / T
+    where T(1) is the single-character string consisting of the first character of T.
+
+  Alternate path: D / HH / T
+    where HH is the two-character lowercase hexadecimal representation of the ASCII
+    (or Latin-1) code of the first character of T (e.g., "78" for 'x' = 0x78).
+
+The feature shall attempt to open the Primary path first. Only if that path does not
+exist or is not readable shall it attempt the Alternate path. If both paths within a
+directory fail, the feature shall proceed to the next candidate directory (FUNC-TIF-004).
+
+The constructed path strings shall not exceed MAX_PATH_LENGTH characters. If path
+construction would exceed this limit, that candidate shall be skipped without error.
+MAX_PATH_LENGTH shall be at least 512 and shall be a named constant.
+<<<
+COMMENT: >>>
+The two path layouts reflect historical divergence in the Unix ecosystem. The Primary
+layout (<dir>/<first-char>/<TERM>) is used by Linux (ncurses default), macOS, and most
+modern BSDs. The Alternate layout (<dir>/<two-hex-digits>/<TERM>) was used by older
+System V installations, some Solaris versions, and OpenBSD until relatively recently.
+Supporting both layouts in priority order (primary then alternate) ensures compatibility
+with the full range of Unix systems without requiring build-time configuration. Bounding
+the path length at 512 characters is a SPARK safety guard: the path construction is done
+in a fixed-size buffer, and any TERM value that would overflow the buffer almost certainly
+denotes a misconfigured environment rather than a real terminal.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: File Loading
+
+[REQUIREMENT]
+UID: FUNC-TIF-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminfo File Read into Byte Array
+STATEMENT: >>>
+The Terminfo feature shall provide an operation that opens a terminfo file at a given
+path and reads its entire contents into a caller-supplied fixed-size byte array. Its
+representative signature is:
+
+  procedure Read_File
+     (Path       :     String;
+      Buffer     : out Byte_Array;
+      Size       : out Natural;
+      Error      : out Read_Error);
+
+where Read_Error is a discrete type with values: Read_OK, Read_Not_Found,
+Read_IO_Error, Read_Too_Large.
+
+The operation shall:
+  1. Attempt to open the file at Path in read-only mode.
+  2. If the file does not exist or cannot be opened, set Error := Read_Not_Found and
+     return; Buffer and Size are unspecified.
+  3. Read up to MAX_TERMINFO_FILE_SIZE bytes into Buffer. If the file size exceeds
+     MAX_TERMINFO_FILE_SIZE, set Error := Read_Too_Large and close the file before
+     returning.
+  4. On a successful read, set Size to the number of bytes read and Error := Read_OK.
+  5. On any I/O error during reading, set Error := Read_IO_Error, set Size := 0, and
+     close the file.
+  6. Always close the file descriptor before returning, regardless of error status.
+
+Read_File shall be declared with SPARK_Mode => Off because it calls POSIX open/read/close
+system calls via Ada FFI. The Byte_Array type and the Read_Error type shall be declared
+in a SPARK-visible package so that callers with SPARK_Mode => On can reference them.
+<<<
+COMMENT: >>>
+Loading the entire file into a bounded byte array before parsing is the approach used by
+notcurses and blessed; it simplifies the parser significantly because all offset
+calculations can be performed against a fixed buffer with known bounds, making them
+trivially SPARK-provable. The alternative — streaming reads during parsing — would
+require tracking file position as additional parser state and would complicate the
+pre/post contracts. The MAX_TERMINFO_FILE_SIZE bound (32 KiB, defined in FUNC-TIF-002)
+ensures that the buffer is stack-allocatable. Read_File is placed in an FFI package
+(SPARK_Mode => Off) because Ada.Sequential_IO and POSIX file descriptors both involve OS
+calls that are outside the SPARK language subset. The Always-close guarantee prevents
+file descriptor leaks in error paths, which is especially important because the search
+loop (FUNC-TIF-004) may attempt several paths before succeeding.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Binary Format Parsing — Header
+
+[REQUIREMENT]
+UID: FUNC-TIF-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Magic Number Validation and Format Detection
+STATEMENT: >>>
+The Terminfo binary parser shall begin by inspecting the first two bytes of the file
+buffer (bytes at offsets 0 and 1, little-endian 16-bit value) to determine the format
+variant:
+
+  0x011A  (decimal 282)  — Legacy ncurses format; numeric capabilities are 16-bit
+                           signed integers.
+  0x021E  (decimal 542)  — Extended-numeric ncurses format; numeric capabilities are
+                           32-bit signed integers.
+
+Any other value shall cause the parser to return Error_Invalid_Magic immediately,
+without reading any further bytes.
+
+The magic number comparison shall be a pure function declared with SPARK_Mode => On:
+
+  function Detect_Format (Buffer : Byte_Array; Size : Natural) return Terminfo_Format;
+
+where Terminfo_Format is an enumeration: (Legacy_16bit, Extended_32bit, Unknown).
+
+The function shall carry the contract:
+  Pre  => Size >= 2 and then Size <= Buffer'Length
+  Post => (if Detect_Format'Result = Unknown
+           then True
+           else Detect_Format'Result in Legacy_16bit | Extended_32bit)
+<<<
+COMMENT: >>>
+Checking the magic number first is the canonical safety gate for binary parsers: it
+rejects foreign files (ELF binaries, compiled groff outputs, arbitrary binary data in
+/usr/share) before any offset arithmetic. The two magic values (0x011A and 0x021E) are
+documented in the ncurses term(5) man page and in the ncurses source
+(ncurses/tinfo/read_entry.c). Both are stored little-endian; on big-endian systems the
+byte-swap must be performed explicitly by the parser. The 16-bit legacy format is
+universal and produced by all ncurses versions. The 32-bit extended-numeric format was
+introduced in ncurses 6.1 (2018) to support terminals with more than 32 767 colors; it
+is increasingly common (Arch Linux ships ncurses 6.4+ which generates 32-bit databases
+by default). Detecting both ensures correctness on modern systems without breaking
+compatibility with older installations.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: Header Section Parsing and Bounds Validation
+STATEMENT: >>>
+After magic number validation (FUNC-TIF-007), the parser shall read the fixed-size
+header that immediately follows the magic bytes. The header contains five 16-bit
+signed integer fields (little-endian), at byte offsets 2, 4, 6, 8, and 10 respectively:
+
+  Names_Size      — Length in bytes of the names section (includes trailing NUL).
+  Bool_Count      — Number of boolean capabilities.
+  Num_Count       — Number of numeric capabilities.
+  String_Count    — Number of string capability offset entries.
+  Table_Size      — Length in bytes of the string data table.
+
+The header fields shall be validated as follows before any section data is accessed:
+
+  1. Names_Size >= 1 and Names_Size <= MAX_NAMES_SECTION_SIZE.
+  2. Bool_Count >= 0 and Bool_Count <= MAX_BOOL_COUNT.
+  3. Num_Count >= 0 and Num_Count <= MAX_NUM_COUNT.
+  4. String_Count >= 0 and String_Count <= MAX_STRING_COUNT.
+  5. Table_Size >= 0 and Table_Size <= MAX_STRING_TABLE_SIZE.
+  6. The computed total consumed size (12 + Names_Size + Bool_Count + padding +
+     Num_Size * Num_Count + 2 * String_Count + Table_Size) shall not exceed the
+     actual file size (Size parameter from FUNC-TIF-006).
+
+If any validation fails, the parser shall return Error_Header_Corrupt.
+
+Padding: after the names and boolean sections, a single alignment byte is inserted if
+(Names_Size + Bool_Count) is odd, to align the subsequent numeric section to a 16-bit
+boundary.
+
+MAX_NAMES_SECTION_SIZE shall be 512. MAX_BOOL_COUNT shall be 64. MAX_NUM_COUNT shall be
+512. MAX_STRING_COUNT shall be 512. MAX_STRING_TABLE_SIZE shall be 16 384 (16 KiB).
+These named constants shall be declared in the Terminfo package spec.
+
+Num_Size is 2 for Legacy_16bit format and 4 for Extended_32bit format.
+
+The header parser shall be declared with SPARK_Mode => On and shall carry pre/post
+contracts asserting that on success all computed section offsets are within 0 .. Size - 1.
+<<<
+COMMENT: >>>
+The header layout is defined in the ncurses term(5) manual. The total-consumed-size check
+(validation rule 6) is the critical safety property: without it, a crafted or corrupt
+file could cause the parser to compute section offsets that point outside the loaded
+buffer, which in Ada would raise Constraint_Error (an index check). The SPARK prover can
+discharge the absence of Constraint_Error only if the contracts assert the bounds
+explicitly. The named MAX_* constants serve two roles: they make the validation rules
+readable, and they provide the SPARK prover with loop invariant material. The alignment
+padding after the boolean section is a subtlety noted in the ncurses source and term(5):
+it ensures that the numeric section starts on a 2-byte (or 4-byte) boundary, which
+matters for direct memory access in C; in Ada we always read byte-by-byte and reconstruct
+integers, so alignment is only relevant for computing the correct offset.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Binary Format Parsing — Capability Sections
+
+[REQUIREMENT]
+UID: FUNC-TIF-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Boolean Capability Extraction by Index
+STATEMENT: >>>
+The Terminfo feature shall provide a pure function to extract a single boolean capability
+value by its standard ncurses index. Its representative signature is:
+
+  function Get_Boolean
+     (Buffer  : Byte_Array;
+      Header  : Parsed_Header;
+      Index   : Natural)
+      return Boolean_Cap_Value;
+
+where Boolean_Cap_Value is a discrete type: (Absent, Cancelled, True_Value, False_Value).
+A byte value of 1 maps to True_Value. A byte value of 0 maps to False_Value. A byte
+value of 16#FF# (CANCELLED_BOOLEAN, decimal 255) maps to Cancelled. A byte value of
+16#FE# (ABSENT_BOOLEAN, decimal 254) maps to Absent. Any other byte value maps to
+Absent.
+
+The function shall:
+  1. Verify that Index < Header.Bool_Count. If not, return Absent.
+  2. Read the byte at Buffer (Bool_Section_Offset + Index).
+  3. Return the Boolean_Cap_Value corresponding to the byte (as above).
+
+Get_Boolean shall be declared with SPARK_Mode => On and shall carry the contract:
+  Pre => Header_Is_Valid (Buffer, Header)
+         and then Bool_Section_Offset + Header.Bool_Count <= Buffer'Length
+
+where Header_Is_Valid is a ghost function that asserts the invariants established by
+FUNC-TIF-008.
+<<<
+COMMENT: >>>
+Boolean capabilities are the simplest section: each capability is represented by exactly
+one byte at a known offset. The standard ncurses boolean capability set defines
+approximately 44 capabilities (terminfo(5)); Bool_Count may be less than this on trimmed
+databases. The four-value enumeration (Absent, Cancelled, True_Value, False_Value) maps
+directly to the ncurses conventions (ABSENT_BOOLEAN = 0xFF, CANCELLED_BOOLEAN = 0xFE,
+documented in term.h). While the primary Termicap use case does not need boolean
+capabilities from the standard section (the capabilities of interest — RGB and Tc — are
+in the extended section), providing a general Get_Boolean function allows the feature to
+be extended in the future. The ghost predicate Header_Is_Valid concentrates the bounds
+invariants in one place, preventing contract duplication across all capability extraction
+functions.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: Numeric Capability Extraction by Index
+STATEMENT: >>>
+The Terminfo feature shall provide a pure function to extract a single numeric capability
+value by its standard ncurses index. Its representative signature is:
+
+  function Get_Numeric
+     (Buffer  : Byte_Array;
+      Header  : Parsed_Header;
+      Format  : Terminfo_Format;
+      Index   : Natural)
+      return Integer;
+
+The function shall:
+  1. Verify that Index < Header.Num_Count. If not, return ABSENT_NUMERIC (-1).
+  2. Compute the byte offset of the capability within the numeric section:
+       Offset := Num_Section_Offset + Index * Num_Size
+     where Num_Size is 2 for Legacy_16bit format and 4 for Extended_32bit format.
+  3. Verify that Offset + Num_Size - 1 < Buffer'Length. If not, return ABSENT_NUMERIC.
+  4. Read Num_Size bytes from Buffer starting at Offset, interpreting them as a
+     little-endian signed integer (16-bit for Legacy_16bit, 32-bit for Extended_32bit).
+  5. Return the integer value as-is. The ncurses sentinel values ABSENT_NUMERIC (-1)
+     and CANCELLED_NUMERIC (-2) are passed through unmodified.
+
+ABSENT_NUMERIC and CANCELLED_NUMERIC shall be named constants declared in the package
+spec with values -1 and -2 respectively.
+
+Get_Numeric shall be declared with SPARK_Mode => On and shall carry the contract:
+  Pre  => Header_Is_Valid (Buffer, Header) and Format /= Unknown
+  Post => Get_Numeric'Result >= -2
+
+The `colors` capability has standard ncurses index 13. This index shall be declared as a
+named constant COLORS_INDEX with value 13 in the package spec.
+<<<
+COMMENT: >>>
+The `colors` capability is the single most important terminfo numeric for Termicap: it
+directly encodes the maximum number of colors the terminal claims to support (e.g., 8, 16,
+256, or very large values for truecolor). Its standard index (13) is defined in
+ncurses/include/Caps and is stable across all ncurses versions. The little-endian byte
+order for numeric fields is mandated by the ncurses term(5) specification regardless of
+the host byte order; the parser must always reconstruct integers from bytes in
+little-endian order and not rely on platform byte order. The postcondition
+(result >= -2) establishes the lower bound on the returned value, which allows callers
+in SPARK to reason about the comparison result without knowing the full integer range.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: String Capability Extraction by Index
+STATEMENT: >>>
+The Terminfo feature shall provide a pure function to extract a single string capability
+value by its standard ncurses index. Its representative signature is:
+
+  function Get_String
+     (Buffer  : Byte_Array;
+      Header  : Parsed_Header;
+      Index   : Natural;
+      Result  : out Bounded_String;
+      Present : out Boolean);
+
+where Bounded_String is a fixed-capacity string type (capacity MAX_CAPABILITY_STRING_LENGTH,
+as defined in FUNC-TIF-001). Present shall be set to False when the capability is absent
+or cancelled.
+
+The function shall:
+  1. Verify that Index < Header.String_Count. If not, set Present := False and return.
+  2. Compute the byte offset of the string offset entry within the string offset table:
+       Entry_Offset := String_Table_Offset + Index * 2
+  3. Read the 16-bit little-endian signed integer at Entry_Offset. This is the string's
+     offset within the string data table. If the value is -1 (ABSENT_STRING) or -2
+     (CANCELLED_STRING), set Present := False and return.
+  4. Verify that String_Data_Offset + Offset < Buffer'Length. If not, set Present := False
+     and return.
+  5. Copy bytes from Buffer starting at (String_Data_Offset + Offset) until a NUL byte
+     (0x00) is encountered or MAX_CAPABILITY_STRING_LENGTH bytes have been copied,
+     whichever comes first.
+  6. Set Result to the copied bytes and Present := True.
+
+The standard ncurses indices for the target capabilities shall be declared as named
+constants:
+  SETAF_INDEX : constant := 359;   -- set ANSI foreground color
+  SETAB_INDEX : constant := 360;   -- set ANSI background color
+
+Get_String shall be declared with SPARK_Mode => On and shall carry the contract:
+  Pre => Header_Is_Valid (Buffer, Header)
+  Post => (if not Present then Result'Length = 0)
+<<<
+COMMENT: >>>
+String capabilities in terminfo are stored as NUL-terminated strings in a contiguous
+string data table; the string offset table (also called the string offset array) maps
+capability indices to byte offsets within that table. The two-level indirection (index
+→ offset entry → string data) is the standard ncurses layout. SETAF_INDEX = 359 and
+SETAB_INDEX = 360 are the stable ncurses capability numbers for `set_a_foreground` and
+`set_a_background`; they are defined in ncurses/include/Caps and have not changed since
+ncurses 5.x. Using named constants rather than inline integer literals prevents
+transcription errors and documents the capability identity. The NUL-termination and
+length-bound dual stopping condition is a standard safe-string-copy pattern that is
+easily SPARK-provable via a loop invariant asserting the copy index stays within bounds.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Extended Capabilities Section
+
+[REQUIREMENT]
+UID: FUNC-TIF-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Extended Section Detection and Header Parsing
+STATEMENT: >>>
+After the five standard sections have been parsed, the Terminfo feature shall check
+whether the file contains an extended capabilities section. The extended section is
+present if and only if there are bytes remaining after the end of the standard string
+data table and those remaining bytes include a valid extended header.
+
+The extended section header has the same structure as the main header but with its own
+five 16-bit signed fields (at the start of the extended section):
+
+  Ext_Bool_Count    — Number of extended boolean capabilities.
+  Ext_Num_Count     — Number of extended numeric capabilities.
+  Ext_String_Count  — Number of extended string capabilities (includes capability names).
+  Ext_String_Entries — Number of string offset entries.
+  Ext_Table_Size    — Size in bytes of the extended string data table.
+
+The extended header shall be validated with the same bounds checks as the main header
+(FUNC-TIF-008), substituting the extended section's MAX_* values:
+  Ext_Bool_Count <= 64, Ext_Num_Count <= 128, Ext_String_Count <= 256,
+  Ext_Table_Size <= 8 192.
+
+If the extended section is absent or its header is invalid, the parser shall set
+Has_RGB_Flag := False and Has_Tc_Flag := False in the Terminfo_Snapshot and return
+success; the absence of extended capabilities is not an error.
+
+The extended section parser shall be declared with SPARK_Mode => On and shall carry
+a pre-condition asserting that the extended section start offset is within the buffer.
+<<<
+COMMENT: >>>
+The extended capabilities section is a ncurses extension (documented in term(5) under
+"USER-DEFINED CAPABILITIES") that allows terminal vendors and configuration authors to
+define capabilities beyond the standard set. It is the mechanism by which the `RGB` and
+`Tc` truecolor flags are encoded. Not all terminfo entries have an extended section;
+standard xterm entries do not, while tmux, wezterm, and foot entries do. Treating its
+absence as a non-error (rather than Error_Header_Corrupt) is essential: the majority of
+terminfo entries on a typical system will not have extended sections. The extended header
+MAX_* bounds are tighter than the main section bounds because extended capabilities are
+by convention few in number; a file with thousands of extended capabilities would be
+malformed.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Extended Capability Name Resolution
+STATEMENT: >>>
+Within the extended section, capability names are stored as NUL-terminated strings in
+the extended string data table. The layout of the extended section is:
+
+  1. Extended boolean values: Ext_Bool_Count bytes (one byte per boolean capability).
+  2. Alignment pad: one byte if (Ext_Bool_Count + Ext_Num_Count) is odd.
+  3. Extended numeric values: Ext_Num_Count * Num_Size bytes.
+  4. Extended string offset table: Ext_String_Entries * 2 bytes (16-bit offsets into
+     extended string data table, for both capability string values and capability names).
+  5. Extended string data table: Ext_Table_Size bytes.
+
+Within the string offset table, the first (Ext_String_Count - Ext_Bool_Count -
+Ext_Num_Count) entries are offsets to string capability values, and the remaining
+Ext_Bool_Count + Ext_Num_Count + (Ext_String_Count - ...) entries are offsets to
+capability name strings, in the same order as the values.
+
+The Terminfo feature shall resolve capability names by iterating over the name entries
+and comparing each NUL-terminated name string against the target name strings "RGB"
+and "Tc" (case-sensitive, exact match). The iteration shall be bounded by Ext_String_Count.
+
+Name resolution shall be implemented as a bounded loop with a SPARK loop invariant
+asserting that the name index remains within 0 .. Ext_String_Count - 1.
+<<<
+COMMENT: >>>
+The extended section layout is the most complex aspect of the terminfo binary format and
+is not documented in term(5) itself — it is documented only in the ncurses source code
+(ncurses/tinfo/read_entry.c). The key detail is that capability name strings are stored
+in the same string data table as capability value strings; the order of name entries in
+the offset table mirrors the order of value entries. To determine the boolean value of
+"RGB", the parser must: (1) find the offset entry for "RGB" in the name section of the
+offset table, (2) determine that "RGB" corresponds to a boolean capability (its position
+in the combined name list falls within the first Ext_Bool_Count entries), and (3) read
+the byte from the extended boolean section at the corresponding boolean index. Case-
+sensitive comparison is correct: "RGB" and "Tc" are defined with this exact capitalisation
+in tmux's terminfo source and in the ncurses terminfo database.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: RGB and Tc Truecolor Flag Extraction
+STATEMENT: >>>
+The Terminfo feature shall extract the `RGB` and `Tc` extended capability flags as
+follows:
+
+  RGB flag: The extended capability named "RGB" (case-sensitive) may appear as either
+    a boolean capability (byte value 1 = True) or a numeric capability (value >= 1).
+    When found as a boolean with value True_Value, set Has_RGB_Flag := True.
+    When found as a numeric with value >= 1, set Has_RGB_Flag := True.
+    When absent, cancelled, or has boolean value False_Value or numeric value 0,
+    set Has_RGB_Flag := False.
+
+  Tc flag: The extended capability named "Tc" (case-sensitive) may appear as a boolean
+    capability (byte value 1 = True) or as a string capability (any non-empty value).
+    When found as a boolean with value True_Value, set Has_Tc_Flag := True.
+    When found as a string capability with non-empty value, set Has_Tc_Flag := True.
+    When absent, cancelled, has boolean value False_Value, or has empty string value,
+    set Has_Tc_Flag := False.
+
+If neither "RGB" nor "Tc" is found in the extended section, both Has_RGB_Flag and
+Has_Tc_Flag shall be False in the resulting Terminfo_Snapshot.
+
+The extraction shall be a pure function declared with SPARK_Mode => On:
+
+  procedure Extract_Truecolor_Flags
+     (Buffer    :     Byte_Array;
+      Header    :     Parsed_Header;
+      Ext       :     Extended_Header;
+      Format    :     Terminfo_Format;
+      Has_RGB   : out Boolean;
+      Has_Tc    : out Boolean);
+
+with the contract:
+  Pre => Header_Is_Valid (Buffer, Header)
+         and then Extended_Is_Valid (Buffer, Header, Ext)
+         and then Format /= Unknown
+<<<
+COMMENT: >>>
+The RGB and Tc flags are the two terminfo-derived indicators of 24-bit truecolor support.
+They were introduced by the terminal emulator community to address the gap in the standard
+terminfo capability set, which has no defined boolean for truecolor. "RGB" was introduced
+by ncurses author Thomas Dickey and is present in ncurses's own terminfo database for
+terminals such as xterm with direct-color support. "Tc" was introduced by tmux to mark
+terminals capable of direct-colour sequences in the tmux terminfo entry and is now used
+by foot, wezterm, and others. Accepting RGB as either a boolean or a numeric (both
+representations appear in the wild), and Tc as either a boolean or a string, provides
+maximum compatibility with the diverse terminfo databases deployed on real systems.
+References: tmux FAQ "How do I use a 256 colour terminal"; ncurses FAQ "Is there a way
+to turn on the RGB capability?"; blessed source (lib/tput.js, _truecolor() function).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Top-Level Parse Entry Point
+
+[REQUIREMENT]
+UID: FUNC-TIF-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Parse_Terminfo Entry Function
+STATEMENT: >>>
+The Terminfo feature shall provide a top-level function that performs the complete
+terminfo lookup and parsing pipeline and returns a Terminfo_Result. Its representative
+signature is:
+
+  function Parse_Terminfo (Env : Environment) return Terminfo_Result;
+
+The function shall execute the following steps in order:
+
+  1. Read TERM from Env (FUNC-TIF-003). On empty/absent TERM, return Error_No_Term.
+  2. Build the ordered list of candidate directories (FUNC-TIF-004).
+  3. For each candidate directory, construct the Primary and Alternate paths
+     (FUNC-TIF-005) and attempt Read_File (FUNC-TIF-006). On Read_Not_Found, continue
+     to the next candidate. On Read_IO_Error or Read_Too_Large, continue to the next
+     candidate (non-fatal I/O errors on individual paths do not abort the search).
+  4. On the first successful Read_File, call Parse_Header (FUNC-TIF-008). On
+     Error_Header_Corrupt or Error_Invalid_Magic, return that error immediately (a file
+     was found but is corrupt — do not fall back to the next candidate).
+  5. Extract the `colors` numeric (FUNC-TIF-010, index COLORS_INDEX).
+  6. Extract the `setaf` string (FUNC-TIF-011, index SETAF_INDEX).
+  7. Extract the `setab` string (FUNC-TIF-011, index SETAB_INDEX).
+  8. Attempt to parse the extended section (FUNC-TIF-012). If absent or header invalid,
+     treat as Has_RGB_Flag = False, Has_Tc_Flag = False (no error).
+  9. If extended section is valid, extract RGB and Tc flags (FUNC-TIF-014).
+  10. Construct and return a Terminfo_Result containing the populated Terminfo_Snapshot.
+
+If no candidate directory yields a readable file, return Error_File_Not_Found.
+
+Parse_Terminfo shall be callable from SPARK_Mode => On code. Its body may be annotated
+SPARK_Mode => Off only if it contains calls to the FFI Read_File operation; in that case,
+a thin SPARK_Mode => On wrapper that delegates to the Off body shall be provided so that
+callers with SPARK contracts can reference the function.
+<<<
+COMMENT: >>>
+Parse_Terminfo is the single public entry point for the feature; all other functions
+are implementation details. This single-entry design keeps the public API minimal and
+consistent with the Termicap convention of one function per detection concern (e.g.,
+Detect_Color_Level, Detect_Terminal_Id). Step 4's behaviour of returning corruption
+errors immediately rather than falling back to the next candidate is deliberate: if a
+terminfo file for TERM was found but is corrupt, falling back silently to a lower-priority
+directory (which likely contains a different — possibly wrong — terminal entry) would be
+more confusing than surfacing the error. The separation between the FFI Read_File call
+(SPARK_Mode => Off) and the pure parsing functions (SPARK_Mode => On) mirrors the pattern
+established by the OSC Query Infrastructure (FUNC-OSC-015) and keeps the maximum SPARK
+coverage over the parsing logic.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Immutability and Snapshot Semantics
+
+[REQUIREMENT]
+UID: FUNC-TIF-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: Immutable Parsed Snapshot
+STATEMENT: >>>
+The Terminfo_Snapshot record (FUNC-TIF-001) shall be an immutable value type. After
+Parse_Terminfo (FUNC-TIF-015) returns a successful Terminfo_Result, the Terminfo_Snapshot
+within that result shall not be modifiable by the caller or by any subsequent Termicap
+operation. The type shall not expose any procedure or function with an in out or out
+parameter of type Terminfo_Snapshot or any component thereof.
+
+The Terminfo_Snapshot type shall not be a tagged type, a limited type, or a controlled
+type. It shall be a plain Ada record type suitable for value-copy semantics.
+
+Parse_Terminfo shall not cache its result or maintain any global state. Each call to
+Parse_Terminfo performs a fresh file search and parse and returns an independent
+Terminfo_Snapshot. Callers that require repeated access to the parsed data shall retain
+the returned Terminfo_Result value themselves.
+<<<
+COMMENT: >>>
+Value-copy semantics for the snapshot align with the Termicap architectural principle
+(established for the Terminal_Capabilities record and the Environment snapshot) that all
+detection results are immutable values, never shared mutable objects. Avoiding caching
+and global state in Parse_Terminfo keeps the function referentially transparent (modulo
+the file system) and makes it trivially thread-safe: concurrent calls from different
+tasks each get their own independent result without synchronisation. The prohibition on
+tagged and controlled types keeps Terminfo_Snapshot within the SPARK language subset,
+since Ada.Finalization.Controlled is not supported by GNATprove.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with Color Detection Cascade
+
+[REQUIREMENT]
+UID: FUNC-TIF-017
+STATUS: Approved
+PRIORITY: Should
+TITLE: Color Cascade Integration Point
+STATEMENT: >>>
+The color detection cascade shall consult the Terminfo_Snapshot as a passive source
+after environment variable heuristics and before active terminal probing. The cascade
+shall use the Terminfo_Snapshot as follows:
+
+  1. If Snapshot.Colors >= 16_777_216 (2^24), infer at minimum Color_Level_TrueColor.
+  2. If Snapshot.Has_RGB_Flag or Snapshot.Has_Tc_Flag, infer at minimum
+     Color_Level_TrueColor regardless of Snapshot.Colors.
+  3. If Snapshot.Colors >= 256 (and steps 1 and 2 do not apply), infer at minimum
+     Color_Level_256.
+  4. If Snapshot.Colors >= 8 (and steps 1-3 do not apply), infer at minimum
+     Color_Level_16.
+  5. If Snapshot.Colors = ABSENT_NUMERIC (-1) or CANCELLED_NUMERIC (-2), the terminfo
+     source contributes no color level inference; proceed to the next cascade source.
+
+The terminfo source shall be treated as an advisory input: a higher-priority source
+(FORCE_COLOR, COLORTERM, TERM suffix matching) may override the terminfo-derived level
+in either direction.
+
+The integration logic shall reference the Terminfo_Snapshot by value (not by access type)
+and shall be SPARK_Mode => On.
+<<<
+COMMENT: >>>
+Placing terminfo after environment variables and before active probing reflects the
+consensus from the reference frameworks analysis: environment variables are cheapest and
+most portable, terminfo is a reliable but slower passive source (requires file I/O),
+and active probing (OSC queries) is the most accurate but has side effects and latency.
+The colors >= 2^24 threshold for truecolor follows the ncurses convention: terminals
+that support direct-color report colors as 16777216 in their terminfo entries. The
+RGB/Tc flag check as a separate condition is necessary because some terminals (e.g., foot
+before 1.15) set the Tc flag but report colors = 256 in the standard numeric section.
+The advisory semantics (higher-priority sources may override) preserves the overall
+cascade's ability to honour FORCE_COLOR=0 (disable even if terminfo says truecolor) and
+COLORTERM=truecolor (enable truecolor even if terminfo is absent).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK Provability
+
+[REQUIREMENT]
+UID: FUNC-TIF-018
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Target for Binary Parser
+STATEMENT: >>>
+All parsing functions in the Terminfo feature — including Detect_Format (FUNC-TIF-007),
+header parsing (FUNC-TIF-008), Get_Boolean (FUNC-TIF-009), Get_Numeric (FUNC-TIF-010),
+Get_String (FUNC-TIF-011), extended section parsing (FUNC-TIF-012, FUNC-TIF-013), and
+Extract_Truecolor_Flags (FUNC-TIF-014) — shall be declared with SPARK_Mode => On and
+shall be provable at SPARK Silver level using GNATprove.
+
+SPARK Silver provability requires at minimum:
+  (a) No run-time exceptions: all array accesses guarded by pre-conditions or defensive
+      index checks that the prover can discharge.
+  (b) No infinite loops: all loops over byte arrays or capability sections shall have
+      explicit loop variants declared with pragma Loop_Variant (Decreases => ...) or
+      equivalent.
+  (c) Pre/post contracts on all public subprograms as specified in FUNC-TIF-007 through
+      FUNC-TIF-014.
+  (d) Ghost functions Header_Is_Valid and Extended_Is_Valid to encapsulate structural
+      invariants so that contracts remain readable.
+  (e) No access types, no dynamic dispatch, no allocators, and no exceptions in any
+      SPARK_Mode => On unit.
+
+The Read_File operation (FUNC-TIF-006) and the Parse_Terminfo top-level function body
+(FUNC-TIF-015, body only) shall be SPARK_Mode => Off. A thin SPARK_Mode => On
+specification for Parse_Terminfo shall be provided so that callers may reference the
+function in SPARK contracts.
+<<<
+COMMENT: >>>
+SPARK Silver is the established target for all Termicap pure-logic components (consistent
+with FUNC-OSC-010, FUNC-OSC-014, and the keyboard and mouse detection features). The
+binary parser is an ideal candidate for SPARK Silver: it is purely functional (input byte
+array → output record), has no I/O, no concurrency, and all loops are trivially bounded
+by array sizes. The ghost function pattern (Header_Is_Valid, Extended_Is_Valid) is a
+SPARK idiom for grouping related precondition clauses into a named predicate; GNATprove
+inlines ghost functions during proof and they have zero run-time cost. Loop variants are
+required for all loops that traverse the byte array or capability sections: without them
+GNATprove cannot prove absence of non-termination (a Silver requirement). The
+SPARK_Mode => Off annotation on Read_File is unavoidable due to Ada file I/O being
+outside the SPARK subset; this mirrors the boundary established in FUNC-OSC-015.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Error Handling
+
+[REQUIREMENT]
+UID: FUNC-TIF-019
+STATUS: Approved
+PRIORITY: Must
+TITLE: No Exception Propagation from Terminfo Operations
+STATEMENT: >>>
+No public subprogram in the Terminfo feature shall propagate an Ada exception to its
+caller under any input condition, including:
+
+  - TERM set to an arbitrarily long or unusual string.
+  - Terminfo file containing malformed, truncated, or adversarially crafted content.
+  - File system errors (permission denied, dangling symlink, I/O error on read).
+  - Extended section with inconsistent or corrupt internal structure.
+  - Buffer index computations that would, without guards, exceed buffer bounds.
+
+All error conditions shall be reported via the Terminfo_Result type (FUNC-TIF-002) or,
+for lower-level helpers, via out parameters of discrete error types. Constraint_Error,
+Program_Error, Storage_Error, and Ada.IO_Exceptions.* shall not be allowed to propagate
+to the caller.
+
+The FFI Read_File operation (SPARK_Mode => Off) shall catch all I/O exceptions internally
+and convert them to the Read_Error discrete type before returning.
+<<<
+COMMENT: >>>
+The no-exception guarantee is the Termicap library-wide contract (established by
+FUNC-ENV-001 and the OSC Query Infrastructure) and is required for SPARK Silver: a
+subprogram with SPARK_Mode => On cannot propagate exceptions, because exception
+propagation is outside the SPARK language semantics. For callers in the color detection
+cascade that invoke Parse_Terminfo in a larger SPARK_Mode => On context, any exception
+propagation from the terminfo layer would violate the cascade's own SPARK contracts. The
+Read_File exception catch-and-convert pattern is the same one used by FUNC-OSC-001 for
+the /dev/tty open operation.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-TIF-020
+STATUS: Approved
+PRIORITY: Should
+TITLE: Graceful Handling of Missing terminfo Package
+STATEMENT: >>>
+The Terminfo feature shall treat the complete absence of terminfo data as a normal,
+expected condition. When Parse_Terminfo returns Error_File_Not_Found, the calling code
+in the color detection cascade shall log a diagnostic message at the Debug level (not
+Warning or Error) and proceed to the next cascade source without aborting detection.
+
+The Terminfo feature shall not make the presence of a terminfo database a requirement
+for any Termicap operation. All other detection methods (environment variables, active
+OSC probing, DECRPM queries) shall continue to function correctly when terminfo data
+is unavailable.
+
+Specifically, the following environments shall be handled gracefully without any user-
+visible error:
+  - Alpine Linux and other musl-libc containers (no ncurses-terminfo package installed).
+  - Docker/OCI containers with minimal base images.
+  - Systems where /usr/share/terminfo is absent or empty.
+  - Any environment where the TERM value has no corresponding terminfo entry.
+<<<
+COMMENT: >>>
+Container environments and CI systems frequently run without terminfo databases installed,
+because they are not running interactive terminals and the terminfo package is considered
+a non-essential dependency. Termicap is explicitly designed to work in such environments
+(it is a detection library, not a terminal control library). Logging at Debug level rather
+than Warning prevents noise in production deployments of applications that embed Termicap:
+the absence of terminfo is not an error for the application, only a data point for the
+detection cascade. This requirement reflects the recommendation from the global synthesis
+(§7, point 2): "Start without terminfo (Phase 1-4). Add optional terminfo parsing as a
+Tier 4 feature. Modern terminals are well-served by env var heuristics."
+<<<
+
+[/SECTION]
