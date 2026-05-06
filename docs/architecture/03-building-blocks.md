@@ -40,6 +40,8 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Terminfo             [SPARK Silver (spec + body)] — Terminfo_Snapshot/Result/Error types; bounded string types; magic/index/limit constants; ghost predicates Header_Is_Valid/Extended_Is_Valid; pure Detect_Format, Parse_Header, Get_Boolean, Get_Numeric, Get_String, Parse_Extended_Header, Extract_Truecolor_Flags, Parse_Buffer functions
 │   └── Termicap.Terminfo.IO      [SPARK_Mode => Off (body)] — Read_File POSIX file I/O; Parse_Terminfo top-level search-path + parse entry point
 ├── Termicap.Wcwidth              [spec: SPARK On, body: SPARK_Mode => Off] — Wcwidth_Level/Optional_Wcwidth_Level types; WCW_SENTINEL_UNI3/13/16 constants; Probe_Wcwidth_Level (cached, FFI); pure Refine_Unicode_Level; platform-dispatched (POSIX/Windows) via GPR Source_Dirs; C helper termicap_wcwidth.c
+├── Termicap.Cell_Width           [SPARK Gold (spec + body)] — Unicode_Scalar_Value/Cell_Width_Value subtypes; Table_Version enumeration; pure Active_Version (elaboration-time UNICODE_VERSION env-var read isolated in Off region); two Cell_Width overloads (Global => null); standalone, no FFI
+│   └── Termicap.Cell_Width.Tables [SPARK Gold (spec + body)] — Table_Index/Width_Entry/Width_Table types; ghost predicates All_Widths_Valid/Is_Sorted_Non_Overlapping; TABLE_UNICODE_3/13/16 compile-time constants; Get_Table dispatch; Cell_Width_In_Table binary search (O(log N), no heap, Global => null)
 └── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
 ```
 
@@ -1550,6 +1552,105 @@ The package spec is SPARK-visible (`SPARK_Mode => On`) and contains all types, s
 
 ---
 
+### `Termicap.Cell_Width`
+
+**Responsibility:** Provides a pure, self-contained function for measuring the terminal column width (0, 1, or 2) of any Unicode scalar value, using precomputed, version-tagged width tables bundled at compile time. Three Unicode version tables are available (3.0, 13.0, 16.0); the active table is selected once at elaboration time by reading the `UNICODE_VERSION` environment variable, defaulting to `Table_Version'Last` (Unicode 16.0). The package is standalone — it has no dependency on `Termicap.Wcwidth`, `Termicap.Unicode`, or `Termicap.Environment`. The `UNICODE_VERSION` env-var read is isolated in the body under `SPARK_Mode => Off`; all public functions carry `Global => null` and are SPARK Gold provable.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-cell_width.ads`, `src/termicap-cell_width.adb` |
+| SPARK_Mode | On (spec + body); env-var read region is locally Off |
+| Dependencies | `Termicap.Cell_Width.Tables`, `Ada.Environment_Variables` (body, Off region) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Unicode_Scalar_Value` | Subtype of `Natural` with range `0 .. 16#10_FFFF#`. The surrogate range U+D800..U+DFFF is excluded by convention; a dynamic predicate is intentionally omitted to preserve SPARK Gold provability. |
+| `Cell_Width_Value` | Subtype of `Integer` with range `0 .. 2`. Represents the terminal column count: 0 = combining/control, 1 = narrow (default), 2 = wide/fullwidth. |
+| `Table_Version` | Ordered enumeration `(Unicode_3, Unicode_13, Unicode_16)`. `Table_Version'Last` is always the latest bundled version. Adding a future version requires a new literal and corresponding table data in `Termicap.Cell_Width.Tables`. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Active_Version` | Function | `Global => null`. Returns the `Table_Version` selected at elaboration time from `UNICODE_VERSION`. The body-level constant set during elaboration never changes; reading it is semantically equivalent to reading a compile-time constant (justified via `pragma Annotate`). | FUNC-CWM-005, FUNC-CWM-006, FUNC-CWM-012 |
+| `Cell_Width (Codepoint)` | Function | `Global => null`. Applies fast paths then delegates to the two-argument overload with `Active_Version`. Returns 0, 1, or 2. | FUNC-CWM-010, FUNC-CWM-011, FUNC-CWM-012 |
+| `Cell_Width (Codepoint, Version)` | Function | `Global => null`; SPARK Gold provable. Applies fast paths, then calls `Termicap.Cell_Width.Tables.Cell_Width_In_Table` with the table for `Version`. | FUNC-CWM-003, FUNC-CWM-010, FUNC-CWM-011, FUNC-CWM-012 |
+
+#### Fast Paths
+
+Applied before any table access, in both `Cell_Width` overloads:
+
+| Range | Returned Width | Rationale |
+|-------|---------------|-----------|
+| U+0020..U+007E | 1 | ASCII printable — always narrow |
+| U+0000..U+001F | 0 | C0 control characters |
+| U+007F | 0 | DEL |
+| U+0080..U+009F | 0 | C1 control characters |
+
+Codepoints outside these ranges are resolved via binary search in `Termicap.Cell_Width.Tables.Cell_Width_In_Table` (FUNC-CWM-010, FUNC-CWM-011).
+
+#### Version Selection at Elaboration
+
+The `UNICODE_VERSION` environment variable is read once during package elaboration (body-level constant `Active_Version_Value`). Recognised values are `"3"`, `"3.0"`, `"13"`, `"13.0"`, `"16"`, `"16.0"`. Any unrecognised or absent value defaults to `Table_Version'Last` (Unicode 16.0). The result is constant for the process lifetime; no lock or protected object is required because elaboration is single-threaded.
+
+#### Relationship to Other Packages
+
+`Termicap.Cell_Width` is a standalone sibling of `Termicap.Wcwidth`. The two features complement each other: `Termicap.Wcwidth` probes the OS locale at runtime to determine which Unicode version the C library supports; `Termicap.Cell_Width` provides a static, cross-platform lookup independent of the OS locale. A typical integration is: probe with `Termicap.Wcwidth.Probe_Wcwidth_Level`, map the `Wcwidth_Level` to a `Table_Version`, then call `Cell_Width (CP, Version)` for consistent width measurement. `Termicap.Cell_Width` does not depend on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Unicode`, or `Termicap.OSC`.
+
+---
+
+### `Termicap.Cell_Width.Tables`
+
+**Responsibility:** Provides the data layer for `Termicap.Cell_Width`: the `Width_Entry` record type, the `Width_Table` array type, three compile-time constant tables (`TABLE_UNICODE_3`, `TABLE_UNICODE_13`, `TABLE_UNICODE_16`), a `Get_Table` dispatch function, and the binary search lookup function `Cell_Width_In_Table`. Only width-0 (combining/format) and width-2 (wide/fullwidth) ranges are stored; unmatched codepoints default to width 1. All entries are sorted by `First` codepoint with no overlapping ranges. Ghost predicates enforce these invariants for GNATprove.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-cell_width-tables.ads`, `src/termicap-cell_width-tables.adb` |
+| SPARK_Mode | On (spec + body); SPARK Gold |
+| Dependencies | `Termicap.Cell_Width` (parent — inherits `Unicode_Scalar_Value`, `Cell_Width_Value`, `Table_Version`) |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Table_Index` | Range type `1 .. 4_000`. Generous upper bound; Unicode 16.0 uses 82 entries. |
+| `Width_Entry` | Record with fields `First : Unicode_Scalar_Value`, `Last : Unicode_Scalar_Value`, `Width : Cell_Width_Value`. Invariant (by convention, enforced by ghost predicates): `Last >= First`, `Width in {0, 2}` (1 is never stored). |
+| `Width_Table` | Unconstrained array `(Table_Index range <>) of Width_Entry`. Each version table is a constant of type `Width_Table (1 .. N)`. |
+
+#### Ghost Predicates
+
+| Predicate | Description |
+|-----------|-------------|
+| `All_Widths_Valid (Table)` | Returns `True` when every entry has `Width in Cell_Width_Value` and `Last >= First`. Used in the precondition of `Cell_Width_In_Table`. |
+| `Is_Sorted_Non_Overlapping (Table)` | Returns `True` when for all adjacent entries `I` and `I+1`, `Table(I).Last < Table(I+1).First`. Justifies the binary search loop invariant. |
+
+#### Table Constants
+
+| Constant | Length | Contents |
+|----------|--------|----------|
+| `TABLE_UNICODE_3` | 74 entries | Basic combining marks (category M, Cf), CJK ideographs, Hangul, fullwidth forms, Yi, Variation Selectors (VS16 via U+FE00..U+FE0F), ZWJ (via U+200B..U+200F) |
+| `TABLE_UNICODE_13` | 80 entries | Unicode 3.0 content plus NKo combining, Samaritan combining, emoji pictographs (U+1F300..U+1F64F, U+1F900..U+1F9FF), supplementary CJK planes |
+| `TABLE_UNICODE_16` | 82 entries | Unicode 13.0 content plus Mandaic combining (U+0859..U+085B), Combining Diacritical Marks Extended (U+1AB0..U+1ABE) |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Get_Table (Version)` | Function | `Global => null`; pure case dispatch; returns the width table constant for `Version`. No heap allocation. | FUNC-CWM-001 |
+| `Cell_Width_In_Table (Codepoint, Table)` | Function | `Global => null`; SPARK Gold. Pre: `Table'Length > 0`, `All_Widths_Valid (Table)`, `Is_Sorted_Non_Overlapping (Table)`. Returns 0 or 2 when `Codepoint` falls within a stored range; returns 1 (default narrow) otherwise. Loop variant `High - Low` guarantees termination. Mid computed as `Low + (High - Low) / 2` to avoid overflow. | FUNC-CWM-003, FUNC-CWM-014, FUNC-CWM-015 |
+
+#### Proofs Discharged by GNATprove (FUNC-CWM-014)
+
+- No array out-of-bounds: loop invariants on `Low` and `High` with exit guards at `Table'First` and `Table'Last` boundaries.
+- No integer overflow: mid computation uses `Low + (High - Low) / 2`.
+- Return value always in `Cell_Width_Value`: all paths return 0, 1, or the stored `Width` (which is `All_Widths_Valid`-constrained to `Cell_Width_Value`).
+- Termination: loop variant `High - Low` strictly decreases on each iteration.
+- No side effects: `Global => null`.
+
+---
+
 ### `Termicap.Win32_Ntdll`
 
 **Responsibility:** Dynamically loads `ntdll.dll` at runtime, resolves `RtlGetNtVersionNumbers` via `GetProcAddress`, calls it to obtain the Windows build number, and unloads the library. This is Termicap's only custom FFI package in the Windows integration; all other Win32 calls use the win32ada Alire crate.
@@ -1734,6 +1835,49 @@ The Windows body of `Termicap.TTY` calls `Is_Cygwin_Terminal` as a second-chance
 │   │  Probe_Wcwidth_Level spec (body: Off)       │  │
 │   │  Refine_Unicode_Level — Global => null      │  │
 │   │  (body: SPARK Off — C FFI + protected cache)│  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Cell_Width (spec + body)                 │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Unicode_Scalar_Value subtype (0..10FFFF)   │  │
+│   │  Cell_Width_Value subtype (0..2)            │  │
+│   │  Table_Version enumeration                  │  │
+│   │    (Unicode_3, Unicode_13, Unicode_16)      │  │
+│   │  Active_Version — Global => null            │  │
+│   │    (UNICODE_VERSION env-var read isolated   │  │
+│   │    in Off region at elaboration time)       │  │
+│   │  Cell_Width (Codepoint) — Global => null    │  │
+│   │    (delegates to two-arg overload with      │  │
+│   │    Active_Version; fast paths applied first)│  │
+│   │  Cell_Width (Codepoint, Version)            │  │
+│   │    — Global => null; SPARK Gold provable    │  │
+│   │  Fast paths (no table access):              │  │
+│   │    U+0020..U+007E → 1 (ASCII printable)    │  │
+│   │    U+0000..U+001F → 0 (C0 controls)        │  │
+│   │    U+007F         → 0 (DEL)                │  │
+│   │    U+0080..U+009F → 0 (C1 controls)        │  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
+│   Termicap.Cell_Width.Tables (spec + body)          │
+│   ┌─────────────────────────────────────────────┐  │
+│   │  Table_Index range type (1..4_000)          │  │
+│   │  Width_Entry record (First, Last, Width)    │  │
+│   │  Width_Table unconstrained array type       │  │
+│   │  All_Widths_Valid — Ghost predicate         │  │
+│   │  Is_Sorted_Non_Overlapping — Ghost pred.   │  │
+│   │  TABLE_UNICODE_3_LENGTH : 74                │  │
+│   │  TABLE_UNICODE_13_LENGTH : 80               │  │
+│   │  TABLE_UNICODE_16_LENGTH : 82               │  │
+│   │  TABLE_UNICODE_3/13/16 — compile-time       │  │
+│   │    Width_Table constants; sorted, no        │  │
+│   │    overlapping ranges; width-0 and width-2  │  │
+│   │    only (default = 1)                       │  │
+│   │  Get_Table (Version) — Global => null;      │  │
+│   │    pure case dispatch to table constant     │  │
+│   │  Cell_Width_In_Table (Codepoint, Table)     │  │
+│   │    — Global => null; SPARK Gold provable;   │  │
+│   │    O(log N) binary search; Pre: non-empty,  │  │
+│   │    All_Widths_Valid, Is_Sorted_Non_Overlap  │  │
 │   └─────────────────────────────────────────────┘  │
 │                                                     │
 │   Termicap.Dimensions (spec only)                   │
@@ -2132,4 +2276,5 @@ The SPARK boundary is deliberately narrow: `Capture_Current`, the `Termicap.Over
 - **Tech Spec OSC52** (`docs/tech-specs/osc52-clipboard.md`): OSC 52 Clipboard Detection design rationale — three-phase cascade, DA1 Ps=52 extension, active read-back probe, env-var heuristics, multiplexer passthrough, independent session strategy, SPARK boundary
 - **Tech Spec WCWIDTH** (`docs/tech-specs/wcwidth.md`): wcwidth() Probing for Unicode Level design rationale — sentinel codepoint selection, descending probe order, locale guard, caching strategy, platform dispatch, SPARK boundary
 - **ADR-0032** (`docs/adr/0032-wcwidth-package-placement.md`): Rationale for placing wcwidth probing in `Termicap.Wcwidth` (sibling of `Termicap.Unicode`) rather than as a child package
+- **Tech Spec CELL-WIDTH** (`docs/tech-specs/cell-width.md`): Cell Width Measurement Tables design rationale — table structure, binary search, fast paths, UNICODE_VERSION env-var selection, SPARK Gold strategy, relationship to WCWIDTH
 - **Requirements** (`docs/requirements/`): FUNC-ENV-001 through FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-OSC-001 through FUNC-OSC-015, FUNC-DKL-001 through FUNC-DKL-007, FUNC-RPM-001 through FUNC-RPM-017, FUNC-KKB-001 through FUNC-KKB-019, FUNC-MSE-001 through FUNC-MSE-018, FUNC-SXL-001 through FUNC-SXL-019

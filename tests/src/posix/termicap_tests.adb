@@ -30,6 +30,7 @@ with Test_Unicode;
 with Test_Keyboard_Parsers;
 with Test_Graphics;
 with Test_Mouse;
+with Test_Cell_Width;
 with Test_Wcwidth;
 with Test_XTVERSION;
 
@@ -63,6 +64,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_Graphics.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Terminfo.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Wcwidth.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_Cell_Width.Test_Case);
       return Result;
    end All_Tests;
 

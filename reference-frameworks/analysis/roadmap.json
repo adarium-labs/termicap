@@ -972,11 +972,21 @@
           "id": "CELL-WIDTH",
           "name": "Cell Width Measurement Tables",
           "summary": "Binary search over precomputed Unicode width tables for correct text layout. ZWJ and VS16 handling. UNICODE_VERSION env var to select table version. Gold SPARK (pure lookup + arithmetic).",
-          "status": "next",
+          "status": "done",
           "spark_level": "Gold",
           "ffi": false,
-          "requirement_uids": [],
-          "source_files": [],
+          "requirement_uids": [
+            "FUNC-CWM-001", "FUNC-CWM-002", "FUNC-CWM-003", "FUNC-CWM-004",
+            "FUNC-CWM-005", "FUNC-CWM-006", "FUNC-CWM-007", "FUNC-CWM-008",
+            "FUNC-CWM-009", "FUNC-CWM-010", "FUNC-CWM-011", "FUNC-CWM-012",
+            "FUNC-CWM-013", "FUNC-CWM-014", "FUNC-CWM-015", "FUNC-CWM-016"
+          ],
+          "source_files": [
+            "src/termicap-cell_width.ads",
+            "src/termicap-cell_width.adb",
+            "src/termicap-cell_width-tables.ads",
+            "src/termicap-cell_width-tables.adb"
+          ],
           "doc_refs": [
             {
               "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
@@ -989,7 +999,7 @@
           "id": "FGPGRP",
           "name": "Foreground Process Group Check",
           "summary": "ioctl(TIOCGPGRP) to verify caller is foreground process before sending OSC queries. Prevents query contaminating background process output.",
-          "status": "pending",
+          "status": "next",
           "spark_level": "N/A (Ada FFI)",
           "ffi": true,
           "requirement_uids": [],

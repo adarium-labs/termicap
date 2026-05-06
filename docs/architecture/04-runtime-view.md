@@ -2839,6 +2839,145 @@ end;
 
 ---
 
+## Scenario 32: Cell Width Measurement Lookup
+
+End-to-end scenario for `Cell_Width (Codepoint)` and `Cell_Width (Codepoint, Version)`. Shows the elaboration-time version selection from `UNICODE_VERSION`, the four fast paths that bypass table access, and the O(log N) binary search over the precomputed `Width_Table`. No TTY, no `Probe_Session`, no FFI at lookup time.
+
+### Phase A — Elaboration-Time Version Selection (SPARK_Mode Off region)
+
+```
+Package Termicap.Cell_Width elaboration
+  │
+  │  (Runs once at process startup, before any user code)
+  │
+  │  Active_Version_Value : Table_Version;  --  body-level constant
+  │
+  ▼
+Body elaboration sequence  [SPARK_Mode => Off region only]
+  │
+  │  Read Ada.Environment_Variables.Value ("UNICODE_VERSION")
+  │    absent or raises Constraint_Error → use Table_Version'Last (Unicode_16)
+  │    "3" | "3.0"   → Active_Version_Value := Unicode_3
+  │    "13" | "13.0" → Active_Version_Value := Unicode_13
+  │    "16" | "16.0" → Active_Version_Value := Unicode_16
+  │    any other value → Active_Version_Value := Table_Version'Last (Unicode_16)
+  │
+  └──► Active_Version_Value fixed for process lifetime
+         (never changes after elaboration — no lock required)
+```
+
+`Active_Version` (public spec, `Global => null`) reads this constant. GNATprove treats the read as side-effect-free because the constant is set before any application code runs and never mutated thereafter (justified via `pragma Annotate`).
+
+### Phase B — Cell Width Lookup (SPARK Gold)
+
+```
+Application code
+  │
+  │  W := Cell_Width (Codepoint);
+  │          or
+  │  W := Cell_Width (Codepoint, Version);
+  │
+  ▼
+Termicap.Cell_Width.Cell_Width  [SPARK Gold, Global => null]
+  │
+  │  [Single-argument overload only]
+  │    Version := Active_Version;    --  reads elaboration-time constant
+  │
+  │  Fast path 1: Codepoint in 16#20# .. 16#7E#?
+  │    Yes → return 1  (ASCII printable — always narrow)  (FUNC-CWM-010)
+  │
+  │  Fast path 2: Codepoint in 16#00# .. 16#1F#?
+  │    Yes → return 0  (C0 control characters)  (FUNC-CWM-011)
+  │
+  │  Fast path 3: Codepoint = 16#7F#?
+  │    Yes → return 0  (DEL)  (FUNC-CWM-011)
+  │
+  │  Fast path 4: Codepoint in 16#80# .. 16#9F#?
+  │    Yes → return 0  (C1 control characters)  (FUNC-CWM-011)
+  │
+  │  No fast path matched:
+  │    Table := Termicap.Cell_Width.Tables.Get_Table (Version)
+  │               [pure case dispatch — SPARK Gold, Global => null]
+  │               Version = Unicode_3  → TABLE_UNICODE_3  (74 entries)
+  │               Version = Unicode_13 → TABLE_UNICODE_13 (80 entries)
+  │               Version = Unicode_16 → TABLE_UNICODE_16 (82 entries)
+  │
+  │    return Cell_Width_In_Table (Codepoint, Table)
+  │
+  └──► Cell_Width_Value in {0, 1, 2}
+```
+
+### Phase C — Binary Search (SPARK Gold)
+
+```
+Termicap.Cell_Width.Tables.Cell_Width_In_Table
+  (Codepoint : Unicode_Scalar_Value; Table : Width_Table)
+  [SPARK Gold, Global => null]
+  Pre: Table'Length > 0
+       and All_Widths_Valid (Table)
+       and Is_Sorted_Non_Overlapping (Table)
+  │
+  │  Low  := Table'First;  High := Table'Last;
+  │
+  │  loop
+  │    exit when Low > High;
+  │    Mid := Low + (High - Low) / 2;   -- overflow-safe midpoint
+  │    Entry := Table (Mid);
+  │
+  │    Codepoint < Entry.First?
+  │      Yes → High := Table_Index'Pred (Mid)  -- search lower half
+  │    Codepoint > Entry.Last?
+  │      Yes → Low  := Table_Index'Succ (Mid)  -- search upper half
+  │    else
+  │      return Entry.Width               -- match: 0 or 2
+  │
+  │    loop variant: High - Low (strictly decreasing each iteration)
+  │  end loop;
+  │
+  └──► return 1  (no entry covers Codepoint → default narrow)
+```
+
+**GNATprove obligations discharged (FUNC-CWM-014):**
+- No array out-of-bounds: loop invariants on `Low` and `High` constrain all array accesses to `Table'First .. Table'Last`.
+- No integer overflow: `Low + (High - Low) / 2` cannot wrap for any valid `Table_Index` range.
+- Return value in `Cell_Width_Value`: all paths return 0, 1, or `Entry.Width`; `All_Widths_Valid` ensures `Entry.Width in Cell_Width_Value`.
+- Termination: `High - Low` is a valid loop variant (non-negative before each iteration; decreases on every branch).
+- No side effects: `Global => null`.
+
+**Key properties:**
+
+- **No TTY required.** `Cell_Width` never opens `/dev/tty`, creates a `Probe_Session`, checks TTY status, or calls any C library function at lookup time. The tables are compile-time constants; the only runtime I/O is the single `UNICODE_VERSION` env-var read during elaboration.
+- **Standalone package.** `Termicap.Cell_Width` does not depend on `Termicap.Wcwidth`, `Termicap.Unicode`, `Termicap.Environment`, `Termicap.OSC`, or any OS interface beyond the elaboration-time env-var read.
+- **SPARK Gold throughout.** Both the spec and body carry `SPARK_Mode => On`; the env-var read region is locally `Off` only for the elaboration statement. All public functions prove at Gold level with `Global => null`.
+- **Complementary to WCWIDTH.** The recommended integration is: call `Termicap.Wcwidth.Probe_Wcwidth_Level` to detect the locale's Unicode version, map `Wcwidth_Level` to a `Table_Version`, then call `Cell_Width (CP, Version)` for consistent, cross-platform width measurement. Alternatively, set `UNICODE_VERSION` in the environment before process start and call `Cell_Width (CP)` (single-argument form) everywhere.
+- **O(log N) time, O(1) space.** The binary search over at most 82 entries terminates in at most 7 iterations. All three tables are compile-time constants; no heap allocation occurs at any point (FUNC-CWM-015).
+- **Default width = 1.** Only width-0 (combining/format) and width-2 (wide/fullwidth) ranges are stored. Any codepoint not matching a stored range is returned as 1 (narrow), which is correct for all ASCII, Latin, Greek, Cyrillic, and most symbol codepoints.
+
+**Usage example:**
+
+```ada
+with Termicap.Cell_Width;
+
+declare
+   W : Termicap.Cell_Width.Cell_Width_Value;
+begin
+   --  Using the active version (selected from UNICODE_VERSION at startup):
+   W := Termicap.Cell_Width.Cell_Width (16#4E2D#);  -- U+4E2D CJK UNIFIED IDEOGRAPH
+   pragma Assert (W = 2);
+
+   --  Using an explicit version:
+   W := Termicap.Cell_Width.Cell_Width (16#200D#,   -- U+200D ZERO WIDTH JOINER
+                                        Termicap.Cell_Width.Unicode_16);
+   pragma Assert (W = 0);
+
+   --  ASCII fast path:
+   W := Termicap.Cell_Width.Cell_Width (Character'Pos ('A'));
+   pragma Assert (W = 1);
+end;
+```
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -2887,4 +3026,5 @@ end;
 - **Tech Spec OSC52** (`docs/tech-specs/osc52-clipboard.md`): OSC 52 Clipboard Detection design rationale — three-phase cascade, DA1 Ps=52 extension, active read-back probe, env-var heuristics, multiplexer passthrough, independent session strategy, SPARK boundary
 - **Tech Spec WCWIDTH** (`docs/tech-specs/wcwidth.md`): wcwidth() Probing for Unicode Level design rationale — sentinel codepoint selection, descending probe order, locale guard, caching strategy, platform dispatch, SPARK boundary
 - **ADR-0032** (`docs/adr/0032-wcwidth-package-placement.md`): Rationale for placing wcwidth probing in `Termicap.Wcwidth` (sibling of `Termicap.Unicode`) rather than as a child package
+- **Tech Spec CELL-WIDTH** (`docs/tech-specs/cell-width.md`): Cell Width Measurement Tables design rationale — table structure, binary search algorithm, fast paths, UNICODE_VERSION env-var selection, SPARK Gold strategy, relationship to WCWIDTH
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018, FUNC-SXL-001 through FUNC-SXL-019
