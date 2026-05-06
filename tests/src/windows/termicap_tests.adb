@@ -27,6 +27,7 @@ with Test_Unicode;
 with Test_Win32_Color;
 with Test_Win32_Cygwin;
 with Test_Cell_Width;
+with Test_FGPGRP;
 with Test_Graphics;
 with Test_Keyboard_Parsers;
 with Test_XTVERSION;
@@ -57,6 +58,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_Keyboard_Parsers.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Win32_Color.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Win32_Cygwin.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_FGPGRP.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Cell_Width.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Graphics.Test_Case);
       return Result;

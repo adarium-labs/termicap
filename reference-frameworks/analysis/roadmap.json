@@ -999,11 +999,21 @@
           "id": "FGPGRP",
           "name": "Foreground Process Group Check",
           "summary": "ioctl(TIOCGPGRP) to verify caller is foreground process before sending OSC queries. Prevents query contaminating background process output.",
-          "status": "next",
+          "status": "done",
           "spark_level": "N/A (Ada FFI)",
           "ffi": true,
-          "requirement_uids": [],
-          "source_files": [],
+          "requirement_uids": [
+            "FUNC-FGP-001", "FUNC-FGP-002", "FUNC-FGP-003", "FUNC-FGP-004",
+            "FUNC-FGP-005", "FUNC-FGP-006", "FUNC-FGP-007", "FUNC-FGP-008",
+            "FUNC-FGP-009", "FUNC-FGP-010", "FUNC-FGP-011", "FUNC-FGP-012",
+            "FUNC-FGP-013"
+          ],
+          "source_files": [
+            "src/termicap-osc.ads",
+            "src/posix/termicap-osc.adb",
+            "src/windows/termicap-osc.adb",
+            "src/c/termicap_osc.c"
+          ],
           "doc_refs": [
             {
               "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",

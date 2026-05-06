@@ -640,14 +640,14 @@ All termios manipulation is delegated to a C helper (`src/c/termicap_osc.c`) whi
 
 | Subprogram | Kind | Requirements |
 |-----------|------|--------------|
-| `Open` | Procedure | FUNC-OSC-001, FUNC-OSC-002, FUNC-OSC-003, FUNC-OSC-007, FUNC-OSC-008, FUNC-OSC-011, FUNC-OSC-012 |
+| `Open` | Procedure | FUNC-OSC-001, FUNC-OSC-002, FUNC-OSC-003, FUNC-OSC-007, FUNC-OSC-008, FUNC-OSC-011, FUNC-OSC-012, FUNC-FGP-003, FUNC-FGP-006 |
 | `Is_Open` | Function | FUNC-OSC-008 |
 | `Close` | Procedure | FUNC-OSC-008 |
 | `Sentinel_Query` | Procedure | FUNC-OSC-006, FUNC-OSC-009, FUNC-OSC-013 |
 | `Timeout_Query` | Procedure | FUNC-DA1-008 |
 | `Write_Query` | Procedure | FUNC-OSC-005 |
 | `Timed_Read` | Procedure | FUNC-OSC-004 |
-| `Is_Foreground_Process` | Function | FUNC-OSC-007 |
+| `Is_Foreground_Process` | Function | FUNC-OSC-007, FUNC-FGP-001, FUNC-FGP-002, FUNC-FGP-004, FUNC-FGP-005, FUNC-FGP-007, FUNC-FGP-008, FUNC-FGP-009, FUNC-FGP-010, FUNC-FGP-011 |
 | `Open_Terminal` | Function | FUNC-OSC-001 |
 | `Close_Terminal` | Procedure | FUNC-OSC-001 |
 | `Save_Termios` | Procedure | FUNC-OSC-002 |
@@ -670,6 +670,14 @@ A thin C translation unit (`src/c/termicap_osc.c`) exposes nine functions called
 | `termicap_osc_select_read` | `select()` + `read()` with millisecond timeout |
 | `termicap_osc_write` | `write()` with full-buffer retry |
 | `termicap_osc_is_foreground` | `ioctl(TIOCGPGRP)` + `getpgrp()` comparison |
+
+#### FGPGRP: Foreground Process Group Check
+
+`Is_Foreground_Process` is the implementation point for the FGPGRP feature (requirements FUNC-FGP-001..013, ADR-0035). It is called as step 1 of `Open` before any terminal file descriptor is opened: if the calling process is a background job, `Open` returns `Session_Not_Foreground` immediately without opening `/dev/tty` or sending any escape sequences.
+
+On POSIX (`src/posix/termicap-osc.adb`), the check delegates to the C helper `termicap_osc_is_foreground`, which calls `ioctl(fd, TIOCGPGRP, &fg_pgrp)` and compares the result with `getpgrp()`. Any ioctl failure (ENOTTY, EBADF, EIO) conservatively returns not-foreground. On Windows (`src/windows/termicap-osc.adb`), the stub unconditionally returns `True` — Windows Console processes are always associated with a single visible window, so the POSIX notion of foreground/background process groups does not apply (FUNC-FGP-012, FUNC-FGP-013).
+
+The FGPGRP feature does not introduce a new package; ADR-0035 records the decision to keep the function in `Termicap.OSC` per the existing FUNC-FGP-012 allowance.
 
 ---
 

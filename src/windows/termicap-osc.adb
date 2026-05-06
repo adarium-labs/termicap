@@ -113,7 +113,7 @@ package body Termicap.OSC is
    function Is_Foreground_Process (FD : File_Descriptor) return Boolean is
       pragma Unreferenced (FD);
    begin
-      return False;
+      return True;
    end Is_Foreground_Process;
 
    function Open_Terminal return File_Descriptor is

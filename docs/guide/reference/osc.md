@@ -295,9 +295,13 @@ Read bytes from a file descriptor with a millisecond timeout, using `select()` f
 function Is_Foreground_Process (FD : File_Descriptor) return Boolean;
 ```
 
-Return `True` if the calling process is in the terminal's foreground process group. Uses `ioctl(FD, TIOCGPGRP, &fg_pgrp)` and compares with `getpgrp()`. Returns `False` on `ioctl` failure.
+Return `True` if the calling process is in the terminal's foreground process group. Uses `ioctl(FD, TIOCGPGRP, &fg_pgrp)` and compares with `getpgrp()`. Returns `False` on `ioctl` failure (ENOTTY, EBADF, EIO) to conservatively suppress probing from background jobs.
 
-**Requirements:** FUNC-OSC-007
+On Windows, the stub unconditionally returns `True`: Windows Console processes have no background-job concept equivalent to POSIX process groups (FUNC-FGP-012, FUNC-FGP-013).
+
+Called as step 1 of `Open`. If it returns `False`, `Open` returns `Session_Not_Foreground` immediately without opening `/dev/tty` or sending any escape sequences (FUNC-FGP-006, FUNC-FGP-010).
+
+**Requirements:** FUNC-OSC-007, FUNC-FGP-001, FUNC-FGP-002, FUNC-FGP-004, FUNC-FGP-005, FUNC-FGP-007, FUNC-FGP-008, FUNC-FGP-009, FUNC-FGP-010, FUNC-FGP-011
 
 ---
 
@@ -590,6 +594,8 @@ The session goes out of scope at the end of `Probe_Background_Color` and `Finali
 | FUNC-OSC-005 | `Write_Query` |
 | FUNC-OSC-006 | `Sentinel_Query`, `Contains_DA1_Response`, `DA1_Response_Start` |
 | FUNC-OSC-007 | `Is_Foreground_Process` |
+| FUNC-FGP-001..011 | `Is_Foreground_Process` (POSIX: ioctl TIOCGPGRP + getpgrp; Windows stub: always True) |
+| FUNC-FGP-012, FUNC-FGP-013 | Windows stub in `src/windows/termicap-osc.adb` returns `True` unconditionally |
 | FUNC-OSC-008 | `Probe_Session`, `Open`, `Is_Open`, `Close`, `Session_Status`, `Finalize` |
 | FUNC-OSC-009 | `Response_Buffer`, `MAX_RESPONSE_SIZE` — overflow treated as timeout in `Sentinel_Query` |
 | FUNC-OSC-010 | `Parse_DA1_Response`, `DA1_Params`, `DA1_Value_Array`, `MAX_DA1_PARAMS` |

@@ -1,0 +1,282 @@
+[DOCUMENT]
+TITLE: Foreground Process Group Check
+UID: REQ-FGP
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[SECTION]
+TITLE: Purpose and Motivation
+
+[REQUIREMENT]
+UID: FUNC-FGP-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Background Process Contamination Risk
+STATEMENT: >>>
+The library shall not send any OSC, DCS, or CSI escape sequence query to the terminal when the calling process is running as a background job in the shell's job-control sense. Sending escape sequences from a background process contaminates the terminal output of the foreground process: the escape bytes appear interleaved with the foreground process's output and may corrupt its display or confuse its own terminal query/response cycle.
+
+The library shall therefore gate all active terminal probing behind a foreground process group check that is evaluated before any escape sequence is written to the terminal file descriptor.
+<<<
+COMMENT: >>>
+This requirement captures the essential motivation for the FGPGRP feature. In a POSIX job-control shell, the terminal is owned by the foreground process group; background processes that write to the terminal produce visible corruption. Because Termicap's active probing sends multi-byte escape sequences and reads back responses, a background invocation is especially hazardous: the escape bytes could be interpreted as user input by the foreground process, and the terminal's raw-mode response bytes (if the foreground has entered raw mode) could be misread by Termicap. Enforcing silence from background processes is cited as a required guard in the global synthesis (§6.1) and is implemented by termenv and other mature libraries.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: POSIX FFI Bindings
+
+[REQUIREMENT]
+UID: FUNC-FGP-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: ioctl TIOCGPGRP Binding
+STATEMENT: >>>
+The library shall provide a thin Ada FFI binding to the POSIX ioctl call with the TIOCGPGRP request, suitable for retrieving the foreground process group ID of a terminal file descriptor. The binding shall have the following representative signature:
+
+  function C_Ioctl_TIOCGPGRP
+     (FD   : Interfaces.C.int;
+      Pgrp : access Interfaces.C.int)
+      return Interfaces.C.int;
+  pragma Import (C, C_Ioctl_TIOCGPGRP, "termicap_ioctl_tiocgpgrp");
+
+The binding shall be declared in a package compiled with SPARK_Mode => Off. A thin C helper function named termicap_ioctl_tiocgpgrp shall wrap the ioctl(fd, TIOCGPGRP, pgrp) call so that the TIOCGPGRP constant (which is a preprocessor macro on most POSIX platforms and not directly importable from Ada) is resolved at C compile time.
+
+The return value shall follow the POSIX convention: 0 on success, -1 on failure (with errno set by the C runtime).
+<<<
+COMMENT: >>>
+TIOCGPGRP is defined as a preprocessor macro in <termios.h> or <sys/ioctl.h> on Linux, macOS, and BSDs. Its numeric value differs between platforms (Linux: 0x540F, macOS: TIOCGPGRP is defined via _IOR). It cannot be imported into Ada as a named constant without a C helper that resolves the macro at C compile time. Wrapping ioctl in a named C helper (termicap_ioctl_tiocgpgrp) is the standard Termicap pattern for ioctl calls that carry platform-specific request codes — the same pattern is used for TIOCGWINSZ in the terminal dimensions feature. SPARK_Mode => Off is mandatory because the call involves access parameters (pointers to C integers), which are outside the SPARK 2014 language subset.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-FGP-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: getpgrp() Binding
+STATEMENT: >>>
+The library shall provide a thin Ada FFI binding to the POSIX getpgrp() function, which returns the process group ID of the calling process. The binding shall have the following representative signature:
+
+  function C_Getpgrp return Interfaces.C.int;
+  pragma Import (C, C_Getpgrp, "getpgrp");
+
+The binding shall be declared in the same FFI boundary package as the TIOCGPGRP binding (FUNC-FGP-002), compiled with SPARK_Mode => Off.
+
+The return value is always the non-negative process group ID of the calling process; getpgrp() is specified by POSIX to never fail.
+<<<
+COMMENT: >>>
+getpgrp() is a simple POSIX function that can be imported directly into Ada using pragma Import (C, ..., "getpgrp") without a C helper, because it takes no arguments and returns a plain integer with no platform-macro dependency. Placing it in the same FFI package as the TIOCGPGRP binding keeps all foreground-check OS calls together and minimises the number of FFI boundary packages. getpgrp() returns the process group ID of the calling process, which is the value to compare against the terminal's foreground process group ID retrieved by TIOCGPGRP.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Foreground Check Logic
+
+[REQUIREMENT]
+UID: FUNC-FGP-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Is_Foreground_Process Operation
+STATEMENT: >>>
+The library shall provide an Ada function that determines whether the calling process is the foreground process group of the terminal associated with a given file descriptor. Its representative signature is:
+
+  function Is_Foreground_Process (FD : File_Descriptor) return Boolean;
+
+The function shall perform the following steps in order:
+
+  1. Call ioctl(FD, TIOCGPGRP, &fg_pgrp) via the binding in FUNC-FGP-002. If the call returns -1 (failure), return False immediately without calling getpgrp().
+  2. Call getpgrp() via the binding in FUNC-FGP-003 to obtain the calling process's process group ID.
+  3. Return True if and only if fg_pgrp = getpgrp(); return False otherwise.
+
+The function shall not raise an exception under any circumstance. All error conditions shall be encoded as False.
+<<<
+COMMENT: >>>
+The three-step logic — ioctl, getpgrp, compare — is the canonical POSIX algorithm for job-control foreground detection. Comparing process group IDs (not process IDs) is correct because job control operates at the group level: a multi-process pipeline that owns the terminal will have all its member processes in the same process group, and all are equally entitled to interact with the terminal. Using getpgrp() rather than getpid() is therefore semantically accurate. Returning False on ioctl failure is the safe conservative choice: if the terminal state cannot be determined, it is better to skip probing than to risk contaminating a foreground process's output. No-exception semantics follow the Termicap FFI boundary convention established in the OSC infrastructure.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-FGP-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Non-TTY Case Returns False
+STATEMENT: >>>
+If the file descriptor passed to Is_Foreground_Process (FUNC-FGP-004) does not refer to a terminal (i.e., it is a pipe, regular file, or socket), the ioctl(TIOCGPGRP) call shall fail with ENOTTY. The function shall treat this failure identically to any other ioctl failure and return False.
+
+Callers shall not call Is_Foreground_Process with an invalid file descriptor (INVALID_FD = -1). If called with INVALID_FD, the ioctl call will fail and the function shall return False, which is the correct safe result.
+<<<
+COMMENT: >>>
+When stdout is redirected to a pipe or file (a common case for programs run in scripts or CI environments), the file descriptor is not a terminal and TIOCGPGRP is meaningless. The ioctl will return ENOTTY ("not a terminal"), which Is_Foreground_Process correctly translates to False. This means that non-interactive invocations naturally pass the foreground check as False, preventing any OSC query from being sent in non-interactive contexts — which is the correct behaviour, because there is no terminal to query. This requirement makes the non-TTY path explicit so that implementors do not add a separate TTY check before calling Is_Foreground_Process; the ioctl failure already covers it.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-FGP-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: ioctl Failure Treated as Not Foreground
+STATEMENT: >>>
+When the ioctl(TIOCGPGRP) call fails for any reason — including but not limited to ENOTTY (not a terminal), EBADF (bad file descriptor), EIO (I/O error on a disconnected terminal), or EPERM (permission denied) — Is_Foreground_Process shall return False without inspecting errno and without raising an exception.
+
+The library shall not attempt to classify or propagate the specific ioctl error code. The only semantically relevant outcome is the Boolean result: is it safe to send escape sequences? On any ioctl failure, the answer is False (not safe).
+<<<
+COMMENT: >>>
+Treating all ioctl failures uniformly as "not foreground" is a deliberate safety-first design decision. The alternative — inspecting errno and distinguishing "harmless" failures from "serious" ones — would require matching platform-specific errno values and would add complexity without improving correctness. For the purpose of this guard, any inability to confirm foreground status is sufficient reason to suppress probing. This design also avoids errno race conditions: on platforms where errno is thread-local but the C binding might reset it, not reading errno at all eliminates a class of subtle bugs.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Windows Platform Stub
+
+[REQUIREMENT]
+UID: FUNC-FGP-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Windows Stub Returns True
+STATEMENT: >>>
+On Windows, the library shall provide a stub implementation of Is_Foreground_Process that unconditionally returns True, without calling any ioctl or equivalent Windows API.
+
+The stub shall be selected at compile time via an Alire configuration variable or a GNAT project file os-discriminant (e.g., the Target_OS variable distinguishing Unix from Windows). The stub shall be compiled in lieu of the POSIX implementation on all Windows targets.
+
+The stub signature shall be identical to the POSIX implementation:
+
+  function Is_Foreground_Process (FD : File_Descriptor) return Boolean;
+  --  Windows stub: always returns True (no POSIX job control on Windows).
+<<<
+COMMENT: >>>
+Windows does not implement POSIX job control. Processes on Windows do not have process groups in the POSIX sense; there is no TIOCGPGRP equivalent in the Windows Console API (ConPTY). Background/foreground distinction at the terminal level is not a concern for Windows processes in the same way it is for POSIX shell jobs. Returning True (always foreground) means that the OSC query logic will proceed to its next guard — the TTY check — which will correctly suppress queries for non-interactive Windows processes. Unconditional True is therefore safe: the subsequent TTY check and timeout mechanism provide sufficient protection in the Windows context. The compile-time selection of the stub avoids any runtime conditional and keeps the Windows build free of POSIX headers.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with OSC Query Infrastructure
+
+[REQUIREMENT]
+UID: FUNC-FGP-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: OSC Query Functions Must Check Foreground Before Sending
+STATEMENT: >>>
+All library operations that send escape sequence queries to the terminal — including the probe session open sequence and any direct Write_Query call — shall invoke Is_Foreground_Process (FUNC-FGP-004) as the first step before writing any bytes to the terminal file descriptor.
+
+If Is_Foreground_Process returns False, the operation shall:
+  1. Refrain from writing any bytes to the terminal.
+  2. Return a distinguished result indicating that probing was suppressed (e.g., Session_Not_Foreground for the probe session, or Success => False for Write_Query).
+  3. Not enter raw mode, not save termios state, and not open /dev/tty.
+
+No escape sequence byte shall reach the terminal file descriptor when Is_Foreground_Process returns False.
+<<<
+COMMENT: >>>
+Placing the foreground check as the unconditional first step of the probe session open sequence (before opening /dev/tty, before saving termios, before entering raw mode) is essential: it minimises side effects for background processes. A background process that opens /dev/tty and enters raw mode — even if it immediately closes and restores — could interfere with the foreground process's terminal state. By aborting before any of those steps, Termicap avoids all terminal-state mutations in background contexts. The Session_Not_Foreground return code gives callers a specific, actionable signal that can be distinguished from "no terminal" (Session_No_Terminal) or OS-level failures.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-FGP-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Foreground Check Uses /dev/tty File Descriptor
+STATEMENT: >>>
+Is_Foreground_Process shall be called with the file descriptor for /dev/tty, not with the file descriptors for stdin (0), stdout (1), or stderr (2). The /dev/tty file descriptor shall be opened (FUNC-OSC-001) solely for the purpose of the foreground check when no probe session is yet open, or the session's already-open /dev/tty descriptor shall be reused.
+
+If /dev/tty cannot be opened before the foreground check, the library shall treat the condition as Is_Foreground_Process => False (not safe to probe) and shall not proceed with any query.
+<<<
+COMMENT: >>>
+Using /dev/tty for the TIOCGPGRP ioctl is necessary because stdin, stdout, and stderr may all be redirected to pipes, files, or sockets in which case they are not terminal file descriptors and the ioctl would fail with ENOTTY regardless of the process's foreground status. /dev/tty always refers to the process's controlling terminal (if one exists) and is the correct descriptor for job-control inquiries. Opening /dev/tty for the check and then closing it if the check fails (i.e., not proceeding to the full probe session) adds a brief open/ioctl/close sequence but is the only correct approach. If /dev/tty cannot be opened, there is no controlling terminal and hence no foreground status to check; the safe default of False applies.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Failure Handling and Safe Defaults
+
+[REQUIREMENT]
+UID: FUNC-FGP-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: No Exception Propagation from Foreground Check
+STATEMENT: >>>
+The Is_Foreground_Process function (FUNC-FGP-004) shall not raise any Ada exception under any circumstances, including Storage_Error, Program_Error, or Constraint_Error. All failure paths (ioctl error, invalid FD, non-TTY) shall be encoded as the Boolean return value False.
+
+The FFI bindings (FUNC-FGP-002, FUNC-FGP-003) shall be declared with pragma No_Return or defensive wrappers such that exceptions from Interfaces.C operations do not propagate to Is_Foreground_Process. The function shall be usable safely from both normal execution paths and exception handlers.
+<<<
+COMMENT: >>>
+Is_Foreground_Process is called at the very beginning of the probe session lifecycle, before any RAII cleanup mechanism is in place. If it raised an exception at this point, the exception would propagate to the caller without any terminal cleanup having been needed (since nothing has been opened yet), which is acceptable but inconsistent with the no-exception convention used throughout the library's OS-call layer. More importantly, callers may invoke Is_Foreground_Process in contexts where they cannot easily handle exceptions (e.g., inside a controlled type's Initialize). No-exception semantics are therefore a correctness requirement, not merely a style preference.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-FGP-011
+STATUS: Approved
+PRIORITY: Should
+TITLE: Stateless and Idempotent Check
+STATEMENT: >>>
+Is_Foreground_Process shall be a stateless function: it shall not cache its result, shall not maintain any global or package-level state, and shall perform the ioctl and getpgrp calls on every invocation. Repeated calls with the same file descriptor shall each perform independent OS calls and may return different results if the process's job-control state changes between calls (e.g., if the shell moves the process between foreground and background).
+
+The function shall be safe to call from multiple Ada tasks simultaneously; each call is fully independent and does not share mutable state with other calls.
+<<<
+COMMENT: >>>
+Caching the foreground result would introduce a time-of-check/time-of-use race: a process that is in the foreground when the cache is populated could be moved to the background by the shell before the cached result is used to gate an OSC query. Although this race is unlikely in practice (capability detection is a startup-time operation), the correct design is to always query the current state. Statelessness also trivially ensures thread safety: two tasks calling Is_Foreground_Process simultaneously each perform their own independent ioctl/getpgrp pair with no shared mutable state, so no locking is required. This contrasts with the single-session enforcement in the OSC infrastructure (FUNC-OSC-012), which does require a protected variable because it guards a mutable session count.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK and FFI Boundary
+
+[REQUIREMENT]
+UID: FUNC-FGP-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: FFI Boundary Package for OS Calls
+STATEMENT: >>>
+The ioctl(TIOCGPGRP) binding (FUNC-FGP-002) and the getpgrp() binding (FUNC-FGP-003) shall be declared in an Ada package compiled with SPARK_Mode => Off. A comment in the package specification shall state:
+
+  --  This package is an Ada FFI boundary for POSIX foreground process group
+  --  detection. It imports C functions and does not carry SPARK provability.
+
+The package shall be named Termicap.OSC.Foreground or placed within an existing OSC FFI boundary package, consistent with the naming conventions established by the OSC infrastructure.
+<<<
+COMMENT: >>>
+SPARK_Mode => Off is required for any package that uses pragma Import (C, ...) with pointer parameters (access types in Ada) because SPARK 2014 does not support most uses of access types at the Silver level. The TIOCGPGRP binding passes an access to an integer (the pgrp output parameter), which is outside the SPARK subset. Placing the bindings in a named FFI package and documenting them with the standard comment follows the Termicap convention established in FUNC-OSC-015 and allows the rest of the codebase to remain SPARK_Mode => On where possible.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-FGP-013
+STATUS: Approved
+PRIORITY: Should
+TITLE: Pure Comparison Logic Eligible for SPARK Silver
+STATEMENT: >>>
+The comparison step of Is_Foreground_Process — comparing the foreground process group ID returned by ioctl with the calling process's group ID returned by getpgrp — shall be expressed as a pure Ada equality comparison on integer values. This comparison logic shall be separated from the FFI calls so that it can, in principle, be annotated with SPARK contracts if the integer values are passed to a SPARK-On helper function.
+
+If Is_Foreground_Process is implemented in the FFI boundary package (SPARK_Mode => Off), the comparison shall still be expressed as a simple equality test on Ada integer values with no pointer arithmetic, ensuring that the logic is trivially auditable even without SPARK proof.
+<<<
+COMMENT: >>>
+The comparison (fg_pgrp = getpgrp()) is the only non-FFI logic in the foreground check, and it is trivially correct by inspection. While it does not strictly require SPARK proof, expressing it as a pure integer equality in Ada (rather than in C) keeps the correctness argument on the Ada side where it can be reviewed in the context of Ada type constraints. The recommendation to separate it into a helper eligible for SPARK_Mode => On is aspirational: the SPARK prover can verify that the comparison is correctly formed (no implicit coercion, no integer overflow) if given the appropriate contracts, providing an additional correctness guarantee for this safety-critical gate.
+<<<
+
+[/SECTION]

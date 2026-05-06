@@ -1187,6 +1187,7 @@ Termicap.OSC.Finalize / Close  [SPARK_Mode => Off, Ada.Finalization]
 - `Drain_Input` (step 6 of `Open`) discards stale bytes that arrived before the query, preventing them from polluting the response accumulation buffer (FUNC-OSC-011).
 - `Contains_DA1_Response` and `DA1_Response_Start` are SPARK Silver functions called from the non-SPARK accumulation loop. The SPARK-provable parsing logic is isolated in `Termicap.OSC.Parsing` while the loop and I/O remain in `SPARK_Mode => Off` (FUNC-OSC-015).
 - On timeout with `Retry => True`, the query and sentinel are resent and the timeout is doubled. This handles slow terminals without requiring the caller to implement retry logic (FUNC-OSC-013).
+- The foreground check (step 1) is the implementation point for the FGPGRP feature (FUNC-FGP-001..013). On POSIX it calls `ioctl(TIOCGPGRP)` + `getpgrp()` via the C helper; on Windows the stub always returns `True` because Windows Console processes have no background-job concept. If `Is_Foreground_Process` returns `False`, `Open` stops immediately with `Session_Not_Foreground` and no `/dev/tty` FD is opened (FUNC-FGP-006, FUNC-FGP-010).
 
 ---
 
