@@ -1,0 +1,776 @@
+[DOCUMENT]
+TITLE: WCWIDTH — wcwidth() Probing for Unicode Level
+UID: REQ-WCW
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[TEXT]
+STATEMENT: >>>
+This document specifies the functional requirements for wcwidth() Probing for Unicode
+Level (feature id WCWIDTH, Tier 4). The feature calls the POSIX C library function
+wcwidth() on a set of sentinel codepoints to determine the Unicode version supported
+by the terminal's C runtime locale, refining the coarser Unicode detection result
+produced by the environment-variable-based algorithm in Termicap.Unicode
+(unicode-support.sdoc).
+
+wcwidth(wc) returns the number of terminal columns needed to display a wide character,
+or -1 if the character is non-printable or unsupported in the current locale. When
+called on codepoints that were first assigned in a specific Unicode version, a return
+value of 1 or 2 (column width) indicates that the locale's character width tables
+include at least that Unicode version.
+
+Three sentinel codepoints are probed in ascending Unicode-version order:
+
+  U+28FF   (BRAILLE PATTERN DOTS-12345678, Unicode 3.0)
+    — Braille block; a return value >= 1 indicates Unicode 3 support.
+
+  U+1FB38  (UPPER LEFT BLOCK SEXTANT-2 AND 5 AND 6, Unicode 13.0)
+    — Sextant block (Symbols for Legacy Computing); a return value >= 1 indicates
+      Unicode 13 support.
+
+  U+1CD00  (SIGNWRITING HAND-FIST INDEX MIDDLE RING LITTLE MOVEMENT-WALLPLANE WAVE
+             SMALL, Unicode 16.0)
+    — Octant block (Symbols for Legacy Computing Supplement); a return value >= 1
+      indicates Unicode 16 support.
+
+The result is expressed as a Wcwidth_Level enumeration that distinguishes four levels:
+Unknown, Unicode_3, Unicode_13, and Unicode_16. This is a refinement of the existing
+Unicode_Level type (None/Basic/Extended) defined in FUNC-UNI-001: the Wcwidth_Level
+result is integrated back into the Termicap Unicode detection cascade as an advisory
+signal that may upgrade (but not downgrade) the env-var-based result.
+
+The wcwidth() call is a C FFI boundary. The probe function body shall be declared with
+SPARK_Mode => Off. A pure SPARK-visible result type and integration logic layer shall
+be declared with SPARK_Mode => On.
+
+The locale must be initialised before wcwidth() is called; setlocale(LC_CTYPE, "")
+must have been invoked at process startup. The locale is process-global state; the
+probe must document its threading constraints.
+<<<
+
+[SECTION]
+TITLE: FFI Binding
+
+[REQUIREMENT]
+UID: FUNC-WCW-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: C wcwidth() FFI Binding
+STATEMENT: >>>
+The library shall provide a thin Ada binding to the POSIX C library function wcwidth().
+The C signature is:
+
+  int wcwidth(wchar_t wc);
+
+The Ada binding shall expose this function as an Ada subprogram with a representative
+signature:
+
+  function C_Wcwidth (Wc : Interfaces.C.wchar_t) return Interfaces.C.int
+  with Import, Convention => C, External_Name => "wcwidth";
+
+The binding shall be declared in a package body or private child unit annotated with
+SPARK_Mode => Off, because the Import convention and C FFI are outside the SPARK
+language subset.
+
+The binding shall not perform any transformation of the return value: the raw C int
+(which may be -1, 0, 1, or 2 on conforming POSIX implementations) shall be returned
+directly to the Ada caller.
+
+The binding shall use Interfaces.C.wchar_t for the codepoint argument and
+Interfaces.C.int for the return value, as defined by the Ada standard library's
+Interfaces.C package.
+<<<
+COMMENT: >>>
+wcwidth() is standardised by POSIX.1-2001 and is available on all supported Termicap
+platforms (Linux, macOS, FreeBSD, OpenBSD). It is not available on Windows without
+a POSIX compatibility layer; on Windows the probe shall return Unknown (see
+FUNC-WCW-007 and FUNC-WCW-011). The use of Interfaces.C types (wchar_t, int) rather
+than Ada native integer types is mandatory for correct ABI compatibility: on LP64
+systems wchar_t is 32 bits wide and int is 32 bits wide, but this is platform-defined
+and should not be assumed by the Ada code. The External_Name must be "wcwidth" (all
+lower-case) to match the C library symbol name on all POSIX platforms. The Import
+aspect requires SPARK_Mode => Off; placing the binding in a private package body or
+child unit with Off annotation keeps the SPARK boundary clean.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Sentinel Codepoints
+
+[REQUIREMENT]
+UID: FUNC-WCW-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sentinel Codepoint Set Definition
+STATEMENT: >>>
+The library shall define a fixed set of sentinel codepoints used for wcwidth() probing.
+Each sentinel is a Unicode scalar value associated with the Unicode version in which it
+was first assigned, serving as a probe point for that Unicode version level. The
+sentinels shall be declared as named constants:
+
+  WCW_SENTINEL_UNI3  : constant := 16#28FF#;
+    -- U+28FF  BRAILLE PATTERN DOTS-12345678
+    -- Unicode version: 3.0
+    -- Expected column width on a conforming locale: 1
+
+  WCW_SENTINEL_UNI13 : constant := 16#1FB38#;
+    -- U+1FB38  UPPER LEFT BLOCK SEXTANT-2 AND 5 AND 6
+    -- Unicode version: 13.0 (Symbols for Legacy Computing block)
+    -- Expected column width on a conforming locale: 1
+
+  WCW_SENTINEL_UNI16 : constant := 16#1CD00#;
+    -- U+1CD00  SIGNWRITING HAND-FIST INDEX MIDDLE RING LITTLE MOVEMENT-WALLPLANE
+    --          WAVE SMALL
+    -- Unicode version: 16.0 (Symbols for Legacy Computing Supplement block)
+    -- Expected column width on a conforming locale: 1
+
+These constants shall be declared as universal integer constants in a SPARK-visible
+package spec (SPARK_Mode => On). Their numeric values shall not be modified without a
+corresponding update to the probing algorithm (FUNC-WCW-003) and the Unicode version
+mapping table.
+
+The selection criterion for sentinels is:
+  (a) The codepoint must have been assigned in exactly the target Unicode version (not
+      a later revision of an existing block).
+  (b) The codepoint must have a defined, stable column width of 1 on all conforming
+      POSIX locales that support the target Unicode version.
+  (c) Supplementary plane codepoints (U+10000 and above) are acceptable provided that
+      the platform's wchar_t type is at least 32 bits (which is the POSIX requirement).
+<<<
+COMMENT: >>>
+The three sentinels follow the notcurses probing strategy documented in the global
+synthesis (section 2.10, Method 3): U+28FF for Unicode 3, U+1FB38 for Unicode 13,
+U+1CD00 for Unicode 16. Braille (U+28FF) is an ideal Unicode-3 sentinel because the
+Braille Patterns block (U+2800–U+28FF) was added in Unicode 3.0 and the pattern of
+all eight dots (U+28FF) is consistently assigned a column width of 1 by all conforming
+locales. The sextant (U+1FB38) and octant (U+1CD00) sentinels come from the Symbols
+for Legacy Computing blocks introduced in Unicode 13.0 and 16.0 respectively; these
+blocks were specifically designed for terminal rendering and their column widths are
+unambiguous (width 1, not wide characters). Using named constants rather than inline
+hex literals makes the intent self-documenting and simplifies future maintenance if
+sentinel codepoints need to be replaced.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Probing Algorithm
+
+[REQUIREMENT]
+UID: FUNC-WCW-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sentinel Probing Algorithm
+STATEMENT: >>>
+The library shall implement the wcwidth() probing algorithm as a function that calls
+C_Wcwidth (FUNC-WCW-001) on each sentinel codepoint in ascending Unicode version order
+and returns the highest Wcwidth_Level for which a positive column width is reported.
+
+The algorithm shall proceed as follows:
+
+  Step 1. Call C_Wcwidth with WCW_SENTINEL_UNI16 (U+1CD00, Unicode 16).
+          If the return value is >= 1, return Wcwidth_Level of Unicode_16 immediately.
+
+  Step 2. Call C_Wcwidth with WCW_SENTINEL_UNI13 (U+1FB38, Unicode 13).
+          If the return value is >= 1, return Wcwidth_Level of Unicode_13 immediately.
+
+  Step 3. Call C_Wcwidth with WCW_SENTINEL_UNI3 (U+28FF, Unicode 3).
+          If the return value is >= 1, return Wcwidth_Level of Unicode_3 immediately.
+
+  Step 4. If none of the above sentinels returns >= 1, return Unknown.
+
+The algorithm shall test sentinels in descending version order (step 1 before step 2
+before step 3) so that the highest supported version is detected with the minimum
+number of wcwidth() calls in the common case where the locale is fully up to date.
+
+A return value of exactly 0 or -1 from C_Wcwidth shall be treated the same as a
+negative return: neither is a positive column width and neither indicates Unicode-level
+support for the associated sentinel.
+
+The probe function body shall be declared with SPARK_Mode => Off because it calls the
+C FFI binding (FUNC-WCW-001). The return type Wcwidth_Level shall be declared in a
+SPARK-visible spec so that callers with SPARK_Mode => On can use the result.
+<<<
+COMMENT: >>>
+Testing in descending version order (Unicode 16, then 13, then 3) is an optimisation
+over ascending order: if the locale supports Unicode 16 it necessarily supports Unicode
+3 and 13 as well, so the descending pass exits after one successful call in the best
+case. Ascending order would require up to three calls to establish the same result.
+The sentinels are independent probes (each tests a different codepoint) rather than
+using the result of one probe to condition the next; this makes the algorithm correct
+even on hypothetical locales with non-monotonic Unicode support (e.g., a locale that
+supports Unicode 16 codepoints but has a gap for some Unicode 13 codepoints).
+Treating wcwidth() == 0 the same as -1 is correct: a column width of 0 indicates a
+combining character (zero-width), which is not a positive rendering capability for the
+purposes of Unicode level detection. The SPARK_Mode => Off annotation on the probe
+body is unavoidable (C FFI); the clean boundary is placed at the return type, which is
+a simple enumeration visible to SPARK callers.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Result Type
+
+[REQUIREMENT]
+UID: FUNC-WCW-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Wcwidth_Level Result Enumeration
+STATEMENT: >>>
+The library shall define a new enumeration type Wcwidth_Level to represent the Unicode
+version level determined by wcwidth() probing. This type is distinct from the existing
+Unicode_Level type (FUNC-UNI-001) in order to preserve the semantic difference between
+"Unicode level inferred from environment variables" and "Unicode level confirmed by
+C library wcwidth() support":
+
+  type Wcwidth_Level is
+     (Unknown,     -- wcwidth() probe was inconclusive or not performed
+      Unicode_3,   -- locale supports at least Unicode 3.0 (U+28FF renders with width 1)
+      Unicode_13,  -- locale supports at least Unicode 13.0 (U+1FB38 renders with width 1)
+      Unicode_16); -- locale supports at least Unicode 16.0 (U+1CD00 renders with width 1)
+
+The values shall be ordered such that Unknown < Unicode_3 < Unicode_13 < Unicode_16.
+This ordering allows callers to compare levels and compute minima and maxima without
+branching on the Unknown case; Unknown is treated as the lowest possible level.
+
+The Wcwidth_Level type shall be declared in the SPARK-visible package spec (SPARK_Mode
+=> On) alongside the probe function specification. It shall be a plain enumeration type
+with no discriminants, no record components, and no access type components.
+
+The mapping between Wcwidth_Level and the existing Unicode_Level type (FUNC-UNI-001)
+shall be:
+  Unknown    → (no upgrade; existing level unchanged)
+  Unicode_3  → Basic (at minimum)
+  Unicode_13 → Basic (at minimum; Extended not yet defined at this granularity)
+  Unicode_16 → Extended
+
+This mapping is used by the integration function (FUNC-WCW-005).
+<<<
+COMMENT: >>>
+A separate Wcwidth_Level type (rather than reusing Unicode_Level directly) is chosen
+for three reasons. First, the probe distinguishes three positive levels (Unicode 3, 13,
+16) whereas Unicode_Level has only two positive levels (Basic, Extended); collapsing
+the probe result immediately to Unicode_Level would lose information that could be
+useful to future requirements. Second, Unknown is semantically distinct from None:
+None means "the terminal is confirmed to have no Unicode support", whereas Unknown
+means "the probe was not performed or was inconclusive" — conflating them in a single
+type would incorrectly demote Unknown to a negative signal. Third, a separate type
+decouples the probing feature from the env-var detection feature, allowing each to
+evolve independently. The mapping from Wcwidth_Level to Unicode_Level (defined here
+rather than in FUNC-WCW-005) is the single authoritative conversion rule and must be
+applied consistently wherever the two types interact.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with Unicode Detection
+
+[REQUIREMENT]
+UID: FUNC-WCW-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Integration with Existing Unicode Detection Cascade
+STATEMENT: >>>
+The library shall provide a function that combines the env-var-based Unicode_Level
+result (from Termicap.Unicode.Detect_Unicode_Level, FUNC-UNI-002) with the
+wcwidth()-based Wcwidth_Level result (from FUNC-WCW-003) to produce a final, refined
+Unicode_Level. A representative signature is:
+
+  function Refine_Unicode_Level
+     (Env_Level  : Termicap.Unicode.Unicode_Level;
+      Wcw_Level  : Wcwidth_Level)
+      return Termicap.Unicode.Unicode_Level
+  with Global => null;
+
+The combination rules shall be:
+
+  1. If Wcw_Level is Unknown, return Env_Level unchanged. The probe contributes nothing
+     when it is inconclusive.
+
+  2. Convert Wcw_Level to a Unicode_Level using the mapping defined in FUNC-WCW-004
+     (Unicode_3 → Basic, Unicode_13 → Basic, Unicode_16 → Extended).
+
+  3. Return the maximum of Env_Level and the converted Wcwidth value:
+       Result := Unicode_Level'Max (Env_Level, To_Unicode_Level (Wcw_Level))
+
+     The wcwidth() probe may only upgrade the Unicode level; it shall never downgrade it.
+     If the env-var cascade returns Extended but the wcwidth() probe returns Unicode_3,
+     the result remains Extended.
+
+Refine_Unicode_Level shall be declared with SPARK_Mode => On, Global => null, and shall
+be a pure function with no side effects.
+
+The typical caller sequence is:
+  Env_Level  := Detect_Unicode_Level (Env);       -- pure, env-var cascade
+  Wcw_Level  := Probe_Wcwidth_Level;               -- FFI, may be Unknown
+  Final_Level := Refine_Unicode_Level (Env_Level, Wcw_Level);
+<<<
+COMMENT: >>>
+The wcwidth() probe is treated as an additive refinement, not a replacement, for the
+env-var cascade. The env-var cascade (locale, CI heuristics, Windows heuristics) is
+the primary detection method: it is portable, has no side effects, and works even when
+wcwidth() is unavailable or returns -1 due to locale misconfiguration. The wcwidth()
+probe supplements the cascade by providing a direct measurement of the C library's
+Unicode table coverage, which the env-var cascade cannot distinguish (a UTF-8 locale
+may use an old glibc with Unicode 3 tables or a modern musl-libc with Unicode 16
+tables). The "upgrade only" rule (max operation) is essential for correctness: the
+probe must never demote a result established by a higher-confidence source. In
+particular, a CI environment detected as Unicode-capable by FUNC-UNI-006 must remain
+Basic even if the CI container's locale returns -1 for all wcwidth() probes. The
+function is SPARK Silver provable because it operates only on enumeration values with
+no FFI dependency.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WCW-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Fallback When Probe Fails or Is Inconclusive
+STATEMENT: >>>
+When the wcwidth() probe cannot be performed or produces an inconclusive result, the
+library shall fall back silently to the env-var-based Unicode detection result
+(FUNC-UNI-002) without any error or diagnostic output at the user-facing level.
+
+The following conditions shall cause the probe to return Wcwidth_Level of Unknown,
+triggering the fallback:
+
+  1. The platform is Windows (OS_TYPE = "Windows_NT") and no POSIX-compatible wcwidth()
+     implementation is available. The probe shall detect this condition at compile time
+     or at runtime via a platform check and return Unknown without attempting the FFI
+     call.
+
+  2. setlocale() has not been called or returned NULL (locale initialisation failure).
+     If the locale initialisation check (FUNC-WCW-006) detects this, the probe shall
+     return Unknown.
+
+  3. All three sentinel codepoints return -1 from wcwidth(). This indicates a locale
+     that does not recognise any of the sentinel codepoints as printable wide characters
+     (e.g., the "C" or "POSIX" locale). The probe returns Unknown rather than
+     fabricating a level.
+
+  4. An unexpected value is returned by C_Wcwidth for all sentinels (e.g., 0 for a
+     character that should have width 1), which indicates a malfunctioning or
+     non-conforming wcwidth() implementation. The probe shall return Unknown.
+
+When Wcwidth_Level is Unknown, Refine_Unicode_Level (FUNC-WCW-005) returns the
+Env_Level unchanged, so the fallback is transparent to the caller.
+<<<
+COMMENT: >>>
+Returning Unknown rather than a specific error code for all failure modes simplifies the
+integration function (FUNC-WCW-005): it needs to handle only two cases — "probe
+produced a level" and "probe did not" — rather than enumerating every failure reason.
+The "C"/"POSIX" locale condition (all sentinels return -1) is expected in many container
+and CI environments where the locale has not been set; treating it as Unknown (rather
+than None) prevents incorrectly demoting the Unicode level established by CI heuristics
+(FUNC-UNI-006). The Windows fallback is specified here rather than in the platform
+portability requirements because it directly affects the probe algorithm's control flow.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Locale and Threading
+
+[REQUIREMENT]
+UID: FUNC-WCW-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Locale Initialisation Requirement
+STATEMENT: >>>
+The wcwidth() function's return values depend on the current locale's character width
+tables, specifically the LC_CTYPE facet. Before calling the probe function
+(FUNC-WCW-003), the process locale must have been initialised by a call to:
+
+  setlocale(LC_CTYPE, "")  or  setlocale(LC_ALL, "")
+
+This call instructs the C runtime to load the locale from the environment (LC_ALL,
+LC_CTYPE, or LANG). Without it, the "C" locale is active and wcwidth() returns -1 for
+all non-ASCII codepoints, making the probe useless.
+
+The library shall document the following requirement for callers:
+
+  The probe function Probe_Wcwidth_Level shall be called only after
+  setlocale(LC_CTYPE, "") (or equivalent) has been invoked. The library shall NOT call
+  setlocale() itself; locale initialisation is the responsibility of the application
+  calling Termicap.
+
+The probe function shall check, before calling C_Wcwidth, that the current LC_CTYPE
+locale is not "C" or "POSIX" (by calling setlocale(LC_CTYPE, NULL) and inspecting the
+result). If the locale is "C" or "POSIX", the probe shall return Unknown immediately
+without calling C_Wcwidth, because no meaningful Unicode level can be inferred from
+the "C" locale.
+
+The Ada binding to setlocale for the locale check shall be declared with SPARK_Mode
+=> Off in the same FFI unit as C_Wcwidth (FUNC-WCW-001).
+<<<
+COMMENT: >>>
+The requirement that the application call setlocale() before Termicap is standard
+practice for any library that uses locale-dependent C functions (wcwidth, mbstowcs, etc.)
+and follows the POSIX rule that the initial locale is always "C" until explicitly
+changed. Termicap does not call setlocale() itself because doing so would be a
+side-effect that changes global process state; for a detection library that claims to
+have no side effects, invisibly changing the locale would be surprising and potentially
+harmful to application code that relies on the "C" locale for string formatting (e.g.,
+printf("%.2f") with locale-specific decimal separators). The locale-check-before-probe
+pattern (inspect LC_CTYPE via setlocale(LC_CTYPE, NULL)) is a defensive guard: it
+makes the common misconfiguration (calling Probe_Wcwidth_Level before setlocale()) fail
+gracefully (returning Unknown) rather than returning a misleading Unicode_3 result due
+to all sentinels returning -1.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-WCW-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: Thread Safety and Locale Constraints
+STATEMENT: >>>
+The wcwidth() function and the locale subsystem (setlocale()) use process-global state
+on POSIX systems. The Termicap wcwidth() probe is therefore subject to the following
+documented constraints:
+
+  1. Probe_Wcwidth_Level is NOT thread-safe if another thread may be calling
+     setlocale() concurrently. The function shall be documented as "safe to call
+     from multiple threads provided no thread is changing the locale concurrently".
+
+  2. Probe_Wcwidth_Level shall be designed to be called once, at process initialisation,
+     before application threads are spawned. This is the recommended usage pattern.
+
+  3. If the application requires locale changes at runtime (e.g., switching LC_CTYPE
+     between threads), it is the application's responsibility to ensure that
+     Probe_Wcwidth_Level has already returned before any locale changes are made.
+
+  4. On platforms that provide the POSIX 2008 uselocale() extension (Linux, macOS,
+     FreeBSD), the library may, as a quality-of-implementation improvement, use
+     newlocale() / uselocale() to temporarily apply a thread-local locale for the
+     probe calls. If this improvement is implemented, it shall be transparent to the
+     caller and shall leave the process-global locale unchanged. This is optional and
+     shall not affect correctness on platforms lacking uselocale().
+
+  5. The probe shall not hold any Termicap-internal locks or semaphores. If the caller
+     must guard the probe call, it shall use its own synchronisation primitive.
+
+These constraints shall be documented in the package specification of the wcwidth probe
+unit, visible to all callers at compile time.
+<<<
+COMMENT: >>>
+The thread-safety limitation of setlocale() / wcwidth() is a well-known POSIX issue:
+the POSIX standard only requires that setlocale() be thread-safe with respect to itself
+(i.e., concurrent setlocale() calls are not required to be atomic). On Linux, glibc
+implements setlocale() with an internal lock, but wcwidth() does not take that lock —
+it reads the locale data directly through a thread-unsafe global pointer. On macOS and
+FreeBSD the behaviour is similar. Documenting this limitation explicitly (rather than
+silently ignoring it) is the correct approach for a library that targets SPARK Silver
+and aims for transparent correctness. The uselocale() improvement is mentioned as
+optional because it is the right long-term solution (it eliminates the race condition
+entirely by isolating the probe to a thread-local locale), but it is not universally
+available and its implementation requires additional FFI bindings beyond the scope of
+this specification.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Error Handling
+
+[REQUIREMENT]
+UID: FUNC-WCW-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Graceful Handling of wcwidth() Returning -1
+STATEMENT: >>>
+The probe function (FUNC-WCW-003) shall handle every possible return value of C_Wcwidth
+gracefully without raising an Ada exception or propagating a C signal:
+
+  Return value >= 1 : The codepoint is printable and occupies the returned number of
+                       columns. For sentinel codepoints, any value >= 1 is treated as a
+                       positive detection of the associated Unicode level.
+
+  Return value == 0 : The codepoint is a zero-width character (combining mark or similar).
+                       For sentinel codepoints, 0 is treated as a non-detection (the same
+                       as -1), because all three sentinels are assigned column width 1 by
+                       the Unicode standard.
+
+  Return value == -1 : The codepoint is not supported in the current locale or is a
+                        non-printable character. Treated as a non-detection for the
+                        associated sentinel.
+
+  Return value < -1  : Theoretically impossible on a conforming POSIX implementation, but
+                        the code shall treat any value < 1 uniformly as non-detection to
+                        guard against non-conforming implementations.
+
+No condition on the wcwidth() return value shall cause an exception to be raised or a
+result of type error to be returned to the caller. All such conditions shall be
+silently absorbed and represented as non-detection (contributing to an Unknown result
+if all sentinels fail, FUNC-WCW-011).
+
+The probe function shall not check for Constraint_Error from the Interfaces.C.int to
+Ada Integer conversion; if the platform's int type can produce values outside Ada
+Integer's range, the SPARK_Mode => Off body shall use unchecked conversion or explicit
+range checks to prevent this.
+<<<
+COMMENT: >>>
+The -1 return from wcwidth() is not an error in the traditional sense — it is a defined,
+documented return value meaning "this character is not representable in the current
+locale". The probe algorithm treats it as absence of Unicode support for the associated
+sentinel, which is the correct interpretation. The guard against values < -1 is a
+defensive programming measure for non-conforming C libraries; it has no practical impact
+on correct POSIX implementations but prevents undefined behaviour from malformed return
+values on exotic platforms. The Interfaces.C.int range check note is important for SPARK
+correctness: on all known 32-bit and 64-bit POSIX platforms, C int is 32 bits and Ada
+Integer is at least 32 bits, so no overflow is possible in practice, but the SPARK
+prover cannot know this without an explicit bounds check or a pragma Assume.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: SPARK Boundary
+
+[REQUIREMENT]
+UID: FUNC-WCW-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Boundary — FFI Layer and Proof Scope
+STATEMENT: >>>
+The wcwidth() probing feature shall be split across two SPARK annotation zones:
+
+  SPARK_Mode => Off (FFI layer):
+    - The C_Wcwidth binding (FUNC-WCW-001)
+    - The setlocale() check binding (FUNC-WCW-006)
+    - The body of Probe_Wcwidth_Level that calls C_Wcwidth
+    These shall be placed in a package body (e.g., Termicap.Wcwidth.FFI) annotated with
+    SPARK_Mode => Off. The package specification for this body may be SPARK_Mode => On
+    if it only exports types and function specifications without Import aspects.
+
+  SPARK_Mode => On (logic layer):
+    - The Wcwidth_Level enumeration type (FUNC-WCW-004)
+    - The sentinel codepoint constants (FUNC-WCW-002)
+    - The Refine_Unicode_Level function (FUNC-WCW-005)
+    - The caching wrapper if implemented (FUNC-WCW-010)
+    - The public Probe_Wcwidth_Level specification (function spec without body)
+    These shall be in a package spec (e.g., Termicap.Wcwidth) annotated with
+    SPARK_Mode => On.
+
+The Probe_Wcwidth_Level function specification shall be declared without a body
+annotation in the SPARK-visible spec; a SPARK_Mode => Off body provides the
+implementation. This is the same SPARK boundary pattern used by the OSC Query
+Infrastructure (FUNC-OSC-015) and the TTY detection feature (FUNC-TTY-005).
+
+GNATprove shall be able to verify Refine_Unicode_Level (FUNC-WCW-005) at Silver level.
+Probe_Wcwidth_Level itself is excluded from proof (SPARK_Mode => Off body) but its
+specification is visible to SPARK callers.
+<<<
+COMMENT: >>>
+The SPARK boundary placement follows the Termicap architectural pattern: all C FFI calls
+are confined to SPARK_Mode => Off package bodies, while pure logic (type definitions,
+pure functions, integration logic) is SPARK_Mode => On and GNATprove-verifiable. This
+maximises the SPARK coverage of the feature while correctly excluding the FFI layer.
+The separation also makes unit testing easier: the logic layer (Refine_Unicode_Level)
+can be tested independently with mock Wcwidth_Level values without any real wcwidth()
+calls. The function specification for Probe_Wcwidth_Level must be in the SPARK-visible
+spec (even though the body is Off) so that callers with SPARK contracts can call it and
+reason about its return type; GNATprove accepts such specifications by treating the Off
+body as an opaque black box.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Caching
+
+[REQUIREMENT]
+UID: FUNC-WCW-010
+STATUS: Approved
+PRIORITY: Should
+TITLE: Cached Probe Result
+STATEMENT: >>>
+The probe function Probe_Wcwidth_Level shall cache its result after the first successful
+call and return the cached value on subsequent calls, avoiding redundant wcwidth() FFI
+calls.
+
+The cache shall be implemented as a protected object or a guarded package-level
+variable that stores an Optional_Wcwidth_Level value. Optional_Wcwidth_Level is a
+discriminated record with discriminant Is_Set : Boolean:
+
+  type Optional_Wcwidth_Level (Is_Set : Boolean := False) is record
+     case Is_Set is
+        when True  => Level : Wcwidth_Level;
+        when False => null;
+     end case;
+  end record;
+
+The initial value of the cache shall have Is_Set => False (probe not yet performed).
+On the first call to Probe_Wcwidth_Level:
+  1. Acquire a lock (or use a protected object) to prevent duplicate initialisation
+     from concurrent calls.
+  2. Perform the probe (FUNC-WCW-003).
+  3. Store the result in the cache with Is_Set => True.
+  4. Release the lock.
+  5. Return the result.
+On subsequent calls, if Is_Set is True, return the cached Level immediately without
+taking the lock (or with a read-only lock if concurrent locale changes are possible).
+
+The cache shall be invalidated if setlocale() is called after the first probe; however,
+since Termicap does not call setlocale() itself (FUNC-WCW-006) and the recommended
+usage is to probe at startup, cache invalidation is not required in the base
+implementation. The cache design shall document this limitation.
+
+The caching implementation shall be in the SPARK_Mode => Off package body. The
+Optional_Wcwidth_Level type may be in the SPARK-visible spec.
+<<<
+COMMENT: >>>
+Caching is a "Should" (not "Must") because the three wcwidth() calls are individually
+very cheap (microsecond-level POSIX library calls) and the probe is designed to be
+called once at startup. However, if application code inadvertently calls
+Probe_Wcwidth_Level in a hot path, the FFI overhead would accumulate. Caching
+eliminates this risk at negligible implementation cost. The cache does not need to
+handle locale changes because Termicap's usage model (probe at startup, use result
+throughout the process lifetime) does not involve locale changes after initialisation.
+The Optional discriminated record avoids a separate Boolean flag variable and keeps the
+"not yet set" state explicit. The lock (or protected object) is required for the first
+call to be thread-safe even if subsequent reads are lock-free; without it, two threads
+calling Probe_Wcwidth_Level simultaneously before the cache is populated could both
+perform the probe and write to the cache variable in an unprotected manner.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Public API
+
+[REQUIREMENT]
+UID: FUNC-WCW-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Public API — Probe Function Specification
+STATEMENT: >>>
+The library shall expose the wcwidth() probing feature through the following public API,
+declared in the package spec Termicap.Wcwidth (SPARK_Mode => On):
+
+  -- Wcwidth_Level result type (FUNC-WCW-004)
+  type Wcwidth_Level is (Unknown, Unicode_3, Unicode_13, Unicode_16);
+
+  -- Sentinel codepoint constants (FUNC-WCW-002)
+  WCW_SENTINEL_UNI3  : constant := 16#28FF#;
+  WCW_SENTINEL_UNI13 : constant := 16#1FB38#;
+  WCW_SENTINEL_UNI16 : constant := 16#1CD00#;
+
+  -- Probe function: performs wcwidth() calls and returns the detected level.
+  -- Caches the result after the first call (FUNC-WCW-010).
+  -- Returns Unknown if the probe is inconclusive or unavailable (FUNC-WCW-011).
+  -- Precondition: setlocale(LC_CTYPE, "") must have been called before this function
+  -- (FUNC-WCW-006).
+  function Probe_Wcwidth_Level return Wcwidth_Level;
+
+  -- Integration function: combines env-var result with wcwidth probe result.
+  -- Pure, SPARK Silver provable (FUNC-WCW-005).
+  function Refine_Unicode_Level
+     (Env_Level : Termicap.Unicode.Unicode_Level;
+      Wcw_Level : Wcwidth_Level)
+      return Termicap.Unicode.Unicode_Level
+  with Global => null;
+
+The package shall depend on Termicap.Unicode (for the Unicode_Level type) and
+Termicap.Environment (for consistency with the rest of the Termicap API).
+
+The package name Termicap.Wcwidth is tentative; the final package name shall be
+confirmed during technical specification (tech-spec phase) to align with the overall
+Termicap package hierarchy naming conventions.
+<<<
+COMMENT: >>>
+The public API is deliberately minimal: one probe function and one integration function.
+All sentinel constants are exported so that callers can reference them in test code and
+documentation without duplicating the hex values. The precondition on Probe_Wcwidth_Level
+(setlocale must have been called) cannot be enforced at compile time or by the SPARK
+prover (it depends on runtime C state); it is therefore a documented contract obligation
+on the caller rather than a formal pre-condition with a SPARK assertion. The tentative
+package name note is included because the Termicap package hierarchy uses flat names
+(Termicap.Unicode, Termicap.Color, Termicap.TTY, etc.); Termicap.Wcwidth follows the
+same pattern but the exact name may change during tech-spec if a different
+organisational grouping is preferred (e.g., as a child of Termicap.Unicode).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Testing
+
+[REQUIREMENT]
+UID: FUNC-WCW-013
+STATUS: Approved
+PRIORITY: Should
+TITLE: Integration Test — Probe Result for Known Environments
+STATEMENT: >>>
+The test suite shall include integration tests that verify the behaviour of
+Probe_Wcwidth_Level in controlled environments. The following test scenarios shall be
+covered:
+
+  1. UTF-8 locale test: when the process locale is set to a UTF-8 locale that includes
+     Unicode 13 support (e.g., "en_US.UTF-8" on a system with glibc >= 2.31 or
+     equivalent), Probe_Wcwidth_Level shall return at least Unicode_13.
+
+  2. "C" locale test: when the process locale is "C" or "POSIX",
+     Probe_Wcwidth_Level shall return Unknown (locale check guard from FUNC-WCW-006
+     applies before any C_Wcwidth call).
+
+  3. Unit test for Refine_Unicode_Level: given all combinations of Unicode_Level
+     (None, Basic, Extended) and Wcwidth_Level (Unknown, Unicode_3, Unicode_13,
+     Unicode_16), verify that the result satisfies:
+       - Result >= Env_Level (probe never downgrades)
+       - If Wcw_Level is Unknown, Result = Env_Level
+       - If Wcw_Level = Unicode_16, Result >= Extended
+
+  4. Sentinel constant sanity test: verify that the three sentinel constants
+     (WCW_SENTINEL_UNI3, WCW_SENTINEL_UNI13, WCW_SENTINEL_UNI16) have the correct
+     hex values (16#28FF#, 16#1FB38#, 16#1CD00#) as a compile-time or run-time check.
+
+  5. Caching test: verify that calling Probe_Wcwidth_Level twice in succession returns
+     the same value and (where testable via mock injection) that C_Wcwidth is called at
+     most three times total across both invocations.
+
+The integration tests that depend on locale state (scenarios 1 and 2) shall be tagged
+as environment-dependent and shall be skipped gracefully (reporting "skipped, locale
+not available") when the required locale is not installed on the test system.
+<<<
+COMMENT: >>>
+The test suite requirements follow the Termicap convention established for other feature
+test requirements (e.g., FUNC-DA1, FUNC-TIF) of separating pure unit tests from
+environment-dependent integration tests. The Refine_Unicode_Level unit tests (scenario 3)
+cover all 12 input combinations (3 × 4) and are fully deterministic, making them
+suitable for CI. The locale-dependent tests (scenarios 1 and 2) require real C library
+behaviour and cannot be mocked; they are most useful as post-installation validation
+tests. The caching test (scenario 5) ideally requires dependency injection to replace
+C_Wcwidth with a counter-enabled mock; if the architecture does not support this, the
+test can verify the return value consistency without counting FFI calls.
+<<<
+
+[/SECTION]

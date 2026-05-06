@@ -28,6 +28,9 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Termicap.Terminfo / Termicap.Terminfo.IO](terminfo.md)**
   Terminfo database parsing — `Terminfo_Snapshot` result record, `Terminfo_Result` discriminated type, SPARK Silver binary parser (`Parse_Buffer`, `Detect_Format`, `Parse_Header`, `Get_Numeric`, `Get_String`, `Extract_Truecolor_Flags`), POSIX file I/O entry point (`Parse_Terminfo`, `Read_File`)
 
+- **[Termicap.Wcwidth](termicap-wcwidth.md)**
+  wcwidth() probing for Unicode level — `Wcwidth_Level` enumeration (`Unknown`, `Unicode_3`, `Unicode_13`, `Unicode_16`), `Optional_Wcwidth_Level` cache type, sentinel constants (`WCW_SENTINEL_UNI3/13/16`), `Probe_Wcwidth_Level` (FFI, cached, locale guard), pure `Refine_Unicode_Level` (SPARK Silver, upgrade-only)
+
 - **[Termicap.Dimensions](termicap-dimensions.md)**
   Terminal dimensions detection — `Terminal_Size` type, `Get_Size` function, ioctl/env-var/default fallback chain
 

@@ -945,11 +945,21 @@
           "id": "WCWIDTH",
           "name": "wcwidth() Probing for Unicode Level",
           "summary": "Call wcwidth() on sentinel codepoints to detect Unicode version: U+28FF (Braille, Unicode 3), U+1FB38 (sextant, Unicode 13), U+1CD00 (octant, Unicode 16).",
-          "status": "next",
+          "status": "done",
           "spark_level": "N/A (Ada FFI)",
           "ffi": true,
-          "requirement_uids": [],
-          "source_files": [],
+          "requirement_uids": [
+            "FUNC-WCW-001", "FUNC-WCW-002", "FUNC-WCW-003", "FUNC-WCW-004",
+            "FUNC-WCW-005", "FUNC-WCW-006", "FUNC-WCW-007", "FUNC-WCW-008",
+            "FUNC-WCW-009", "FUNC-WCW-010", "FUNC-WCW-011", "FUNC-WCW-012",
+            "FUNC-WCW-013"
+          ],
+          "source_files": [
+            "src/termicap-wcwidth.ads",
+            "src/posix/termicap-wcwidth.adb",
+            "src/windows/termicap-wcwidth.adb",
+            "src/c/termicap_wcwidth.c"
+          ],
           "doc_refs": [
             {
               "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
@@ -962,7 +972,7 @@
           "id": "CELL-WIDTH",
           "name": "Cell Width Measurement Tables",
           "summary": "Binary search over precomputed Unicode width tables for correct text layout. ZWJ and VS16 handling. UNICODE_VERSION env var to select table version. Gold SPARK (pure lookup + arithmetic).",
-          "status": "pending",
+          "status": "next",
           "spark_level": "Gold",
           "ffi": false,
           "requirement_uids": [],

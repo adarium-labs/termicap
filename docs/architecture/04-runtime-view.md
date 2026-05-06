@@ -2701,6 +2701,144 @@ Termicap.Clipboard.IO.Detect_Clipboard    [SPARK_Mode => Off]
 
 ---
 
+## Scenario 31: wcwidth() Probing for Unicode Level
+
+End-to-end scenario for the three-phase call sequence `Detect_Unicode_Level` → `Probe_Wcwidth_Level` → `Refine_Unicode_Level`. Shows the locale guard, the descending sentinel probe (16 → 13 → 3), the per-process cache, the Windows stub fast-path, and the upgrade-only integration with the env-var-based `Unicode_Level` result. The probe has no TTY dependency and requires no `Probe_Session`.
+
+### Phase A — Environment Cascade (SPARK Silver)
+
+```
+Application Init (Ada-only region)
+  │
+  │  Env       : Environment;
+  │  Env_Level : Termicap.Unicode.Unicode_Level;
+  │
+  │  Capture_Current (Env);              -- Scenario 1 (SPARK_Mode => Off)
+  │
+  ▼
+Termicap.Unicode.Detect_Unicode_Level (Env)   [SPARK Silver, Global => null]
+  │
+  │  5-step env-var cascade (see Scenario 9):
+  │    locale → TERM=linux exclusion → CI heuristics → Windows heuristics → default
+  │
+  └──► Env_Level : Unicode_Level  (None / Basic / Extended)
+```
+
+### Phase B — wcwidth() Probe (SPARK_Mode => Off)
+
+```
+  │
+  │  Wcw_Level := Termicap.Wcwidth.Probe_Wcwidth_Level;
+  │                   [spec: SPARK On, body: SPARK_Mode => Off]
+  ▼
+Termicap.Wcwidth body (POSIX or Windows)
+  │
+  │  [Windows body only]
+  │    Return Unknown immediately (no POSIX wcwidth() available)
+  │  [End Windows-only]
+  │
+  │  [POSIX body]
+  │
+  │  Step 1: Cache check (Wcwidth_Cache.Get)
+  │    Is_Set = True?
+  │      Yes → return cached Level immediately  (< 1 µs)
+  │      No  → continue
+  │
+  │  Step 2: Locale guard  (FUNC-WCW-006)
+  │    C_Setlocale (LC_CTYPE, Null_Ptr)
+  │      [C binding to setlocale(LC_CTYPE, NULL) — SPARK_Mode => Off]
+  │    Result is NULL?
+  │      Yes → cache Unknown; return Unknown
+  │    Result = "C" or "POSIX"?
+  │      Yes → cache Unknown; return Unknown
+  │            (locale not initialised with setlocale(LC_CTYPE, "");
+  │             wcwidth() would return -1 for all non-ASCII codepoints)
+  │
+  │  Step 3: Probe Unicode 16  (FUNC-WCW-003, step 1)
+  │    C_Wcwidth (wchar_t (WCW_SENTINEL_UNI16))
+  │      [C binding to wcwidth() — SPARK_Mode => Off]
+  │      WCW_SENTINEL_UNI16 = 16#1CD00# (U+1CD00, Unicode 16.0)
+  │    Return value >= 1?
+  │      Yes → cache Unicode_16; return Unicode_16
+  │
+  │  Step 4: Probe Unicode 13  (FUNC-WCW-003, step 2)
+  │    C_Wcwidth (wchar_t (WCW_SENTINEL_UNI13))
+  │      WCW_SENTINEL_UNI13 = 16#1FB38# (U+1FB38, Unicode 13.0)
+  │    Return value >= 1?
+  │      Yes → cache Unicode_13; return Unicode_13
+  │
+  │  Step 5: Probe Unicode 3  (FUNC-WCW-003, step 3)
+  │    C_Wcwidth (wchar_t (WCW_SENTINEL_UNI3))
+  │      WCW_SENTINEL_UNI3 = 16#28FF# (U+28FF, Unicode 3.0)
+  │    Return value >= 1?
+  │      Yes → cache Unicode_3; return Unicode_3
+  │
+  │  Step 6: All probes failed  (FUNC-WCW-003, step 4)
+  │    cache Unknown; return Unknown
+  │    (e.g., C/POSIX locale, non-conforming wcwidth(), very old glibc)
+  │
+  └──► Wcw_Level : Wcwidth_Level  (Unknown / Unicode_3 / Unicode_13 / Unicode_16)
+```
+
+### Phase C — Upgrade-Only Integration (SPARK Silver)
+
+```
+  │
+  │  Final_Level := Termicap.Wcwidth.Refine_Unicode_Level
+  │                   (Env_Level, Wcw_Level);
+  │                   [SPARK Silver, Global => null]
+  ▼
+Termicap.Wcwidth.Refine_Unicode_Level  [SPARK Silver, Global => null]
+  │
+  │  case Wcw_Level is
+  │    when Unknown =>
+  │      return Env_Level;              -- probe contributes nothing
+  │    when Unicode_3 | Unicode_13 =>
+  │      return Unicode_Level'Max (Env_Level, Basic);
+  │      -- upgrade to at least Basic; never downgrade Extended
+  │    when Unicode_16 =>
+  │      return Unicode_Level'Max (Env_Level, Extended);
+  │      -- upgrade to at least Extended; no-op if already Extended
+  │  end case;
+  │
+  └──► Final_Level : Unicode_Level  (None / Basic / Extended)
+         — always >= Env_Level (upgrade-only rule)
+```
+
+**Key properties:**
+
+- **No TTY required.** `Probe_Wcwidth_Level` calls the C library directly via `wcwidth()` — it never opens `/dev/tty`, creates a `Probe_Session`, or checks TTY status. The locale is a process-global property, not a TTY property.
+- **Locale precondition.** `setlocale(LC_CTYPE, "")` (or `setlocale(LC_ALL, "")`) must have been called by the application before `Probe_Wcwidth_Level`. The library does not call `setlocale()` itself (it has process-global side effects). The locale guard in Step 2 detects the uninitialized "C"/"POSIX" locale and returns `Unknown` gracefully rather than returning a misleading `Unicode_3` result due to all sentinels returning -1.
+- **Descending probe order.** Sentinels are tested in descending Unicode version order (16 → 13 → 3). On modern systems with Unicode 16 locale tables, the probe returns after one successful `wcwidth()` call. On older systems, the cascade continues until the first successful probe or exhaustion.
+- **Upgrade-only integration.** `Refine_Unicode_Level` uses `Unicode_Level'Max` so the wcwidth probe may only raise the Unicode level inferred from environment variables — it never lowers it. A CI environment detected as `Basic` by FUNC-UNI-006 remains at least `Basic` even if the container's locale returns -1 for all probes (which gives `Wcw_Level = Unknown`, which is a no-op in `Refine_Unicode_Level`).
+- **Per-process cache.** The first call to `Probe_Wcwidth_Level` performs all C FFI calls and stores the result in the `Wcwidth_Cache` protected object. Subsequent calls return the cached value in < 1 µs with no FFI overhead.
+- **Thread safety.** The protected object (`Wcwidth_Cache`) makes first-call initialisation safe against concurrent callers. The `wcwidth()` and `setlocale()` calls are outside the protected region (POSIX does not require them to be serialised). The recommended usage is to call `Probe_Wcwidth_Level` once at startup, before spawning threads (FUNC-WCW-009).
+- **Windows fallback.** The Windows body returns `Unknown` unconditionally. `Refine_Unicode_Level` then returns `Env_Level` unchanged. The Windows env-var cascade (WT_SESSION, TERM_PROGRAM) is still applied in Phase A, providing correct Unicode level detection on Windows without any `wcwidth()` call.
+- **SPARK boundary.** `Refine_Unicode_Level` is fully SPARK Silver provable (pure case statement, `Global => null`). `Probe_Wcwidth_Level` spec is SPARK-visible so SPARK callers can call it and reason about its `Wcwidth_Level` return type; the Off body is an opaque black box to GNATprove.
+
+**Integration test pattern (locale-dependent):**
+
+```ada
+--  Call once at process startup (after setlocale):
+--    setlocale(LC_CTYPE, "")  -- required; Termicap does not call this
+--
+declare
+   Env         : Environment;
+   Env_Level   : Termicap.Unicode.Unicode_Level;
+   Wcw_Level   : Termicap.Wcwidth.Wcwidth_Level;
+   Final_Level : Termicap.Unicode.Unicode_Level;
+begin
+   Capture_Current (Env);
+   Env_Level   := Termicap.Unicode.Detect_Unicode_Level (Env);
+   Wcw_Level   := Termicap.Wcwidth.Probe_Wcwidth_Level;
+   Final_Level := Termicap.Wcwidth.Refine_Unicode_Level (Env_Level, Wcw_Level);
+   --  Final_Level >= Env_Level always (upgrade-only)
+   pragma Assert (Final_Level >= Env_Level);
+end;
+```
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -2747,4 +2885,6 @@ Termicap.Clipboard.IO.Detect_Clipboard    [SPARK_Mode => Off]
 - **ADR-0029** (`docs/adr/0029-graphics-package-naming.md`): Rationale for the `Termicap.Graphics` / `Termicap.Graphics.IO` package naming and deferred integration
 - **Tech Spec TERMINFO** (`docs/tech-specs/terminfo.md`): Terminfo database parsing design rationale — binary format variants, ghost predicate SPARK strategy, search-path resolution order, path construction algorithm, truecolor flag extraction
 - **Tech Spec OSC52** (`docs/tech-specs/osc52-clipboard.md`): OSC 52 Clipboard Detection design rationale — three-phase cascade, DA1 Ps=52 extension, active read-back probe, env-var heuristics, multiplexer passthrough, independent session strategy, SPARK boundary
+- **Tech Spec WCWIDTH** (`docs/tech-specs/wcwidth.md`): wcwidth() Probing for Unicode Level design rationale — sentinel codepoint selection, descending probe order, locale guard, caching strategy, platform dispatch, SPARK boundary
+- **ADR-0032** (`docs/adr/0032-wcwidth-package-placement.md`): Rationale for placing wcwidth probing in `Termicap.Wcwidth` (sibling of `Termicap.Unicode`) rather than as a child package
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018, FUNC-SXL-001 through FUNC-SXL-019
