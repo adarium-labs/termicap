@@ -15,8 +15,27 @@ with Termicap.Environment.Capture;
 
 package body Termicap.XTVERSION.IO is
 
+   ---------------------------------------------------------------------------
+   --  Internal helper: derive passthrough mode from terminal identity.
+   ---------------------------------------------------------------------------
+
+   function Passthrough_For_Identity
+     (Identity : Termicap.Terminal_Id.Terminal_Identity) return Termicap.OSC.Parsing.Passthrough_Mode
+   is
+      use Termicap.Terminal_Id;
+      use Termicap.OSC.Parsing;
+   begin
+      if Identity.Kind = Tmux then
+         return Tmux_Passthrough;
+      elsif Identity.Kind = Screen then
+         return Screen_Passthrough;
+      else
+         return No_Passthrough;
+      end if;
+   end Passthrough_For_Identity;
+
    procedure Query_XTVERSION
-     (Timeout_Ms : Natural; Response : out XTVERSION.Byte_Array; Resp_Length : out Natural; Timed_Out : out Boolean)
+     (Timeout_Ms : Natural; Response : out Byte_Array; Resp_Length : out Natural; Timed_Out : out Boolean)
    is
       use Termicap.OSC;
       use Termicap.Terminal_Id;
@@ -30,20 +49,12 @@ package body Termicap.XTVERSION.IO is
    begin
       --  Capture environment and detect terminal identity for multiplexer check
       Termicap.Environment.Capture.Capture_Current (Env);
-      Identity := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
-
-      --  Determine passthrough mode from terminal identity
-      if Identity.Kind = Tmux then
-         Passthrough := Termicap.OSC.Parsing.Tmux_Passthrough;
-      elsif Identity.Kind = Screen then
-         Passthrough := Termicap.OSC.Parsing.Screen_Passthrough;
-      else
-         Passthrough := Termicap.OSC.Parsing.No_Passthrough;
-      end if;
+      Identity    := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
+      Passthrough := Passthrough_For_Identity (Identity);
 
       declare
-         Wrapped : constant Termicap.OSC.Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough (Termicap.OSC.Byte_Array (CSI_XTVERSION_QUERY), Passthrough);
+         Wrapped : constant Byte_Array :=
+           Termicap.OSC.Parsing.Wrap_For_Passthrough (CSI_XTVERSION_QUERY, Passthrough);
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;
       begin
@@ -67,13 +78,13 @@ package body Termicap.XTVERSION.IO is
          Resp_Length := OSC_Length;
          Timed_Out := OSC_Timeout;
          for I in 1 .. OSC_Length loop
-            Response (I) := XTVERSION.Byte (OSC_Response (I));
+            Response (I) := OSC_Response (I);
          end loop;
       end;
    end Query_XTVERSION;
 
    function Query_And_Identify (Timeout_Ms : Natural := 100) return XTVERSION_Result is
-      Resp_Buffer : XTVERSION.Byte_Array (1 .. XTVERSION.MAX_RESPONSE_SIZE);
+      Resp_Buffer : Byte_Array (1 .. MAX_RESPONSE_SIZE);
       Resp_Len    : Natural;
       Timed_Out   : Boolean;
    begin

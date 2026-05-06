@@ -252,7 +252,7 @@ begin
       --  Hex values:  r     g     b     :     8     0     8     0
       --               /     8     0     8     0     /     8     0
       --               8     0
-      Payload : constant Byte_Array :=
+      Payload : constant Termicap.Byte_Array :=
         [Character'Pos ('r'), Character'Pos ('g'), Character'Pos ('b'),
          Character'Pos (':'),
          Character'Pos ('8'), Character'Pos ('0'),

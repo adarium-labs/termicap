@@ -11,6 +11,7 @@ with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 with Interfaces.C;
 
 with Termicap.Terminfo; use Termicap.Terminfo;
+use Termicap;
 
 use type Termicap.Terminfo.Terminfo_Format;
 use type Termicap.Terminfo.Boolean_Cap_Value;

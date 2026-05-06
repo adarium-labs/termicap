@@ -46,28 +46,28 @@ procedure Osc_Probe_Demo is
    --  Common byte constants for escape sequence construction
    ---------------------------------------------------------------------------
 
-   ESC_BYTE  : constant Termicap.OSC.Byte := 16#1B#;  --  ESC
-   OSC_BYTE  : constant Termicap.OSC.Byte := 16#5D#;  --  ']'
-   ST_BYTE   : constant Termicap.OSC.Byte := 16#5C#;  --  '\'  (String Terminator with ESC)
-   CSI_L     : constant Termicap.OSC.Byte := 16#5B#;  --  '['
-   QUEST     : constant Termicap.OSC.Byte := 16#3F#;  --  '?'
-   SEMI      : constant Termicap.OSC.Byte := 16#3B#;  --  ';'
-   D_1       : constant Termicap.OSC.Byte := 16#31#;  --  '1'
-   D_2       : constant Termicap.OSC.Byte := 16#32#;  --  '2'
-   D_4       : constant Termicap.OSC.Byte := 16#34#;  --  '4'
-   D_6       : constant Termicap.OSC.Byte := 16#36#;  --  '6'
-   D_C       : constant Termicap.OSC.Byte := 16#63#;  --  'c'  (DA1 terminator)
-   DCS_P     : constant Termicap.OSC.Byte := 16#50#;  --  'P'  (DCS introducer with ESC)
-   TMUX_T    : constant Termicap.OSC.Byte := 16#74#;  --  't'
-   TMUX_M    : constant Termicap.OSC.Byte := 16#6D#;  --  'm'
-   TMUX_U    : constant Termicap.OSC.Byte := 16#75#;  --  'u'
-   TMUX_X    : constant Termicap.OSC.Byte := 16#78#;  --  'x'
+   ESC_BYTE  : constant Termicap.Byte := 16#1B#;  --  ESC
+   OSC_BYTE  : constant Termicap.Byte := 16#5D#;  --  ']'
+   ST_BYTE   : constant Termicap.Byte := 16#5C#;  --  '\'  (String Terminator with ESC)
+   CSI_L     : constant Termicap.Byte := 16#5B#;  --  '['
+   QUEST     : constant Termicap.Byte := 16#3F#;  --  '?'
+   SEMI      : constant Termicap.Byte := 16#3B#;  --  ';'
+   D_1       : constant Termicap.Byte := 16#31#;  --  '1'
+   D_2       : constant Termicap.Byte := 16#32#;  --  '2'
+   D_4       : constant Termicap.Byte := 16#34#;  --  '4'
+   D_6       : constant Termicap.Byte := 16#36#;  --  '6'
+   D_C       : constant Termicap.Byte := 16#63#;  --  'c'  (DA1 terminator)
+   DCS_P     : constant Termicap.Byte := 16#50#;  --  'P'  (DCS introducer with ESC)
+   TMUX_T    : constant Termicap.Byte := 16#74#;  --  't'
+   TMUX_M    : constant Termicap.Byte := 16#6D#;  --  'm'
+   TMUX_U    : constant Termicap.Byte := 16#75#;  --  'u'
+   TMUX_X    : constant Termicap.Byte := 16#78#;  --  'x'
 
    ---------------------------------------------------------------------------
    --  Helper: print a byte value as two hex digits
    ---------------------------------------------------------------------------
 
-   procedure Put_Hex_Byte (B : Termicap.OSC.Byte) is
+   procedure Put_Hex_Byte (B : Termicap.Byte) is
       HEX_DIGITS : constant String := "0123456789ABCDEF";
       Hi         : constant Natural := Natural (B) / 16;
       Lo         : constant Natural := Natural (B) mod 16;
@@ -81,7 +81,7 @@ procedure Osc_Probe_Demo is
    ---------------------------------------------------------------------------
 
    procedure Put_Hex_Array
-     (Bytes  : Termicap.OSC.Byte_Array;
+     (Bytes  : Termicap.Byte_Array;
       Length : Natural)
    is
    begin
@@ -119,7 +119,7 @@ begin
       Status    : Termicap.OSC.Session_Status;
 
       --  OSC 11 background color query: ESC ] 1 1 ; ? ESC \
-      OSC_11_Query : constant Termicap.OSC.Byte_Array :=
+      OSC_11_Query : constant Termicap.Byte_Array :=
         [ESC_BYTE, OSC_BYTE, D_1, D_1, SEMI, QUEST, ESC_BYTE, ST_BYTE];
 
       Response    : Termicap.OSC.Response_Buffer;
@@ -215,7 +215,7 @@ begin
    declare
       --  ESC [ ? 6 4 ; 1 ; 2 2 c
       --  Parameters: 64, 1, 22  (xterm capability flags)
-      DA1_Bytes : constant Termicap.OSC.Byte_Array :=
+      DA1_Bytes : constant Termicap.Byte_Array :=
         [ESC_BYTE,
          CSI_L,
          QUEST,
@@ -281,11 +281,11 @@ begin
 
    declare
       --  OSC 11 background color query: ESC ] 1 1 ; ? ESC \
-      OSC_11 : constant Termicap.OSC.Byte_Array :=
+      OSC_11 : constant Termicap.Byte_Array :=
         [ESC_BYTE, OSC_BYTE, D_1, D_1, SEMI, QUEST, ESC_BYTE, ST_BYTE];
 
       --  Wrap for tmux passthrough: ESC P tmux ; ESC <query> ESC \
-      Wrapped : constant Termicap.OSC.Byte_Array :=
+      Wrapped : constant Termicap.Byte_Array :=
         Termicap.OSC.Parsing.Wrap_For_Passthrough
           (Query       => OSC_11,
            Passthrough => Termicap.OSC.Parsing.Tmux_Passthrough);
@@ -318,7 +318,7 @@ begin
 
       --  Also demonstrate No_Passthrough (identity)
       declare
-         Direct : constant Termicap.OSC.Byte_Array :=
+         Direct : constant Termicap.Byte_Array :=
            Termicap.OSC.Parsing.Wrap_For_Passthrough
              (Query       => OSC_11,
               Passthrough => Termicap.OSC.Parsing.No_Passthrough);

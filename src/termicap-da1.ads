@@ -37,27 +37,11 @@
 --    - @relation(FUNC-DA1-007): DA1_QUERY byte constant
 --    - @relation(FUNC-DA1-013): SPARK Silver boundary partition
 
-with Interfaces.C;
 with Termicap.OSC.Parsing;
 
 package Termicap.DA1
   with SPARK_Mode
 is
-
-   ---------------------------------------------------------------------------
-   --  Byte Types (representation-compatible with Termicap.OSC)
-   ---------------------------------------------------------------------------
-
-   --  @summary A single byte of terminal I/O, matching Interfaces.C.unsigned_char.
-   --  @description Defined independently of Termicap.OSC (which is SPARK Off)
-   --  to keep this package SPARK On.  The underlying type is identical, so
-   --  Termicap.DA1.IO can convert between the two without a copy.
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes for escape sequence data.
-   --  @description Used for the DA1_QUERY constant.  Representation-compatible
-   --  with Termicap.OSC.Byte_Array and Termicap.XTVERSION.Byte_Array.
-   type Byte_Array is array (Positive range <>) of Byte;
 
    ---------------------------------------------------------------------------
    --  Capability Enumeration (FUNC-DA1-001)

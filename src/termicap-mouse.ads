@@ -40,41 +40,11 @@
 --    - @relation(FUNC-MSE-013): MOUSE_PROBE_TIMEOUT_MS / MAX_RESPONSE_SIZE
 --    - @relation(FUNC-MSE-017): Package structure and SPARK boundary
 
-with Interfaces.C;
 with Termicap.DECRPM;
 
 package Termicap.Mouse
   with SPARK_Mode
 is
-
-   ---------------------------------------------------------------------------
-   --  Byte Types (representation-compatible with Termicap.OSC)
-   ---------------------------------------------------------------------------
-
-   --  @summary A single byte of terminal I/O, matching Interfaces.C.unsigned_char.
-   --  @description Defined independently of Termicap.OSC (which is SPARK_Mode Off)
-   --  to keep this package SPARK On.  Representation-compatible with
-   --  Termicap.OSC.Byte, Termicap.DECRPM.Byte, and Termicap.Keyboard.Byte;
-   --  Termicap.Mouse.IO can convert between them at the I/O boundary without
-   --  a copy.
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes for escape sequence data.
-   --  @description Used for raw response buffers passed to the parsing functions.
-   --  Representation-compatible with Termicap.OSC.Byte_Array and
-   --  Termicap.DECRPM.Byte_Array.
-   type Byte_Array is array (Positive range <>) of Byte;
-
-   ---------------------------------------------------------------------------
-   --  Capacity Constants (FUNC-MSE-013)
-   ---------------------------------------------------------------------------
-
-   --  @summary Maximum number of response bytes accumulated by Sentinel_Query.
-   --  @description Re-export of Termicap.DECRPM.MAX_RESPONSE_SIZE (4096 bytes),
-   --  kept as a local constant so that Parse_Mouse_DECRPM_Response preconditions
-   --  refer only to symbols from this SPARK On package.
-   --  @relation(FUNC-MSE-013): Response buffer capacity bound
-   MAX_RESPONSE_SIZE : constant := Termicap.DECRPM.MAX_RESPONSE_SIZE;
 
    ---------------------------------------------------------------------------
    --  Mouse_Encoding Enumeration (FUNC-MSE-001)

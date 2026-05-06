@@ -60,29 +60,9 @@
 --    - @relation(FUNC-C52-015): CLIPBOARD_PROBE_TIMEOUT_MS constant
 --    - @relation(FUNC-C52-018): Package structure and SPARK boundary
 
-with Interfaces.C;
-
 package Termicap.Clipboard
   with SPARK_Mode
 is
-
-   ---------------------------------------------------------------------------
-   --  Byte Types (representation-compatible with Termicap.OSC)
-   ---------------------------------------------------------------------------
-
-   --  @summary A single byte of terminal I/O, matching Interfaces.C.unsigned_char.
-   --  @description Defined independently of Termicap.OSC (which is SPARK_Mode Off)
-   --  to keep this package SPARK On.  Representation-compatible with
-   --  Termicap.OSC.Byte, Termicap.Mouse.Byte, Termicap.Keyboard.Byte, and
-   --  Termicap.Graphics.Byte; Termicap.Clipboard.IO can convert between them at
-   --  the I/O boundary without a copy.
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes for escape sequence data.
-   --  @description Used for raw response buffers passed to Parse_OSC52_Response
-   --  and for the OSC52_QUERY constant.  Representation-compatible with
-   --  Termicap.OSC.Byte_Array and Termicap.Mouse.Byte_Array.
-   type Byte_Array is array (Positive range <>) of Byte;
 
    ---------------------------------------------------------------------------
    --  Clipboard_Support Enumeration (FUNC-C52-001)

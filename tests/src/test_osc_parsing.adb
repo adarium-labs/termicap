@@ -12,6 +12,7 @@ with Interfaces.C; use Interfaces.C;
 
 with Termicap.OSC;         use Termicap.OSC;
 with Termicap.OSC.Parsing; use Termicap.OSC.Parsing;
+use Termicap;
 
 package body Test_OSC_Parsing is
 

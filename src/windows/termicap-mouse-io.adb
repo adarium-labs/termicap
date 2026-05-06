@@ -150,8 +150,7 @@ package body Termicap.Mouse.IO is
    is
       Caps  : Mouse_Capabilities := NO_MOUSE_CAPABILITIES;
       I     : Positive := Buf'First;
-      Slice : constant Termicap.Mouse.Byte_Array :=
-        Termicap.Mouse.Byte_Array (Buf (Buf'First .. Buf'Last));
+      Slice : constant Byte_Array := Byte_Array (Buf (Buf'First .. Buf'Last));
    begin
       while I <= Buf'First + Len - 1 loop
          --  Skip non-ESC bytes.
@@ -167,8 +166,7 @@ package body Termicap.Mouse.IO is
          --  Try to parse a DECRPM frame starting at I.
          declare
             Tail_Len : constant Natural := Buf'First + Len - I;
-            Tail     : constant Termicap.Mouse.Byte_Array :=
-              Slice (I .. I + Tail_Len - 1);
+            Tail     : constant Byte_Array := Slice (I .. I + Tail_Len - 1);
             Result   : constant DECRPM_Parse_Result :=
               Parse_Mouse_DECRPM_Response (Tail, Tail_Len);
          begin
@@ -205,7 +203,7 @@ package body Termicap.Mouse.IO is
          MODE_MOUSE_SGR_PIXELS];
 
       --  Zero-length query: Sentinel_Query will write only the DA1 sentinel.
-      Empty_Query : constant Termicap.OSC.Byte_Array (1 .. 0) := [];
+      Empty_Query : constant Byte_Array (1 .. 0) := [];
 
       Resp_Buffer : Termicap.OSC.Response_Buffer;
       Resp_Length : Natural  := 0;
@@ -216,12 +214,11 @@ package body Termicap.Mouse.IO is
       --  Phase 1: Write all six DECRPM queries without reading.
       for I in Modes'Range loop
          declare
-            Q : constant Termicap.DECRPM.Byte_Array :=
-              Termicap.DECRPM.DECRPM_Query (Modes (I));
+            Q : constant Byte_Array := Termicap.DECRPM.DECRPM_Query (Modes (I));
          begin
             Termicap.OSC.Write_Query
               (Session => Session,
-               Query   => Termicap.OSC.Byte_Array (Q),
+               Query   => Q,
                Written => Written,
                Success => Write_OK);
             if not Write_OK then

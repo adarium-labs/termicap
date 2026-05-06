@@ -39,26 +39,9 @@
 --    - @relation(FUNC-BGC-011): Parse_Colorfgbg function and Colorfgbg_Result type
 --    - @relation(FUNC-BGC-012): ANSI_COLOR_TABLE constant and Ansi_To_RGB function
 
-with Interfaces.C;
-
 package Termicap.Color.BG_Query
   with SPARK_Mode
 is
-
-   ---------------------------------------------------------------------------
-   --  Byte Types (representation-compatible with Termicap.OSC)
-   ---------------------------------------------------------------------------
-
-   --  @summary A single byte of terminal I/O, matching Interfaces.C.unsigned_char.
-   --  @description Defined independently of Termicap.OSC (which is SPARK Off)
-   --  to keep this package SPARK On.  The underlying type is identical, so
-   --  Termicap.Color.BG_Query.IO can convert between the two without a copy.
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes for escape sequence data.
-   --  @description Used for OSC query constants, raw response slices, and
-   --  return values of Query_Sequence.
-   type Byte_Array is array (Positive range <>) of Byte;
 
    ---------------------------------------------------------------------------
    --  RGB Color Type (FUNC-BGC-001)
@@ -118,12 +101,6 @@ is
    --  unbounded scanning of an untrusted environment variable string.
    --  @relation(FUNC-BGC-011): COLORFGBG string length bound
    MAX_COLORFGBG_LENGTH : constant := 32;
-
-   --  @summary Maximum number of response bytes accumulated by Query_Color.
-   --  @description Matches Termicap.OSC.MAX_RESPONSE_SIZE (4096 bytes).
-   --  Exceeding this limit is treated as a timeout condition.
-   --  @relation(FUNC-BGC-006): Response buffer capacity bound
-   MAX_RESPONSE_SIZE : constant := 4_096;
 
    ---------------------------------------------------------------------------
    --  OSC Query Byte Constants (FUNC-BGC-003, FUNC-BGC-004)

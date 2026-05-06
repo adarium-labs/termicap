@@ -9,6 +9,7 @@ with AUnit.Assertions;              use AUnit.Assertions;
 with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 
 with Termicap.Keyboard; use Termicap.Keyboard;
+use Termicap;
 
 package body Test_Keyboard_Parsers is
 

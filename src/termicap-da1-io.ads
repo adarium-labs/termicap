@@ -89,7 +89,7 @@ package Termicap.DA1.IO is
       Response    : out Termicap.OSC.Response_Buffer;
       Resp_Length : out Natural;
       Timed_Out   : out Boolean)
-   with Pre => Response'Length >= Termicap.OSC.MAX_RESPONSE_SIZE;
+   with Pre => Response'Length >= MAX_RESPONSE_SIZE;
 
    ---------------------------------------------------------------------------
    --  Top-Level Convenience Function (FUNC-DA1-009)

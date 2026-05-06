@@ -11,6 +11,7 @@ with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 with Interfaces.C; use Interfaces.C;
 
 with Termicap.Color.BG_Query; use Termicap.Color.BG_Query;
+use Termicap;
 
 package body Test_BG_Query is
 

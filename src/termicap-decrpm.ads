@@ -37,38 +37,9 @@
 --    - @relation(FUNC-RPM-010): Mode_Id_Array, Mode_Report_Array, MAX_BATCH_MODES
 --    - @relation(FUNC-RPM-015): SPARK Silver boundary partition
 
-with Interfaces.C;
-
 package Termicap.DECRPM
   with SPARK_Mode
 is
-
-   ---------------------------------------------------------------------------
-   --  Byte Types (representation-compatible with Termicap.OSC)
-   ---------------------------------------------------------------------------
-
-   --  @summary A single byte of terminal I/O, matching Interfaces.C.unsigned_char.
-   --  @description Defined independently of Termicap.OSC (which is SPARK Off)
-   --  to keep this package SPARK On.  The underlying type is identical, so
-   --  Termicap.DECRPM.IO can convert between the two without a copy.
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes for escape sequence data.
-   --  @description Used for the DECRPM_Query function return type and raw
-   --  response buffers passed to the parsing functions.  Representation-compatible
-   --  with Termicap.OSC.Byte_Array, Termicap.XTVERSION.Byte_Array, and
-   --  Termicap.DA1.Byte_Array.
-   type Byte_Array is array (Positive range <>) of Byte;
-
-   ---------------------------------------------------------------------------
-   --  Capacity Constant
-   ---------------------------------------------------------------------------
-
-   --  @summary Maximum number of response bytes accumulated by Query_Mode.
-   --  @description Matches Termicap.OSC.MAX_RESPONSE_SIZE (4096 bytes).
-   --  Used in preconditions to bound all parsing loops for SPARK provability.
-   --  @relation(FUNC-RPM-007): Response buffer capacity bound
-   MAX_RESPONSE_SIZE : constant := 4_096;
 
    ---------------------------------------------------------------------------
    --  Mode_Id Subtype and Named Constants (FUNC-RPM-001)

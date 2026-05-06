@@ -70,14 +70,6 @@ package Termicap.OSC is
    --  @relation(FUNC-OSC-001): Error return from Open_Terminal
    INVALID_FD : constant File_Descriptor := -1;
 
-   --  @summary A single byte of terminal I/O, matching Interfaces.C.unsigned_char.
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes for terminal queries and responses.
-   --  @description Used both as the type for arbitrary escape sequence queries
-   --  (sent to the terminal) and for accumulated response bytes (read from it).
-   type Byte_Array is array (Positive range <>) of Byte;
-
    ---------------------------------------------------------------------------
    --  Termios State (FUNC-OSC-002)
    ---------------------------------------------------------------------------
@@ -123,13 +115,6 @@ package Termicap.OSC is
    ---------------------------------------------------------------------------
    --  Response Buffer (FUNC-OSC-009)
    ---------------------------------------------------------------------------
-
-   --  @summary Maximum number of response bytes accumulated by Sentinel_Query.
-   --  @description 4096 bytes is far larger than any known OSC/DCS response
-   --  (background color: ~20 bytes, window title: ~256 bytes).  Exceeding this
-   --  limit is treated as a timeout condition to prevent unbounded accumulation.
-   --  @relation(FUNC-OSC-009): Bounded response buffer capacity
-   MAX_RESPONSE_SIZE : constant := 4_096;
 
    --  @summary Fixed-size accumulation buffer for Sentinel_Query responses.
    --  @description Stack-allocated; no heap allocation occurs during probing.

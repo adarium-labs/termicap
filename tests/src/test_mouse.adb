@@ -11,6 +11,7 @@ with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 with Termicap.Mouse; use Termicap.Mouse;
 with Termicap.Mouse.IO;
 with Termicap.DECRPM;
+use Termicap;
 
 package body Test_Mouse is
 

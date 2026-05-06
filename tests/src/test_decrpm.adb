@@ -10,9 +10,10 @@ with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 
 with Termicap.DECRPM;
 use Termicap.DECRPM;
+use Termicap;
 
 --  Bring equality operator into scope for Byte (Interfaces.C.unsigned_char) comparisons.
-use type Termicap.DECRPM.Byte;
+use type Termicap.Byte;
 
 package body Test_DECRPM is
 

@@ -130,7 +130,7 @@ package body Termicap.Keyboard.IO is
       --  Step 4: Kitty probe (FUNC-KKB-004).
       Termicap.OSC.Sentinel_Query
         (Session     => Session,
-         Query       => Termicap.OSC.Byte_Array (CSI_KITTY_QUERY),
+         Query       => CSI_KITTY_QUERY,
          Response    => Raw,
          Resp_Length => Raw_Len,
          Timeout_Ms  => KITTY_PROBE_TIMEOUT_MS,
@@ -151,7 +151,7 @@ package body Termicap.Keyboard.IO is
       --  Step 5: XTerm modifyOtherKeys probe (FUNC-KKB-007).
       Termicap.OSC.Sentinel_Query
         (Session     => Session,
-         Query       => Termicap.OSC.Byte_Array (CSI_XTERM_KBD_QUERY),
+         Query       => CSI_XTERM_KBD_QUERY,
          Response    => Raw,
          Resp_Length => Raw_Len,
          Timeout_Ms  => XTERM_KBD_PROBE_TIMEOUT_MS,

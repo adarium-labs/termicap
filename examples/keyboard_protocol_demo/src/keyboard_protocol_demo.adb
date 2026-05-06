@@ -42,6 +42,7 @@ with Ada.Text_IO;
 
 with Termicap.TTY;
 with Termicap.Keyboard;          use Termicap.Keyboard;
+use Termicap;
 with Termicap.Keyboard.IO;
 
 procedure Keyboard_Protocol_Demo is

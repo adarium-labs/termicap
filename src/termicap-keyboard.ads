@@ -40,36 +40,9 @@
 --    - @relation(FUNC-KKB-013): KITTY_PROBE_TIMEOUT_MS / XTERM_KBD_PROBE_TIMEOUT_MS
 --    - @relation(FUNC-KKB-018): Package structure and SPARK boundary
 
-with Interfaces.C;
-
 package Termicap.Keyboard
   with SPARK_Mode
 is
-
-   ---------------------------------------------------------------------------
-   --  Byte Types (representation-compatible with Termicap.OSC)
-   ---------------------------------------------------------------------------
-
-   --  @summary A single byte of terminal I/O, matching Interfaces.C.unsigned_char.
-   --  @description Defined independently of Termicap.OSC (which is SPARK_Mode Off)
-   --  to keep this package SPARK On.  The underlying type is identical, so
-   --  Termicap.Keyboard.IO can pass slices of these arrays directly to
-   --  Termicap.OSC.Sentinel_Query without a copy.
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes for escape sequence data.
-   --  @description Used for the CSI query constants and raw response buffers
-   --  passed to the parsing functions.
-   type Byte_Array is array (Positive range <>) of Byte;
-
-   ---------------------------------------------------------------------------
-   --  Capacity Constant
-   ---------------------------------------------------------------------------
-
-   --  @summary Maximum number of response bytes accumulated by Sentinel_Query.
-   --  @description Matches Termicap.OSC.MAX_RESPONSE_SIZE (4096 bytes).
-   --  Used in preconditions to bound all parsing loops.
-   MAX_RESPONSE_SIZE : constant := 4_096;
 
    ---------------------------------------------------------------------------
    --  Keyboard_Protocol Enumeration (FUNC-KKB-001)

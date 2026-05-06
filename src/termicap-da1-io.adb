@@ -73,8 +73,8 @@ package body Termicap.DA1.IO is
 
       declare
          --  Step 2: Wrap DA1_QUERY for multiplexer passthrough if required.
-         Wrapped : constant Termicap.OSC.Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough (Termicap.OSC.Byte_Array (DA1_QUERY), Passthrough);
+         Wrapped : constant Byte_Array :=
+           Termicap.OSC.Parsing.Wrap_For_Passthrough (DA1_QUERY, Passthrough);
 
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;

@@ -190,7 +190,7 @@ package body Termicap.Graphics.IO is
 
       Termicap.OSC.Sentinel_Query
         (Session     => Session,
-         Query       => Termicap.OSC.Byte_Array (KITTY_APC_QUERY),
+         Query       => KITTY_APC_QUERY,
          Response    => Resp_Buffer,
          Resp_Length => Resp_Length,
          Timeout_Ms  => GRAPHICS_PROBE_TIMEOUT_MS,
@@ -202,10 +202,8 @@ package body Termicap.Graphics.IO is
       end if;
 
       declare
-         Slice : constant Termicap.Graphics.Byte_Array :=
-           Termicap.Graphics.Byte_Array
-             (Resp_Buffer
-                (Resp_Buffer'First .. Resp_Buffer'First + Resp_Length - 1));
+         Slice : constant Byte_Array :=
+           Byte_Array (Resp_Buffer (Resp_Buffer'First .. Resp_Buffer'First + Resp_Length - 1));
       begin
          return Parse_Kitty_APC_Response (Slice, Resp_Length);
       end;

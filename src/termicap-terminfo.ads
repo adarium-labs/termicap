@@ -48,29 +48,9 @@
 
 pragma SPARK_Mode (On);
 
-with Interfaces.C;
-
 package Termicap.Terminfo
   with SPARK_Mode
 is
-
-   ---------------------------------------------------------------------------
-   --  Byte Types (FUNC-TIF-006)
-   ---------------------------------------------------------------------------
-
-   --  @summary A single byte, compatible with Interfaces.C.unsigned_char.
-   --  @description Defined in this SPARK On package so that callers with
-   --  SPARK_Mode => On can reference the type and the I/O child package can
-   --  share the same representation without Unchecked_Conversion.
-   --  @relation(FUNC-TIF-006): SPARK-visible byte type for Read_File callers
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes representing file content.
-   --  @description Used as the in-memory representation of a loaded terminfo
-   --  binary file.  Indexed from Positive so that 1-based offset arithmetic
-   --  matches the parsing algorithm.
-   --  @relation(FUNC-TIF-006): Byte_Array type for file loading and parsing
-   type Byte_Array is array (Positive range <>) of Byte;
 
    ---------------------------------------------------------------------------
    --  File Size Bound (FUNC-TIF-002)

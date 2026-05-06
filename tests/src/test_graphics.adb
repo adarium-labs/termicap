@@ -12,6 +12,7 @@ with Interfaces.C;
 
 with Termicap.Graphics; use Termicap.Graphics;
 with Termicap.Graphics.IO;
+use Termicap;
 
 package body Test_Graphics is
 

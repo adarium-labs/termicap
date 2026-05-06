@@ -20,12 +20,9 @@ use type Interfaces.C.unsigned_char;
 package body Test_Clipboard is
 
    ---------------------------------------------------------------------------
-   --  Both Termicap.Clipboard and Termicap.DA1 declare a Byte subtype and a
-   --  Byte_Array type (both based on Interfaces.C.unsigned_char).  To avoid
-   --  "multiple use clauses cause hiding" errors, subtypes are declared here
-   --  inside the package body as local aliases of the Termicap.Clipboard types.
-   subtype C_Byte       is Termicap.Clipboard.Byte;
-   subtype C_Byte_Array is Termicap.Clipboard.Byte_Array;
+   --  Local aliases to avoid potential hiding between Termicap child packages.
+   subtype C_Byte       is Termicap.Byte;
+   subtype C_Byte_Array is Termicap.Byte_Array;
 
    ---------------------------------------------------------------------------
    --  Byte constant helpers for Parse_OSC52_Response tests

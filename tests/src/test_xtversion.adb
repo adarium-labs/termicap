@@ -11,6 +11,7 @@ with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
 with Termicap.XTVERSION; use Termicap.XTVERSION;
+use Termicap;
 
 package body Test_XTVERSION is
 

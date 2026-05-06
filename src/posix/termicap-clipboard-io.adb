@@ -209,9 +209,8 @@ package body Termicap.Clipboard.IO is
 
          --  Wrap OSC52_QUERY in the appropriate DCS envelope (or leave unwrapped).
          declare
-            Wrapped_Query : constant Termicap.OSC.Byte_Array :=
-              Termicap.OSC.Parsing.Wrap_For_Passthrough
-                (Termicap.OSC.Byte_Array (OSC52_QUERY), Passthrough);
+            Wrapped_Query : constant Byte_Array :=
+              Termicap.OSC.Parsing.Wrap_For_Passthrough (OSC52_QUERY, Passthrough);
          begin
             --  Sentinel_Query writes the (possibly wrapped) OSC52_QUERY, appends the
             --  DA1 sentinel (ESC [ c), then reads until the DA1 response terminates.
@@ -235,9 +234,8 @@ package body Termicap.Clipboard.IO is
       end if;
 
       declare
-         Slice : constant Termicap.Clipboard.Byte_Array :=
-           Termicap.Clipboard.Byte_Array
-             (Resp_Buffer (Resp_Buffer'First .. Resp_Buffer'First + Resp_Length - 1));
+         Slice : constant Byte_Array :=
+           Byte_Array (Resp_Buffer (Resp_Buffer'First .. Resp_Buffer'First + Resp_Length - 1));
       begin
          return Parse_OSC52_Response (Slice, Resp_Length);
       end;

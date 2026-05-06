@@ -60,9 +60,9 @@ package Termicap.Color.BG_Query.IO is
    procedure Query_Color
      (Kind        : BG_Query.Query_Kind;
       Timeout_Ms  : Natural;
-      Response    : out BG_Query.Byte_Array;
+      Response    : out Byte_Array;
       Resp_Length : out Natural;
       Timed_Out   : out Boolean)
-   with Pre => Response'Length >= BG_Query.MAX_RESPONSE_SIZE;
+   with Pre => Response'Length >= MAX_RESPONSE_SIZE;
 
 end Termicap.Color.BG_Query.IO;

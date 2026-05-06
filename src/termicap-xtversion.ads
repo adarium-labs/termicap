@@ -35,36 +35,10 @@
 --    - @relation(FUNC-XTV-007): SPARK_Mode On and Global => null contracts
 
 with Ada.Strings.Unbounded;
-with Interfaces.C;
 
 package Termicap.XTVERSION
   with SPARK_Mode
 is
-
-   ---------------------------------------------------------------------------
-   --  Byte Types (representation-compatible with Termicap.OSC)
-   ---------------------------------------------------------------------------
-
-   --  @summary A single byte of terminal I/O, matching Interfaces.C.unsigned_char.
-   --  @description Defined independently of Termicap.OSC (which is SPARK Off)
-   --  to keep this package SPARK On.  The underlying type is identical, so
-   --  Termicap.XTVERSION.IO can convert between the two without a copy.
-   subtype Byte is Interfaces.C.unsigned_char;
-
-   --  @summary An unconstrained sequence of bytes for escape sequence data.
-   --  @description Used for the CSI query constant and raw response buffers
-   --  passed to the parsing functions.
-   type Byte_Array is array (Positive range <>) of Byte;
-
-   ---------------------------------------------------------------------------
-   --  Capacity Constant
-   ---------------------------------------------------------------------------
-
-   --  @summary Maximum number of response bytes accumulated by Query_XTVERSION.
-   --  @description Matches Termicap.OSC.MAX_RESPONSE_SIZE (4096 bytes).
-   --  Used in preconditions to bound all parsing loops.
-   --  @relation(FUNC-XTV-006): Response buffer capacity bound for Parse_XTVERSION_Response
-   MAX_RESPONSE_SIZE : constant := 4_096;
 
    ---------------------------------------------------------------------------
    --  Result Types (FUNC-XTV-001)

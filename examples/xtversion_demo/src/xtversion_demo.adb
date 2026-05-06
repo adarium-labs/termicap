@@ -224,7 +224,7 @@ begin
    declare
       --  Allocate a buffer large enough to satisfy the Query_XTVERSION
       --  precondition: Response'Length >= MAX_RESPONSE_SIZE (FUNC-XTV-008).
-      Response    : Byte_Array (1 .. MAX_RESPONSE_SIZE);
+      Response    : Termicap.Byte_Array (1 .. Termicap.MAX_RESPONSE_SIZE);
       Resp_Length : Natural;
       Timed_Out   : Boolean;
    begin
