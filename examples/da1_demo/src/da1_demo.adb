@@ -59,9 +59,9 @@ procedure Da1_Demo is
          when Windowing         => return "Windowing capability (Ps=18)";
          when ANSI_Color        => return "ANSI colour / VT525 (Ps=22)";
          when Rectangular_Editing => return "Rectangular editing (Ps=28)";
+         when Clipboard_Access    => return "OSC 52 clipboard access (Ps=52)";
       end case;
    end Capability_Label;
-
 
    ---------------------------------------------------------------------------
    --  Helper: map a VT_Level to a human-readable label.

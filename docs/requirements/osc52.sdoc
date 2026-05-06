@@ -1,0 +1,942 @@
+[DOCUMENT]
+TITLE: OSC52 — OSC 52 Clipboard Detection
+UID: REQ-C52
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[TEXT]
+STATEMENT: >>>
+This document specifies the functional requirements for OSC 52 Clipboard Detection
+(feature id OSC52, Tier 4 Stretch Goal). The feature detects, at process startup,
+whether the controlling terminal supports clipboard integration via the OSC 52 escape
+sequence protocol (ANSI/XTerm OSC 52 — Clipboard Manipulation).
+
+OSC 52 allows a terminal application to read from and write to the system clipboard
+by sending an Operating System Command of the form:
+  ESC ] 52 ; Pc ; Pd BEL  (or  ESC ] 52 ; Pc ; Pd ST)
+where Pc selects the clipboard selection (e.g., "c" for clipboard, "p" for primary)
+and Pd is either a base64-encoded string (write) or "?" (query/read). Terminals that
+support read-back respond with the same OSC 52 sequence carrying the base64-encoded
+clipboard content. Write-only terminals accept the write form silently but do not
+respond to the "?" query form.
+
+Three detection paths are specified, applied in order of confidence:
+
+  1. Passive DA1 — The DA1 Primary Device Attributes response may include extension
+     parameter Ps=52 (Clipboard_Access), which is the standardised advertisement that
+     the terminal supports OSC 52. This path requires extending the DA1_Capability
+     enumeration (FUNC-DA1-001) to include Clipboard_Access. When Ps=52 is present,
+     the terminal SHALL be treated as supporting at least Write-Only clipboard access;
+     if an active probe (path 2) succeeds in eliciting a response, it is upgraded to
+     Read-Write.
+
+  2. Active OSC 52 query — An OSC 52 query (ESC ] 52 ; c ; ? BEL followed by a DA1
+     sentinel) is sent to the terminal when it is a TTY and the process is in the
+     foreground. A well-formed OSC 52 response arriving before the DA1 sentinel
+     confirms Read-Write support. If only the DA1 sentinel arrives (no OSC 52
+     response), the result is Write-Only when DA1 Ps=52 was present, or None when it
+     was absent. This probe reuses the OSC-INFRA session lifecycle (REQ-OSC).
+
+  3. Passive environment-variable heuristics — Terminal-specific knowledge encoded
+     from known implementations (tcell, crossterm, termenv, wezterm) allows clipboard
+     support to be inferred without any active probe, using TERM_PROGRAM, WT_SESSION,
+     TERM, and similar variables.
+
+Multiplexer passthrough: when running inside tmux or GNU screen, OSC 52 queries must
+be wrapped using the appropriate DCS passthrough sequences so that the outer terminal
+receives and processes them. The existing OSC-INFRA multiplexer awareness (FUNC-OSC-006)
+is reused for this purpose.
+
+Safety: the active probe SHALL NOT be performed when the process is not in the
+foreground process group (FUNC-OSC-007), when stdout is not a TTY, or when
+/dev/tty cannot be opened. The probe SHALL NOT block indefinitely; a 1-second
+timeout (matching OSC-INFRA convention) applies.
+
+SPARK Silver is the target for pure logic (DA1 flag extraction, OSC 52 response
+parsing, env-var cascade). All I/O and OS calls are classified Ada FFI
+(SPARK_Mode => Off), consistent with the OSC-INFRA, MOUSE, SIXEL, and KITTY-KB
+patterns.
+<<<
+
+[SECTION]
+TITLE: Result Types
+
+[REQUIREMENT]
+UID: FUNC-C52-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Clipboard_Support Enumeration Type
+STATEMENT: >>>
+The library shall provide an enumeration type Clipboard_Support whose values represent the
+levels of clipboard access that may be available via OSC 52:
+
+  None
+    -- No clipboard access detected. Either the terminal does not support OSC 52, or
+    -- detection could not be completed (not a TTY, foreground guard failed, or the
+    -- feature was suppressed). This is the safe default.
+
+  Write_Only
+    -- The terminal accepts OSC 52 write sequences (clipboard population) but does not
+    -- respond to OSC 52 read queries ("?"). Inferred from DA1 Ps=52 alone, or from
+    -- env-var heuristics for terminals known to support write-only clipboard.
+
+  Read_Write
+    -- The terminal supports both writing to and reading from the clipboard via OSC 52.
+    -- Confirmed by an active OSC 52 query that elicited a well-formed OSC 52 response,
+    -- or by DA1 Ps=52 combined with a known terminal identity that supports read-back
+    -- (e.g., xterm with allowWindowOps).
+
+The ordering None < Write_Only < Read_Write shall reflect increasing capability: a
+caller may compare values to test for at-least-write-only access using the >= operator.
+
+The type shall be declared with SPARK_Mode => On.
+<<<
+COMMENT: >>>
+The three-level model mirrors the layered capability concept used throughout the library
+(Color_Level with None/Basic_16/Extended_256/True_Color). None is the conservative default;
+a caller can safely emit OSC 52 write sequences when Clipboard_Support >= Write_Only.
+The Read_Write level is important because it gates the clipboard read path, which requires
+a terminal round-trip. tcell uses a hasClipboard boolean (from DA1 attribute 52); this
+enumeration provides strictly more information — it distinguishes "confirmed read-back"
+from "write-only inferred from DA1 alone". crossterm only exposes write-only clipboard
+emission (feature-gated osc52); the None/Write_Only/Read_Write model subsumes its
+capability scope.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-C52-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Clipboard_Capabilities Result Record
+STATEMENT: >>>
+The library shall provide a record type Clipboard_Capabilities that aggregates the
+complete clipboard detection result. The record shall contain at minimum:
+
+  Support                : Clipboard_Support
+    -- The detected clipboard access level (FUNC-C52-001). Default: None.
+
+  Via_DA1                : Boolean
+    -- True when Support was set (or upgraded) based on the presence of Ps=52 in the
+    -- DA1 Primary Device Attributes response (FUNC-C52-005). False otherwise.
+
+  Via_Active_Probe       : Boolean
+    -- True when Support was set or upgraded to Read_Write based on an active OSC 52
+    -- query that elicited a well-formed response (FUNC-C52-007, FUNC-C52-008).
+    -- False when the result was determined solely by passive means (DA1 or env vars).
+
+  Via_Env_Heuristic      : Boolean
+    -- True when Support was set based on environment-variable heuristics alone
+    -- (FUNC-C52-010), without any active probe or DA1 confirmation. False otherwise.
+
+  Probed                 : Boolean
+    -- True when at least one active probe (DA1 session or OSC 52 query) was attempted.
+    -- False when the result was determined entirely by passive env-var heuristics (no
+    -- TTY, or active probing was suppressed by a guard).
+
+The canonical "no result / safe default" value shall be:
+  Support = None, Via_DA1 = False, Via_Active_Probe = False,
+  Via_Env_Heuristic = False, Probed = False.
+
+The type shall be declared with SPARK_Mode => On.
+<<<
+COMMENT: >>>
+Provenance flags (Via_DA1, Via_Active_Probe, Via_Env_Heuristic) follow the pattern
+established by Graphics_Capabilities (FUNC-SXL-001) and Keyboard_Capability
+(FUNC-KKB-003). They give callers and test harnesses visibility into which detection
+path fired, enabling assertions such as "clipboard write confirmed by DA1" vs
+"clipboard read-write confirmed by active probe". This is particularly important for
+OSC 52 because the distinction between Write_Only (inferred) and Read_Write (confirmed)
+determines whether a caller may attempt clipboard read-back — an operation with
+visible side effects (the terminal may flash or emit garbage on unsupported terminals).
+The Probed flag mirrors the Mouse_Capabilities and Graphics_Capabilities pattern for
+consistent API conventions across all Tier 4 detection features.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: DA1 Capability Extension
+
+[REQUIREMENT]
+UID: FUNC-C52-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Clipboard_Access Literal in DA1_Capability Enumeration
+STATEMENT: >>>
+The DA1_Capability enumeration (FUNC-DA1-001, declared in Termicap.DA1) shall be extended
+with the following literal:
+
+  Clipboard_Access      --  Ps = 52: OSC 52 clipboard manipulation support
+
+The literal shall be inserted in numeric order relative to the existing Ps values
+(after ANSI_Color at Ps=22 and before Rectangular_Editing at Ps=28 if ordering is by
+Ps value, or appended if ordering is by insertion order). The numeric Ps value 52 shall
+be mapped by Interpret_DA1 (FUNC-DA1-004) exactly as the other capability Ps values:
+when the integer 52 appears in the DA1 response parameter list, Flags (Clipboard_Access)
+shall be set to True.
+
+This extension shall be backward-compatible: existing callers of Has_Capability that do
+not reference Clipboard_Access shall be unaffected. The Capability_Flags array
+(FUNC-DA1-003) shall automatically acquire a new Clipboard_Access slot initialised to
+False in the default value.
+
+The Termicap.DA1 package specification and body shall be updated to include the Ps=52
+mapping. No other FUNC-DA1 requirement is modified.
+<<<
+COMMENT: >>>
+The DA1 Primary Device Attributes response is documented in the global synthesis
+(§2.13, Layer 6) as advertising "clipboard=52". tcell's tscreen.go tracks
+hasClipboard populated from DA1 attribute 52. Extending the existing DA1_Capability
+enumeration with Clipboard_Access is preferable to defining a separate parallel type
+in the OSC52 package: it keeps all DA1 Ps-value knowledge in one authoritative place
+(Termicap.DA1), and the OSC52 feature becomes a thin consumer of DA1's output, the same
+pattern used by Sixel (FUNC-SXL-005 consumes Sixel_Graphics from DA1). The
+backward-compatibility note is important: existing code calling
+Has_Capability (Caps, Sixel_Graphics) or Has_Capability (Caps, ANSI_Color) is not
+affected by the addition of a new enumeration literal because Capability_Flags is
+indexed by DA1_Capability and new literals default to False.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-C52-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: Named Constant for DA1 Clipboard Ps Value
+STATEMENT: >>>
+The Termicap.DA1 package (or a child package visible to Termicap.Clipboard) shall
+define a named constant for the DA1 Ps value that signals clipboard support:
+
+  DA1_PS_CLIPBOARD_ACCESS : constant := 52;
+    -- The DA1 Ps parameter value (integer 52) that, when present in a DA1 response,
+    -- indicates that the terminal supports OSC 52 clipboard manipulation.
+
+This constant shall be declared with SPARK_Mode => On. It shall be used by Interpret_DA1
+(FUNC-DA1-004) as the mapping key for Clipboard_Access, rather than an inline integer
+literal, so that the value is documented and independently testable.
+<<<
+COMMENT: >>>
+Named constants for Ps values follow the convention established by COLORS_INDEX,
+SETAF_INDEX, and SETAB_INDEX in FUNC-TIF-011 and by the DECRPM mode constants in
+FUNC-MSE-003. Using DA1_PS_CLIPBOARD_ACCESS rather than the bare integer 52 prevents
+magic-number confusion (52 is both the Ps value for Clipboard_Access in DA1 and the
+ASCII code for '4', among other coincidences). The constant is placed in Termicap.DA1
+because Interpret_DA1 owns the Ps-to-capability mapping table.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Known Terminal Constants
+
+[REQUIREMENT]
+UID: FUNC-C52-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Named Constants for Known Clipboard-Capable Terminal Identifiers
+STATEMENT: >>>
+The Termicap.Clipboard package (or a dedicated child package) shall define named string
+constants for the terminal identifier values used in passive environment-variable
+heuristics (FUNC-C52-010). The following constants shall be defined with SPARK_Mode => On:
+
+  -- TERM_PROGRAM values for terminals with known OSC 52 support:
+  TERM_PROGRAM_WEZTERM   : constant String := "WezTerm";
+    -- WezTerm GPU terminal; supports full OSC 52 read and write for multiple selections
+    -- (clipboard, primary, cut0-9). Reference: wezterm-analysis.md OSC 52 table.
+  TERM_PROGRAM_ITERM2    : constant String := "iTerm.app";
+    -- iTerm2 for macOS; supports OSC 52 clipboard write and read-back.
+  TERM_PROGRAM_VSCODE    : constant String := "vscode";
+    -- VS Code integrated terminal; supports OSC 52 write (and read in newer versions).
+
+  -- Environment variable names used in passive detection:
+  ENV_WT_SESSION         : constant String := "WT_SESSION";
+    -- Set by Windows Terminal for each session; WTSession presence implies OSC 52
+    -- write-only support (Windows Terminal supports OSC 52 write).
+  ENV_TMUX               : constant String := "TMUX";
+    -- Set by tmux when running inside a tmux session; presence triggers multiplexer
+    -- passthrough wrapping (FUNC-C52-011).
+  ENV_STY                : constant String := "STY";
+    -- Set by GNU screen when running inside a screen session; presence triggers
+    -- multiplexer passthrough wrapping (FUNC-C52-011).
+
+  -- TERM values for terminals with known OSC 52 support:
+  TERM_XTERM_KITTY       : constant String := "xterm-kitty";
+    -- kitty GPU terminal; supports OSC 52 clipboard write and read-back.
+  TERM_XTERM             : constant String := "xterm";
+    -- xterm (prefix match); supports OSC 52 when compiled with allowWindowOps=true
+    -- (resource setting). Write-only is the conservative default; active probe
+    -- (FUNC-C52-007) determines whether read-back is available.
+
+All constants shall follow ALL_CAPS_WITH_UNDERSCORES naming per the Ada coding standard.
+<<<
+COMMENT: >>>
+Terminal name constants are centralised in the Termicap.Clipboard package following the
+pattern of FUNC-SXL-004 (Graphics) and FUNC-MSE-003 (Mouse). WezTerm is listed as the
+most comprehensive OSC 52 implementation: the wezterm-analysis.md documents full support
+for clipboard, primary, and cut-buffer selections. iTerm2 is well-known for its clipboard
+integration. VS Code terminal's OSC 52 support was added in version 1.76 and is
+increasingly relied upon by remote development workflows. Windows Terminal (WT_SESSION)
+supports OSC 52 write but has historically not supported read-back. xterm's clipboard
+support is gated on the allowWindowOps X resource and is disabled by default in most
+distributions for security reasons; the conservative default for xterm is Write_Only,
+and the active probe (FUNC-C52-007) is the only reliable way to determine read-back.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Detection Algorithm — DA1 Passive Path
+
+[REQUIREMENT]
+UID: FUNC-C52-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Clipboard Support Inference from DA1 Ps=52
+STATEMENT: >>>
+The clipboard detection function shall check the DA1_Capabilities record (FUNC-DA1-003)
+for the Clipboard_Access flag (FUNC-C52-003) by calling:
+
+  Termicap.DA1.Has_Capability (DA1_Caps, Clipboard_Access)
+
+When Has_Capability returns True, the library shall set:
+
+  Clipboard_Capabilities.Support   := Write_Only
+  Clipboard_Capabilities.Via_DA1   := True
+  Clipboard_Capabilities.Probed    := True
+    (because the DA1 result presupposes a successful DA1 probe session)
+
+The Support level is initially Write_Only, not Read_Write, because DA1 Ps=52 advertises
+that the terminal understands OSC 52 syntax, but does not distinguish read-capable from
+write-only terminals. If an active OSC 52 probe (FUNC-C52-007) subsequently confirms
+read-back, Support shall be upgraded to Read_Write (Via_Active_Probe := True).
+
+When Has_Capability returns False (Ps=52 absent or DA1 probe was not performed), Via_DA1
+shall remain False and Support shall remain None until a subsequent detection path sets it.
+
+The DA1 result shall be obtained in the same way as FUNC-SXL-005: if a DA1 probe was
+already performed in the current process (cached DA1_Capabilities available), the cached
+result is reused. If no prior DA1 result exists, a DA1 probe session is initiated using
+the OSC-INFRA session lifecycle (FUNC-OSC-001 through FUNC-OSC-006), following the same
+procedure as FUNC-SXL-006.
+<<<
+COMMENT: >>>
+The DA1 Ps=52 flag is the most reliable passive indicator of OSC 52 support and is
+directly analogous to the Ps=4 flag for Sixel (FUNC-SXL-005). tcell uses exactly this
+mechanism: hasClipboard is populated from DA1 attribute 52 during terminal initialisation
+(tscreen.go, engage()). The Write_Only initial level from DA1 alone reflects the
+security reality: xterm, which is the canonical terminal advertising Ps=52 in DA1, has
+OSC 52 read disabled by default (requiresconfirmation on allowWindowOps). Write-only is
+the safe and correct default for a "DA1 says yes" result. The active probe (FUNC-C52-007)
+is the mechanism for upgrading to Read_Write when the terminal genuinely supports
+read-back. Reusing the cached DA1 result (rather than issuing a second DA1 query) avoids
+redundant round trips and follows the pattern established by the Sixel feature.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Detection Algorithm — OSC 52 Active Probe
+
+[REQUIREMENT]
+UID: FUNC-C52-007
+STATUS: Approved
+PRIORITY: Should
+TITLE: Active OSC 52 Read-Back Probe
+STATEMENT: >>>
+When all pre-condition guards pass (FUNC-C52-012) and clipboard read-back has not yet
+been confirmed (Support is None or Write_Only), the library should perform an active
+probe to determine whether the terminal supports OSC 52 read-back:
+
+  Query sequence (write to terminal):
+    ESC ] 52 ; c ; ? BEL
+    (OSC 52 clipboard read query: ESC ] = 0x1B 0x5D; "52;c;?"; BEL = 0x07)
+    followed immediately by a DA1 sentinel (ESC [ c) as a response boundary.
+
+  Expected response on read-capable terminal:
+    ESC ] 52 ; c ; <base64-data> BEL  (or ST-terminated variant)
+    where <base64-data> is the base64-encoded current clipboard content, or the
+    empty string "" when the clipboard is empty.
+
+  Response interpretation:
+    OSC 52 response received before DA1 sentinel:
+      -> Support := Read_Write
+         Via_Active_Probe := True
+         Probed := True
+
+    Only DA1 sentinel received (no OSC 52 response before DA1 sentinel):
+      -> Support unchanged (remains None or Write_Only as set by DA1 path or heuristics)
+         Via_Active_Probe := False
+         Probed := True
+
+    Timeout (neither OSC 52 nor DA1 received within deadline):
+      -> Support unchanged
+         Probed := True (attempt was made; timeout counts as a probed state)
+
+The probe shall reuse the OSC-INFRA session lifecycle (FUNC-OSC-001 through FUNC-OSC-006)
+for /dev/tty open, raw mode entry, sentinel write, response accumulation, termios restore,
+and /dev/tty close. The DA1 sentinel is appended immediately after the OSC 52 query
+(consistent with the FUNC-OSC-006 sentinel-bounded query pattern).
+
+Multiplexer passthrough shall be applied to the OSC 52 query when the process is running
+inside tmux or GNU screen (FUNC-C52-011).
+
+The OSC 52 response parser shall be a pure SPARK function (FUNC-C52-008).
+<<<
+COMMENT: >>>
+The active probe is the only reliable way to determine whether a terminal supports
+OSC 52 read-back, because no passive signal (DA1, env var) reliably distinguishes
+read-capable from write-only terminals. The probe sends the standard OSC 52 read query
+("?") for the "c" (clipboard) selection; this is the minimal query that any read-capable
+terminal will process. The DA1 sentinel boundary pattern is the same used by all other
+active probes in this library (XTVERSION, Background Color, Kitty Keyboard, Mouse). The
+Should priority reflects that passive detection alone (DA1 + env vars) provides sufficient
+information for the primary use case (clipboard write); the Read_Write distinction matters
+only when the caller wishes to read clipboard content, which is an advanced use case.
+Crossterm's OSC 52 implementation is write-only and does not attempt read-back; the active
+probe provides a capability that crossterm does not expose.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-C52-008
+STATUS: Approved
+PRIORITY: Should
+TITLE: OSC 52 Response Parser (SPARK Silver)
+STATEMENT: >>>
+The library shall provide a pure SPARK function that parses the accumulated response
+buffer from an OSC 52 active probe and determines whether a valid OSC 52 response was
+received before the DA1 sentinel:
+
+  type OSC52_Parse_Result is (Not_Present, Valid_Response, Malformed);
+
+  function Parse_OSC52_Response
+     (Buffer : Byte_Array;
+      Length : Natural)
+      return OSC52_Parse_Result
+  with SPARK_Mode => On,
+       Global     => null,
+       Pre        => Length <= Buffer'Length,
+       Post       => True;
+
+The function shall scan Buffer (1 .. Length) for an OSC 52 response matching the pattern:
+  ESC ] 52 ; <selection> ; <base64-or-empty> BEL
+  or
+  ESC ] 52 ; <selection> ; <base64-or-empty> ESC \
+
+where <selection> is one or more printable characters and <base64-or-empty> is either
+the empty string or a string of characters drawn from the base64 alphabet
+(A-Z, a-z, 0-9, +, /, =). The function shall return:
+
+  Valid_Response  -- A well-formed OSC 52 response was found in the buffer.
+  Not_Present     -- No OSC 52 introducer (ESC ] 52) was found (DA1 arrived first, or
+                     the terminal did not respond to the query).
+  Malformed       -- An OSC 52 introducer was found but the response did not terminate
+                     correctly or contained unexpected bytes.
+
+Both Not_Present and Malformed shall be treated as "read-back not available" for the
+purpose of FUNC-C52-007. The distinction is preserved for test harness use.
+
+The OSC introducer is ESC ] (0x1B 0x5D). Parameters are delimited by ';'. The response
+is terminated by BEL (0x07) or ST (ESC \ = 0x1B 0x5C). The function shall not raise
+for any buffer content.
+<<<
+COMMENT: >>>
+A dedicated pure SPARK OSC 52 response parser follows the structural pattern of
+Parse_Mouse_DECRPM_Response (FUNC-MSE-007), Parse_Kitty_Response (FUNC-KKB-006), and
+Parse_Kitty_APC_Response (FUNC-SXL-011): pure parsing logic in a SPARK Silver function
+with a bounded byte array input, independently testable with synthetic byte sequences.
+The three-way OSC52_Parse_Result distinguishes "terminal responded with something but it
+was malformed" (possibly a partially-implemented terminal) from "no response at all"
+(terminal silently ignored the query). Both map to Via_Active_Probe = False, but the
+distinction aids debugging. The base64 content validation is intentionally permissive:
+the function does not decode the base64 data, only verifies structural presence, because
+the clipboard content is irrelevant to capability detection (only the fact of a response
+matters). This keeps the parser simple and SPARK-provable without a base64 decode
+implementation.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Detection Algorithm — Passive Environment Variable Heuristics
+
+[REQUIREMENT]
+UID: FUNC-C52-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: OSC 52 Passive Detection via Known Terminal Identifiers
+STATEMENT: >>>
+When neither the DA1 path (FUNC-C52-006) nor the active probe (FUNC-C52-007) has
+established clipboard support, or when active probing was suppressed by a guard
+(FUNC-C52-012), the library shall apply the following environment-variable-based
+heuristics in the stated priority order. Each step reads the relevant variable via the
+existing Termicap environment access mechanism:
+
+  Step 1 — TERM_PROGRAM match (Read_Write capable terminals):
+    If TERM_PROGRAM equals TERM_PROGRAM_WEZTERM ("WezTerm", case-insensitive),
+    set Support := Read_Write.
+    If TERM_PROGRAM equals TERM_PROGRAM_ITERM2 ("iTerm.app", case-insensitive),
+    set Support := Read_Write.
+
+  Step 2 — TERM_PROGRAM match (Write_Only capable terminals):
+    If TERM_PROGRAM equals TERM_PROGRAM_VSCODE ("vscode", case-insensitive),
+    set Support := Write_Only.
+
+  Step 3 — WT_SESSION environment variable:
+    If the environment variable named ENV_WT_SESSION ("WT_SESSION") is present and
+    non-empty, set Support := Write_Only.
+    Windows Terminal supports OSC 52 write but historically not read-back.
+
+  Step 4 — TERM value match:
+    If TERM equals TERM_XTERM_KITTY ("xterm-kitty", exact match),
+    set Support := Read_Write. kitty supports full OSC 52 read and write.
+    If TERM begins with TERM_XTERM ("xterm", prefix match),
+    set Support := Write_Only (conservative; active probe is needed for Read_Write).
+
+When any step sets Support, subsequent steps shall not be evaluated. Via_Env_Heuristic
+shall be set to True when Support is set via this path. Via_DA1 and Via_Active_Probe
+shall remain False when heuristics are the sole detection path. Probed shall remain False.
+
+If none of the heuristics match, Support remains None.
+<<<
+COMMENT: >>>
+Environment-variable heuristics are the last-resort fallback, consistent with the
+pattern in FUNC-SXL-008 (Sixel passive heuristics) and FUNC-SXL-009 (Kitty passive).
+The distinction between Read_Write and Write_Only in the heuristic table reflects
+documented implementation knowledge: WezTerm and kitty are confirmed to support read-back
+(wezterm-analysis.md, tcell-analysis.md); Windows Terminal and VS Code are documented
+as write-only. xterm's allowWindowOps default is false in most distributions, making
+write-only the safe heuristic; only an active probe can confirm read-back for xterm.
+Step ordering (Read_Write before Write_Only) ensures that a more capable classification
+is not masked by a less capable one. The Via_Env_Heuristic flag distinguishes
+"confirmed by heuristic" from "confirmed by probe" for test assertions.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-C52-010
+STATUS: Approved
+PRIORITY: Should
+TITLE: Combined Detection Cascade
+STATEMENT: >>>
+The top-level clipboard detection function shall apply the three detection paths in the
+following order, stopping and returning when any path yields Support != None, unless a
+subsequent path can upgrade the support level:
+
+  Phase 1 — DA1 passive detection (FUNC-C52-006):
+    Reuse or initiate a DA1 probe. If Clipboard_Access is present, set Support := Write_Only
+    and Via_DA1 := True. Continue to Phase 2 regardless of Phase 1 outcome (the active
+    probe may upgrade Write_Only to Read_Write).
+
+  Phase 2 — Active OSC 52 probe (FUNC-C52-007, optional):
+    If the process passes all guards (FUNC-C52-012) and the active probe is enabled,
+    perform the OSC 52 query. If a valid response is received, set Support := Read_Write
+    and Via_Active_Probe := True. If no response or timeout, leave Support unchanged.
+    This phase is skipped when active probing is suppressed by guards.
+
+  Phase 3 — Environment-variable heuristics (FUNC-C52-009):
+    Apply heuristics only when Support is still None after Phases 1 and 2. If Phase 1
+    yielded Write_Only via DA1, Phase 3 is skipped (DA1 is more authoritative than env vars).
+    Set Support and Via_Env_Heuristic as specified in FUNC-C52-009.
+
+The returned Clipboard_Capabilities record shall reflect the highest-confidence result
+from the phases that were executed.
+<<<
+COMMENT: >>>
+The cascade ordering (DA1 first, active probe second, env vars last) follows the same
+principle as the Sixel feature (FUNC-SXL-005 then FUNC-SXL-007 then FUNC-SXL-008):
+active probing is more authoritative than passive inference, and DA1 is more
+authoritative than environment variables. The decision to continue to Phase 2 even when
+Phase 1 already yielded Write_Only is critical: without the active probe upgrade path,
+the detection would never reach Read_Write for terminals that advertise Ps=52 in DA1
+(such as xterm) but may or may not allow read-back depending on configuration. Skipping
+Phase 3 when Phase 1 succeeded prevents a less-authoritative source from overwriting a
+DA1-confirmed result.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Multiplexer Passthrough
+
+[REQUIREMENT]
+UID: FUNC-C52-011
+STATUS: Approved
+PRIORITY: Should
+TITLE: tmux and screen OSC 52 Query Passthrough
+STATEMENT: >>>
+When the process is running inside a tmux session (ENV_TMUX environment variable is
+present and non-empty) or a GNU screen session (ENV_STY environment variable is present
+and non-empty), the active OSC 52 query (FUNC-C52-007) shall be wrapped in the
+appropriate multiplexer DCS passthrough sequence before being written to the terminal
+file descriptor:
+
+  tmux passthrough:
+    ESC P tmux; ESC ESC ] 52 ; c ; ? BEL ESC \
+    (DCS: ESC P; literal "tmux;"; doubled ESC for the inner OSC; BEL terminates inner
+     OSC; ST terminates DCS)
+
+  screen passthrough:
+    ESC P ESC ] 52 ; c ; ? BEL ESC \
+    (DCS: ESC P; inner OSC sequence; BEL terminates inner OSC; ST terminates DCS)
+
+The DA1 sentinel (ESC [ c) shall be written outside and after the DCS passthrough
+sequence, not inside it, so that the outer multiplexer processes it directly and
+Sentinel_Query (FUNC-OSC-006) can detect the sentinel response boundary.
+
+The passthrough wrapping logic shall follow the established pattern from the Background
+Color Detection feature (FUNC-BG-012) and the termenv copy.go reference implementation,
+which adapts OSC 52 sequences for screen-mode multiplexers.
+
+When neither ENV_TMUX nor ENV_STY is set, the OSC 52 query is written directly without
+any DCS wrapping.
+<<<
+COMMENT: >>>
+OSC 52 clipboard sequences are the canonical use case for multiplexer passthrough, and
+termenv/copy.go is the primary reference: it wraps OSC 52 sequences for screen
+multiplexer mode (screen.go: "if output.isTmux { return...}"). tmux's passthrough
+mechanism (DCS tmux; ...) requires doubling any embedded ESC characters, which is why
+the inner OSC 52 ESC is written as ESC ESC (two bytes: 0x1B 0x1B) inside the tmux DCS
+wrapper. screen's passthrough mechanism is simpler (no ESC doubling required).
+The decision to place the DA1 sentinel outside the DCS passthrough ensures that the
+multiplexer forwards the sentinel directly to the outer terminal's input queue, where
+Sentinel_Query can detect it. Placing the DA1 inside the DCS would cause the
+multiplexer to forward it, then generate its own response — potentially leading to two
+DA1 responses in the buffer, confusing the sentinel detection logic.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Platform Gating and TTY Guards
+
+[REQUIREMENT]
+UID: FUNC-C52-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Pre-Conditions and TTY Guards
+STATEMENT: >>>
+The clipboard detection function shall apply the following guards before initiating any
+active probe (DA1 session or OSC 52 query), in order:
+
+  Guard 1 — Not a TTY:
+    If Termicap.TTY.Is_TTY (Stdout) returns False, the function shall skip all active
+    probes, apply passive heuristics only (FUNC-C52-009), and return
+    Clipboard_Capabilities with Probed = False.
+
+  Guard 2 — Not the foreground process:
+    If Is_Foreground_Process (FUNC-OSC-007) returns False, the function shall skip all
+    active probes, apply passive heuristics only, and return with Probed = False.
+
+  Guard 3 — /dev/tty not openable:
+    If Open_TTY (FUNC-OSC-001) fails, the function shall skip all active probes, apply
+    passive heuristics only, and return with Probed = False.
+
+  Guard 4 — Win32 Platform Gate:
+    On Windows, if GetConsoleMode returns True (genuine Win32 Console, not Cygwin/MSYS2),
+    the function shall skip all active probes (no OSC 52 sequences can be sent to a
+    Win32 Console) and apply passive env-var heuristics only. On Windows Terminal
+    (ENV_WT_SESSION present), Support may be set to Write_Only by the env-var heuristic
+    (FUNC-C52-009, Step 3).
+
+Guards 1–3 are evaluated before Guard 4 on POSIX. On Windows, Guard 4 is evaluated first.
+If all guards pass, the active probe sequence is initiated.
+<<<
+COMMENT: >>>
+The guard ordering and structure mirror FUNC-SXL-012 (Sixel TTY guards) and FUNC-MSE-009
+(Mouse TTY guards) exactly. The foreground process group guard (Guard 2) is especially
+important for OSC 52: sending an OSC 52 read query from a background process can cause
+the terminal to buffer the response indefinitely, or the response may arrive after the
+process has resumed and confuse subsequent reads. The Win32 Console gate prevents sending
+ESC-sequence-based queries to a terminal that cannot interpret them. Note that Windows
+Terminal is not a Win32 Console from GetConsoleMode's perspective when running under
+ConPTY — in that case Guards 1-3 apply and the active probe is permitted, though the
+probe result determines the final Support level (WT_SESSION heuristic as a fallback).
+<<<
+
+[REQUIREMENT]
+UID: FUNC-C52-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: No-TTY Passive Fallback
+STATEMENT: >>>
+When stdout is not a TTY (Guard 1 in FUNC-C52-012 fires), the detection function shall:
+
+  1. Skip all active probes (no DA1 session, no OSC 52 query).
+  2. Apply env-var heuristics (FUNC-C52-009).
+  3. Return Clipboard_Capabilities with Probed = False, Via_DA1 = False,
+     Via_Active_Probe = False, and Support and Via_Env_Heuristic as determined by step 2.
+
+The returned Clipboard_Capabilities shall represent the best estimate possible from
+passive signals. When no passive signal is available, the safe default (Support = None)
+applies.
+<<<
+COMMENT: >>>
+The no-TTY passive fallback ensures that processes running in piped or non-interactive
+contexts still receive a reasonable clipboard capability estimate based on the terminal
+environment variables inherited from the calling process. This is consistent with the
+no-TTY passive fallback for Sixel (FUNC-SXL-013) and the graceful-degradation policy
+applied throughout the library. A process writing to a pipe from within a kitty terminal
+still has TERM=xterm-kitty set, and a caller that wants to conditionally emit OSC 52
+write sequences to a log file (e.g., for later playback) benefits from knowing that the
+ambient terminal supports clipboard access.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-C52-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: Termios Restore on All Exit Paths
+STATEMENT: >>>
+When active probing is performed (DA1 session or OSC 52 active probe), the implementation
+shall restore terminal attributes (via FUNC-OSC-002 Restore_Termios) on every exit path
+from the raw-mode section, including:
+
+  - Normal exit after the DA1 response is received.
+  - Normal exit after the OSC 52 response is received.
+  - Exit due to a timeout (no response within the deadline).
+  - Exit due to a write failure (Write_Query returns Success = False).
+  - Exit due to any other I/O error during the probe session.
+
+Terminal attributes shall be restored before the /dev/tty file descriptor is closed,
+preserving the ordering: open -> save -> set-raw -> [probe] -> restore -> close.
+Under no circumstances shall the function exit the raw-mode section without first
+attempting Restore_Termios, even if Restore_Termios itself fails.
+
+This requirement mirrors FUNC-SXL-014, FUNC-MSE-015, and FUNC-KKB-015.
+<<<
+COMMENT: >>>
+Unconditional termios restore is the single most critical safety invariant of any
+raw-mode probe. It is restated in every active-probe feature specification to ensure
+that implementors treat it as a non-negotiable invariant rather than an implementation
+detail. The OSC-INFRA Probe_Session controlled type (FUNC-OSC-008) enforces this via
+Ada.Finalization.Limited_Controlled semantics: Finalize calls Close, which calls
+Restore_Termios unconditionally. Any direct use of the lower-level OSC primitives
+outside Probe_Session must replicate this guarantee manually.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Timeout Behaviour
+
+[REQUIREMENT]
+UID: FUNC-C52-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Probe Session Timeout
+STATEMENT: >>>
+Each active probe session (DA1 probe for clipboard flag, OSC 52 read-back probe) shall
+use a timeout of 1000 milliseconds (1 second) for the entire session (from writing the
+query to receiving the response or sentinel), applied via the OSC-INFRA timeout mechanism
+(FUNC-OSC-004).
+
+On total timeout:
+  - DA1 probe timeout: the function shall return DA1_Capabilities with Supported = False
+    and proceed to env-var heuristics (FUNC-C52-009).
+  - OSC 52 probe timeout: the function shall treat the result as Not_Present
+    (Support remains as set by Phase 1 or passive heuristics; Via_Active_Probe remains False).
+
+Implementations may use a shorter timeout (minimum 100 milliseconds) on platforms where
+round-trip latency to the terminal is known to be negligible (local PTY).
+
+When a DA1 probe and the OSC 52 active probe are both performed in the same detection
+call, they shall be performed as separate sessions with independent timeouts, not as a
+single batched session.
+<<<
+COMMENT: >>>
+The 1000 ms default is consistent with FUNC-SXL-015, FUNC-MSE-013, and FUNC-OSC-004.
+Separate sessions for DA1 and OSC 52 probes (rather than a batched session) follow
+the Sixel pattern (FUNC-SXL-015): the response patterns are different (DA1 response
+vs. OSC 52 response), and combining them in one buffer complicates the response parser
+without meaningful performance benefit for a once-per-process detection call.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Error Handling
+
+[REQUIREMENT]
+UID: FUNC-C52-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: No-Exception Guarantee for Detect_Clipboard
+STATEMENT: >>>
+The top-level clipboard detection function Detect_Clipboard shall never propagate an
+exception to its caller under any circumstances, including:
+
+  - /dev/tty cannot be opened (FUNC-OSC-001 returns an error).
+  - tcgetattr fails (FUNC-OSC-002 returns an error).
+  - tcsetattr fails during raw-mode entry (FUNC-OSC-003 returns an error).
+  - Write_Query returns Success = False for the DA1 query or OSC 52 query.
+  - The DA1 probe session times out entirely.
+  - The OSC 52 probe session times out entirely.
+  - DA1 response buffer cannot be parsed (Interpret_DA1 receives Count = 0).
+  - OSC 52 response buffer contains a malformed or empty response.
+  - Any environment variable read raises or returns an unexpected value.
+  - GetConsoleMode raises on Windows (treated as gate-not-fired).
+  - The multiplexer passthrough wrapping produces an oversized query sequence.
+
+All failure modes shall cause the function to return Clipboard_Capabilities with the
+fields reflecting the best available information from paths that did not fail, defaulting
+to None for Support when no path succeeded. The function shall not log or signal errors
+to the caller; graceful degradation is the sole response.
+<<<
+COMMENT: >>>
+The no-exception policy is universal across all Termicap detection functions
+(FUNC-MSE-014, FUNC-KKB-014, FUNC-SXL-016). Clipboard detection failures are silent:
+the consequence is that the caller assumes no clipboard support and omits clipboard
+integration, which is the safe choice. An application that relies on clipboard
+functionality should check for Support >= Write_Only before attempting to emit OSC 52
+sequences; if the check returns None, the application falls back gracefully.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Caching
+
+[REQUIREMENT]
+UID: FUNC-C52-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: One-Probe-Per-Process Caching
+STATEMENT: >>>
+The library shall cache the Clipboard_Capabilities result after the first call to
+Detect_Clipboard and return the cached value on all subsequent calls without re-probing.
+The cache shall be stored as package-level state in a protected object or equivalent
+thread-safe structure, consistent with FUNC-MSE-016, FUNC-KKB-017, and FUNC-SXL-017.
+
+The cache shall be initialised lazily: no probe is performed until the first call to
+Detect_Clipboard (or an equivalent public entry point). Eager probing at library
+elaboration time is not permitted.
+
+A caller that needs a fresh result (e.g., after a terminal change or for testing) may
+use a separate Detect_Clipboard_Uncached function that bypasses the cache. This bypass
+is a Should requirement.
+
+The cache shall not be invalidated by SIGWINCH: OSC 52 clipboard support is a property
+of the terminal emulator, not the terminal window size.
+<<<
+COMMENT: >>>
+One-probe-per-process caching is the universal pattern for all Termicap capability
+detections (FUNC-CAP-003, FUNC-MSE-016, FUNC-KKB-017, FUNC-SXL-017). Clipboard protocol
+support does not change during a process's lifetime. Lazy initialisation avoids OS calls
+during library elaboration, which is important because OSC 52 detection involves
+/dev/tty access and raw-mode transitions that are inappropriate during elaboration.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Package Structure and SPARK Boundary
+
+[REQUIREMENT]
+UID: FUNC-C52-018
+STATUS: Approved
+PRIORITY: Must
+TITLE: Package Structure and SPARK Boundary
+STATEMENT: >>>
+The OSC 52 Clipboard Detection feature shall be implemented in a new package
+Termicap.Clipboard, structured as follows:
+
+Package specification (src/termicap-clipboard.ads):
+  - SPARK_Mode => On at the package level.
+  - Declares Clipboard_Support (FUNC-C52-001) and Clipboard_Capabilities (FUNC-C52-002)
+    as public types with SPARK_Mode => On.
+  - Declares named constants (FUNC-C52-005) as public String constants.
+  - Declares OSC52_Parse_Result enumeration and Parse_OSC52_Response function
+    (FUNC-C52-008) with SPARK_Mode => On and Global => null contracts.
+  - Declares the public function Detect_Clipboard with SPARK_Mode => Off
+    (it calls FFI-dependent OSC-INFRA, DA1.IO, and environment-access operations).
+
+Package body (src/termicap-clipboard.adb):
+  - SPARK_Mode => Off at the package level.
+  - Contains the body of Detect_Clipboard and all OS-facing helpers.
+  - Contains the body of Parse_OSC52_Response with SPARK_Mode => On applied locally
+    (mixed SPARK pattern, consistent with FUNC-KKB-018, FUNC-MSE-017, FUNC-SXL-018).
+  - Contains the protected cache object for one-probe-per-process caching (FUNC-C52-017).
+  - Withed packages: Termicap.OSC (or its I/O subpackage), Termicap.TTY, Termicap.DA1,
+    Termicap.Environment.
+
+Platform-specific I/O bodies:
+  - POSIX path: src/posix/termicap-clipboard-io.adb (SPARK_Mode => Off).
+  - Windows path: src/windows/termicap-clipboard-io.adb (SPARK_Mode => Off), which
+    adds the Win32 Console gate (FUNC-C52-012, Guard 4).
+
+File naming shall follow the project convention: lowercase with dashes matching the
+package hierarchy (termicap-clipboard.ads, termicap-clipboard.adb).
+<<<
+COMMENT: >>>
+The package structure mirrors Termicap.Mouse (FUNC-MSE-017), Termicap.Keyboard
+(FUNC-KKB-018), and Termicap.Graphics (FUNC-SXL-018) exactly: SPARK_Mode => On
+specification with pure types and parse functions, SPARK_Mode => Off body with mixed
+local SPARK_Mode => On on pure subprogram bodies, and per-OS I/O body files. Withing
+Termicap.DA1 (rather than redefining DA1 types) is mandatory: the Clipboard_Access
+literal added to DA1_Capability (FUNC-C52-003) must be visible to both the DA1 feature
+and the Clipboard feature without circular dependencies. The package name Termicap.Clipboard
+accurately describes the scope (clipboard capability detection via OSC 52) and is
+consistent with the naming convention of sibling packages (Termicap.Graphics,
+Termicap.Mouse, Termicap.Keyboard).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Integration with Capability Record
+
+[REQUIREMENT]
+UID: FUNC-C52-019
+STATUS: Approved
+PRIORITY: Could
+TITLE: Clipboard_Capabilities Field in Terminal_Capabilities (Deferred)
+STATEMENT: >>>
+The Terminal_Capabilities record (FUNC-CAP-001) should be extended with a field:
+
+  Clipboard : Termicap.Clipboard.Clipboard_Capabilities
+    -- The detected clipboard capabilities, populated by Detect_Clipboard on the first
+    -- call to Get or Detect (FUNC-CAP-003, FUNC-CAP-004). Defaults to the canonical
+    -- all-default value (Support = None) when clipboard detection has not been performed.
+
+Integration into Terminal_Capabilities is OUT OF SCOPE for this feature specification
+and is deferred as an explicit non-goal. The integration shall be tracked as a separate
+work item when OSC52 is promoted from Draft to Approved and the Tier 4 capability record
+update is scheduled.
+
+The Detect function for Terminal_Capabilities (FUNC-CAP-004) shall invoke Detect_Clipboard
+as part of the sub-detector sequence when this field is present.
+<<<
+COMMENT: >>>
+Deferring integration into Terminal_Capabilities follows the pattern established by
+FUNC-MSE-018, FUNC-KKB-019, and FUNC-SXL-019: the core detection function Detect_Clipboard
+is fully usable as a standalone API without requiring modification of capability_record.sdoc
+as part of this feature. The Could priority reflects that standalone use is sufficient for
+Tier 4. The deferred note is stated explicitly to prevent implementors from feeling
+obligated to modify capability_record.sdoc before OSC52 reaches Approved status.
+<<<
+
+[/SECTION]

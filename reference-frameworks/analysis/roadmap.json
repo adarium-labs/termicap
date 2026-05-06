@@ -928,11 +928,11 @@
           "id": "OSC52",
           "name": "OSC 52 Clipboard Detection",
           "summary": "Detect clipboard integration support via OSC 52 query. Only a subset of terminals support read-back.",
-          "status": "next",
+          "status": "done",
           "spark_level": "N/A (Ada FFI)",
           "ffi": true,
-          "requirement_uids": [],
-          "source_files": [],
+          "requirement_uids": ["FUNC-C52-001", "FUNC-C52-002", "FUNC-C52-003", "FUNC-C52-004", "FUNC-C52-005", "FUNC-C52-006", "FUNC-C52-007", "FUNC-C52-008", "FUNC-C52-009", "FUNC-C52-010", "FUNC-C52-011", "FUNC-C52-012", "FUNC-C52-013", "FUNC-C52-014", "FUNC-C52-015", "FUNC-C52-016", "FUNC-C52-017", "FUNC-C52-018", "FUNC-C52-019"],
+          "source_files": ["src/termicap-clipboard.ads", "src/termicap-clipboard.adb", "src/termicap-clipboard-io.ads", "src/posix/termicap-clipboard-io.adb"],
           "doc_refs": [
             {
               "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
@@ -945,7 +945,7 @@
           "id": "WCWIDTH",
           "name": "wcwidth() Probing for Unicode Level",
           "summary": "Call wcwidth() on sentinel codepoints to detect Unicode version: U+28FF (Braille, Unicode 3), U+1FB38 (sextant, Unicode 13), U+1CD00 (octant, Unicode 16).",
-          "status": "pending",
+          "status": "next",
           "spark_level": "N/A (Ada FFI)",
           "ffi": true,
           "requirement_uids": [],

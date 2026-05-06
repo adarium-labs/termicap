@@ -72,6 +72,7 @@ is
    --  Parse_DA1_Response (FUNC-OSC-010).  Naming follows Mixed_Case per the
    --  Ada enumeration convention (not ALL_CAPS, which is reserved for constants).
    --  @relation(FUNC-DA1-001): Curated DA1 capability enumeration
+   --  @relation(FUNC-C52-003): Clipboard_Access literal for OSC 52 clipboard detection
    type DA1_Capability is
      (Printer,              --  Ps =  2: Printer port
       ReGIS_Graphics,       --  Ps =  3: ReGIS graphics
@@ -80,7 +81,20 @@ is
       User_Defined_Keys,    --  Ps =  8: User-defined keys (UDK)
       Windowing,            --  Ps = 18: Windowing capability
       ANSI_Color,           --  Ps = 22: ANSI colour (VT525)
-      Rectangular_Editing); --  Ps = 28: Rectangular editing
+      Rectangular_Editing,  --  Ps = 28: Rectangular editing
+      Clipboard_Access);    --  Ps = 52: OSC 52 clipboard access (FUNC-C52-003)
+
+   ---------------------------------------------------------------------------
+   --  DA1 Ps Value Constants (FUNC-C52-004)
+   ---------------------------------------------------------------------------
+
+   --  @summary Ps parameter value for clipboard access in a DA1 response.
+   --  @description When a DA1 response contains Ps=52, the terminal advertises
+   --  support for OSC 52 clipboard manipulation.  This constant is used in
+   --  Interpret_DA1 to map the raw parameter value to the Clipboard_Access flag,
+   --  and may be referenced by Termicap.Clipboard for documentation clarity.
+   --  @relation(FUNC-C52-004): Named constant for DA1 Ps=52 clipboard access
+   DA1_PS_CLIPBOARD_ACCESS : constant := 52;
 
    ---------------------------------------------------------------------------
    --  VT Conformance Level Enumeration (FUNC-DA1-002)
@@ -174,7 +188,7 @@ is
    --       corresponding Flags entry to True:
    --         2 => Printer, 3 => ReGIS_Graphics, 4 => Sixel_Graphics,
    --         6 => Selective_Erase, 8 => User_Defined_Keys, 18 => Windowing,
-   --         22 => ANSI_Color, 28 => Rectangular_Editing.
+   --         22 => ANSI_Color, 28 => Rectangular_Editing, 52 => Clipboard_Access.
    --       Unrecognised values are silently ignored.
    --    5. Return DA1_Capabilities'(Supported => True, Level => <decoded level>,
    --       Flags => <populated flags>).

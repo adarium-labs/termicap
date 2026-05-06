@@ -18,5 +18,6 @@ aggregate project Termicap_Examples is
                           "keyboard_protocol_demo/keyboard_protocol_demo.gpr",
                           "mouse_protocol_demo/mouse_protocol_demo.gpr",
                           "graphics_demo/graphics_demo.gpr",
-                          "terminfo_demo/terminfo_demo.gpr");
+                          "terminfo_demo/terminfo_demo.gpr",
+                          "clipboard_demo/clipboard_demo.gpr");
 end Termicap_Examples;

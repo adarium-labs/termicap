@@ -70,6 +70,9 @@ is
             when 28 =>
                Result.Flags (Rectangular_Editing) := True;
 
+            when 52 =>
+               Result.Flags (Clipboard_Access) := True;  --  OSC 52 clipboard (FUNC-C52-003)
+
             when others =>
                null;  --  Silently ignore unrecognised Ps values.
          end case;

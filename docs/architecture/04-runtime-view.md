@@ -2525,6 +2525,182 @@ Termicap.Terminfo                    [SPARK Silver, no OS calls]
 
 ---
 
+## Scenario 30: OSC 52 Clipboard Detection
+
+End-to-end scenario for `Detect_Clipboard`. Shows the Win32 Console gate (Windows only), the non-TTY guard, the three-phase detection cascade (Phase 1: DA1 passive probe for Ps=52; Phase 2: active OSC 52 read-back probe; Phase 3: env-var heuristics), multiplexer passthrough wrapping, and the per-process cache. Each active probe phase runs as an **independent session** with its own 1 000 ms budget, consistent with ADR-0028. Worst-case cold-start latency is 2 s (both probes time out). Cached calls return in < 1 µs.
+
+### Phase A — Cache Check and Platform Gate
+
+```
+Caller (application)
+  │
+  │  Detect_Clipboard
+  ▼
+Termicap.Clipboard.IO.Detect_Clipboard    [SPARK_Mode => Off]
+  │
+  │  Step 1: Cache check (protected object)
+  │    Is_Cached = True?
+  │      Yes → return Cached_Result immediately  (< 1 µs)
+  │      No  → continue
+  │
+  │  [Windows body only]
+  │  Step 2: Win32 Console gate
+  │    GetConsoleMode (STD_OUTPUT_HANDLE)
+  │      Succeeds?
+  │        Yes → run passive env-var heuristics (Step 7) only;
+  │              Probed := False; store in cache; return
+  │        No  → handle is Cygwin/MSYS2 PTY; continue to Step 3
+  │  [End Windows-only block]
+  │
+  └──► Proceed to Phase B
+```
+
+### Phase B — TTY Guard
+
+```
+  │
+  │  Step 3: Non-TTY guard
+  │    Is_TTY (Stdout) = False?          [Termicap.TTY — SPARK_Mode => Off]
+  │      → Caps.Probed := False; run passive env-var heuristics (Step 7);
+  │        store in cache; return
+  │
+  └──► Proceed to Phase C
+```
+
+### Phase C — DA1 Passive Probe (Phase 1)
+
+```
+  │
+  │  Step 4: Open DA1 Probe_Session (independent session 1)
+  │    [Termicap.OSC — SPARK_Mode => Off]
+  │    → /dev/tty open; foreground guard (Is_Foreground_Process)
+  │    → Save termios, set raw mode, drain input
+  │    Fails (not foreground, /dev/tty unopenable)?
+  │      → Caps.Probed := False; run env-var heuristics (Step 7); return
+  │
+  │  Step 5: DA1 probe for Clipboard_Access Ps=52  (FUNC-C52-006)
+  │    Termicap.DA1.IO.Detect_DA1          [SPARK_Mode => Off]
+  │      → Write DA1_QUERY (ESC [ c)
+  │      → Timeout_Query (/dev/tty, CLIPBOARD_PROBE_TIMEOUT_MS = 1_000 ms)
+  │      → Parse_DA1_Response + Interpret_DA1
+  │      [Termicap.DA1 — SPARK Silver, Global => null]
+  │      Has_Capability (DA1_Result, Clipboard_Access)?
+  │        Yes → Caps.Support   := Write_Only
+  │              Caps.Via_DA1   := True
+  │              Caps.Probed    := True
+  │        No  → (Support remains None)
+  │              Caps.Probed    := True
+  │
+  │  Session 1 closed:
+  │    Probe_Session.Finalize (unconditional RAII)
+  │      → Restore_Termios, close /dev/tty, release single-session guard
+  │
+  └──► Proceed to Phase D
+```
+
+### Phase D — Active OSC 52 Read-Back Probe (Phase 2)
+
+```
+  │
+  │  Step 6: Active OSC 52 read-back probe  (FUNC-C52-007)
+  │    Skipped when Caps.Support = Read_Write
+  │    (read-write already confirmed; no benefit to re-probing)
+  │
+  │    When Support /= Read_Write:
+  │      Open OSC 52 Probe_Session (independent session 2)
+  │        [Termicap.OSC — SPARK_Mode => Off]
+  │        → /dev/tty open, foreground guard, raw mode
+  │        Fails?
+  │          → skip OSC 52 probe; retain current Caps
+  │
+  │      Step 6a: Apply multiplexer passthrough wrap  (FUNC-C52-011)
+  │        [Termicap.OSC.Parsing — SPARK Silver, Global => null]
+  │        TMUX set in Env?  → Wrap_For_Passthrough (tmux DCS escape)
+  │        STY  set in Env?  → Wrap_For_Passthrough (screen passthrough)
+  │        Neither set?      → use OSC52_QUERY unchanged
+  │
+  │      Step 6b: Write OSC 52 query + DA1 sentinel
+  │        [Termicap.OSC.Sentinel_Query — SPARK_Mode => Off]
+  │        ┌──────────────────────────────────────────────────────────────┐
+  │        │  Write OSC52_QUERY (ESC ] 52 ; c ; ? BEL)  -- 9 bytes      │
+  │        │  Write DA1 sentinel (ESC [ c)  — response boundary marker   │
+  │        └──────────────────────────────────────────────────────────────┘
+  │
+  │      Step 6c: Sentinel-bounded read loop
+  │        ┌──────────────────────────────────────────────────────────────┐
+  │        │  Accumulation loop (CLIPBOARD_PROBE_TIMEOUT_MS = 1_000 ms): │
+  │        │    Timed_Read (/dev/tty) → append to Response buffer        │
+  │        │    Contains_DA1_Response (Response, Length)  [SPARK Silver] │
+  │        │      → if found: record pre-sentinel length; exit loop      │
+  │        │    if timeout or overflow: exit loop                        │
+  │        └──────────────────────────────────────────────────────────────┘
+  │
+  │      Step 6d: Parse OSC 52 response
+  │        Parse_OSC52_Response (Response, Pre_Sentinel_Length)
+  │          [Termicap.Clipboard — SPARK Silver, Global => null]
+  │          → scan for ESC ] 52 ; <sel> ; <base64-or-empty> BEL|ST
+  │          → OSC52_Parse_Result:
+  │              Valid_Response → Caps.Support          := Read_Write
+  │                               Caps.Via_Active_Probe := True
+  │                               Caps.Probed           := True
+  │              Not_Present   → Support unchanged (Write_Only or None)
+  │              Malformed     → Support unchanged (Write_Only or None)
+  │
+  │      Session 2 closed:
+  │        Probe_Session.Finalize (unconditional RAII)
+  │          → Restore_Termios, close /dev/tty, release single-session guard
+  │
+  └──► Proceed to Phase E
+```
+
+### Phase E — Env-Var Heuristics (Phase 3)
+
+```
+  │
+  │  Step 7: Passive env-var heuristics  (FUNC-C52-009)
+  │    Applied when Support = None after Phases 1 and 2
+  │    (or always when TTY guard blocked all active probes)
+  │    [Termicap.Environment — SPARK Silver, Global => null]
+  │
+  │    TERM_PROGRAM=WezTerm (case-insensitive)?  → Support := Read_Write
+  │    TERM_PROGRAM=iTerm.app (case-insensitive)? → Support := Read_Write
+  │    TERM_PROGRAM=vscode (case-insensitive)?   → Support := Write_Only
+  │    WT_SESSION set (non-empty)?               → Support := Write_Only
+  │    TERM=xterm-kitty?                         → Support := Read_Write
+  │    TERM starts with "xterm"?                 → Support := Write_Only
+  │    (When Via_DA1 or Via_Active_Probe already set
+  │     Support, these steps are skipped.)
+  │    When any heuristic fires: Via_Env_Heuristic := True
+  │
+  └──► Proceed to Phase F
+```
+
+### Phase F — Cache and Return
+
+```
+  │
+  │  Step 8: Cache and return
+  │    Store Caps in protected-object cache
+  │    Return Caps to caller
+  │
+  └──► Clipboard_Capabilities returned to caller
+```
+
+**Key properties:**
+
+- **Worst-case latency:** 2 s cold-start (DA1 probe + OSC 52 probe, both timing out at 1 s each). Typical < 200 ms when the terminal responds. Cached calls < 1 µs.
+- **Independent sessions:** Each active probe (DA1 for Phase 1, OSC 52 for Phase 2) runs in its own `Probe_Session` with its own 1 s budget, consistent with ADR-0028. This avoids OSC 52 response pollution in the DA1 accumulation buffer and simplifies per-probe error handling.
+- **DA1 reuse:** Phase 1 calls `Termicap.DA1.IO.Detect_DA1` directly, reusing the existing timeout-only loop, parsing, and interpretation logic. The `Clipboard_Access` literal (Ps=52) was added to `Termicap.DA1.DA1_Capability` to enable this passive inference without a separate low-level probe.
+- **Multiplexer passthrough:** When `TMUX` or `STY` is set, the OSC 52 query is wrapped using `Termicap.OSC.Parsing.Wrap_For_Passthrough` before being sent (FUNC-C52-011). The DA1 Phase 1 probe handles its own multiplexer wrapping independently via `Detect_DA1`.
+- **Phase 3 condition:** Env-var heuristics (Step 7) are applied only when `Support = None` after Phases 1 and 2. When a DA1 or active probe already set `Support`, Phase 3 is skipped. When the TTY guard blocked all active probes, Phase 3 runs unconditionally and `Via_Env_Heuristic` is set when a heuristic matches.
+- **Cached calls:** The protected-object cache is populated on the first call. All subsequent calls return the cached `Clipboard_Capabilities` without entering the probe cascade. Latency < 1 µs.
+- **Windows fast path:** `GetConsoleMode (STD_OUTPUT_HANDLE)` is checked before any active probe. A native Windows console returns passive env-var heuristic results only (`Probed = False`).
+- **Graceful degradation:** On any error — non-TTY, background process, `Probe_Session` open failure, total timeout — the function returns env-var heuristic results or `NO_CLIPBOARD_CAPABILITIES` without raising an exception (FUNC-C52-016).
+- **Termios safety:** `Probe_Session.Finalize` is called unconditionally on every exit path of each session. Terminal state is always restored regardless of probe outcome (FUNC-C52-014).
+- **SPARK boundary:** `Termicap.Clipboard` (spec and body) is fully SPARK Silver — one pure parser function with `Global => null`, no FFI, no global state. `Termicap.Clipboard.IO` is `SPARK_Mode => Off` throughout (session management, terminal I/O, protected cache object).
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -2570,4 +2746,5 @@ Termicap.Terminfo                    [SPARK Silver, no OS calls]
 - **ADR-0028** (`docs/adr/0028-graphics-independent-probe-sessions.md`): Rationale for using two independent probe sessions rather than a batched single-sentinel approach
 - **ADR-0029** (`docs/adr/0029-graphics-package-naming.md`): Rationale for the `Termicap.Graphics` / `Termicap.Graphics.IO` package naming and deferred integration
 - **Tech Spec TERMINFO** (`docs/tech-specs/terminfo.md`): Terminfo database parsing design rationale — binary format variants, ghost predicate SPARK strategy, search-path resolution order, path construction algorithm, truecolor flag extraction
+- **Tech Spec OSC52** (`docs/tech-specs/osc52-clipboard.md`): OSC 52 Clipboard Detection design rationale — three-phase cascade, DA1 Ps=52 extension, active read-back probe, env-var heuristics, multiplexer passthrough, independent session strategy, SPARK boundary
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018, FUNC-SXL-001 through FUNC-SXL-019

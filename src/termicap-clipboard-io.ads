@@ -1,0 +1,155 @@
+-------------------------------------------------------------------------------
+--  Termicap.Clipboard.IO - OSC 52 Clipboard Detection I/O Orchestration
+--
+--  Copyright (c) 2026 Termicap Contributors
+--  SPDX-License-Identifier: Apache-2.0
+-------------------------------------------------------------------------------
+
+--  @summary
+--  Platform-dispatched I/O orchestration for OSC 52 clipboard capability
+--  detection: caching entry point and cache-bypass probe.
+--
+--  @description
+--  This child package provides the two public entry points for clipboard
+--  capability detection:
+--
+--    Detect_Clipboard          -- cached, process-lifetime result.
+--    Detect_Clipboard_Uncached -- uncached, always runs the full cascade.
+--
+--  Detect_Clipboard implements a three-phase detection cascade (FUNC-C52-010):
+--    Guard 4 (Windows only): Win32 Console gate -- if GetConsoleMode succeeds
+--      on STD_OUTPUT_HANDLE, skip all active probes; run env-var heuristics only
+--      (Probed = False).  Evaluated first on Windows per FUNC-C52-012 final paragraph.
+--    Guard 1 (POSIX first): Non-TTY guard -- if Is_TTY (Stdout) = False, skip
+--      all active probes; run env-var heuristics only (Probed = False, FUNC-C52-013).
+--    Guards 2 + 3: Foreground guard + /dev/tty openability (composed inside
+--      Probe_Session.Open; FUNC-C52-012).
+--  If all guards pass, the cascade runs:
+--    Phase 1: DA1 passive detection (FUNC-C52-006) -- calls Termicap.DA1.IO.Detect_DA1;
+--      if Has_Capability (DA1_Caps, Clipboard_Access) then Support := Write_Only,
+--      Via_DA1 := True, Probed := True.
+--    Phase 2: Active OSC 52 read-back probe (FUNC-C52-007) -- sends OSC52_QUERY
+--      (from Termicap.Clipboard) + DA1 sentinel via Termicap.OSC.Sentinel_Query;
+--      if Parse_OSC52_Response returns Valid_Response then Support := Read_Write,
+--      Via_Active_Probe := True, Probed := True.  Skipped when Support = Read_Write.
+--    Phase 3: Env-var heuristics (FUNC-C52-009) -- applied when Support = None
+--      after Phases 1 and 2.  TERM_PROGRAM=WezTerm/iTerm2 -> Read_Write;
+--      TERM_PROGRAM=vscode or WT_SESSION present -> Write_Only; TERM=xterm-kitty
+--      -> Read_Write; TERM starts with "xterm" -> Write_Only.
+--
+--  Multiplexer passthrough: the OSC 52 probe wraps OSC52_QUERY using
+--  Termicap.OSC.Parsing.Wrap_For_Passthrough when TMUX or STY is set in the
+--  environment (FUNC-C52-011).  The DA1 probe via Detect_DA1 handles its own
+--  multiplexer wrapping independently (FUNC-DA1-012).
+--
+--  The result is stored in a package-level protected object after the first
+--  call and returned from the cache on all subsequent calls (FUNC-C52-017).
+--
+--  The no-exception guarantee (FUNC-C52-016) means any failure degrades
+--  gracefully: partial results are preserved; total failures return
+--  NO_CLIPBOARD_CAPABILITIES (Probed = False).  Terminal attributes are
+--  restored on every exit path from raw-mode sections via the RAII semantics
+--  of Termicap.OSC.Probe_Session (FUNC-C52-014).
+--
+--  Detect_Clipboard_Uncached runs the identical cascade without consulting or
+--  updating the cache, intended for test harnesses and edge cases where a
+--  fresh probe is needed (FUNC-C52-017 Should clause).
+--
+--  I/O is performed exclusively through Termicap.OSC.Probe_Session and
+--  Termicap.OSC.Sentinel_Query; no direct tcgetattr / tcsetattr / select /
+--  read / write calls are made.  Termios restore is guaranteed by the RAII
+--  semantics of Probe_Session's Ada.Finalization.Limited_Controlled base
+--  (FUNC-C52-014).
+--
+--  Platform differences are isolated in two separate body files:
+--    src/posix/termicap-clipboard-io.adb   -- cascade starts at TTY guard (Guard 1).
+--    src/windows/termicap-clipboard-io.adb -- cascade starts at Win32 gate (Guard 4)
+--      evaluated first per FUNC-C52-012; falls through to POSIX guards for
+--      Cygwin/MSYS2 PTY.
+--  The single shared spec here allows the project's GPR source-dir mechanism to
+--  select exactly one body file per platform without conditional compilation in the
+--  spec, keeping Win32 dependencies out of POSIX object files (ADR-0018).
+--
+--  This package is SPARK_Mode Off because it depends on Ada.Finalization
+--  controlled types (Probe_Session), terminal I/O, and the protected-object
+--  cache; all are outside the SPARK 2014 language subset.  The pure type
+--  definitions, named constants, and parser function remain provable in the
+--  parent package Termicap.Clipboard (SPARK_Mode On).
+--
+--  Requirements Coverage:
+--    - @relation(FUNC-C52-006): Clipboard inference from DA1 Ps=52
+--    - @relation(FUNC-C52-007): Active OSC 52 read-back probe
+--    - @relation(FUNC-C52-009): Passive env-var heuristics
+--    - @relation(FUNC-C52-010): Combined detection cascade (DA1 -> probe -> env-var)
+--    - @relation(FUNC-C52-011): tmux and screen OSC 52 query passthrough
+--    - @relation(FUNC-C52-012): Pre-condition guards and TTY guards
+--    - @relation(FUNC-C52-013): No-TTY passive fallback
+--    - @relation(FUNC-C52-014): Termios restore on all exit paths via RAII
+--    - @relation(FUNC-C52-015): 1000 ms independent per-session timeout
+--    - @relation(FUNC-C52-016): No-exception guarantee for Detect_Clipboard
+--    - @relation(FUNC-C52-017): One-probe-per-process cache; uncached bypass
+--    - @relation(FUNC-C52-018): Package structure and SPARK boundary
+
+pragma SPARK_Mode (Off);
+
+package Termicap.Clipboard.IO is
+
+   ---------------------------------------------------------------------------
+   --  Cached Detection Entry Point (FUNC-C52-016, FUNC-C52-017)
+   ---------------------------------------------------------------------------
+
+   --  @summary Detect OSC 52 clipboard capability, returning a cached result
+   --  on all subsequent calls after the first.
+   --  @description Implements the platform cascade (FUNC-C52-010, FUNC-C52-012):
+   --    Guard 4 (Windows): GetConsoleMode (STD_OUTPUT_HANDLE) -- on success,
+   --      return Clipboard_Capabilities from passive env-var heuristics only
+   --      (Probed = False, Via_DA1 = False, Via_Active_Probe = False).
+   --      Evaluated first on Windows per FUNC-C52-012 final paragraph.
+   --    Guard 1: Is_TTY (Stdout) = False -- return passive env-var heuristics
+   --      only (FUNC-C52-013).
+   --    Guards 2 + 3: Foreground + /dev/tty open (composed inside Probe_Session.Open).
+   --    Phase 1: DA1 Ps=52 passive detection via Termicap.DA1.IO.Detect_DA1
+   --      (FUNC-C52-006); sets Support := Write_Only, Via_DA1 := True, Probed := True
+   --      when Has_Capability (DA1_Caps, Clipboard_Access) is True.
+   --    Phase 2: Active OSC 52 read-back probe (FUNC-C52-007); sends OSC52_QUERY
+   --      + DA1 sentinel; if Parse_OSC52_Response returns Valid_Response then
+   --      Support := Read_Write, Via_Active_Probe := True, Probed := True.
+   --      Multiplexer wrapping applied when TMUX or STY is set (FUNC-C52-011).
+   --      Skipped when Support is already Read_Write.
+   --    Phase 3: Env-var heuristics (FUNC-C52-009); applied when Support = None
+   --      after Phases 1 and 2.
+   --  The result is stored in a package-level protected object after the first
+   --  call and returned from the cache on all subsequent calls (FUNC-C52-017).
+   --  This function never propagates an exception under any circumstances;
+   --  any failure path returns NO_CLIPBOARD_CAPABILITIES or a partial result
+   --  (FUNC-C52-016).  Terminal attributes are restored on every exit path
+   --  including error and timeout (FUNC-C52-014).
+   --  @return Clipboard_Capabilities with the detected support level, provenance
+   --          flags, and Probed metadata.  Returns NO_CLIPBOARD_CAPABILITIES on
+   --          complete failure.
+   --  @relation(FUNC-C52-010): Full detection cascade with guards
+   --  @relation(FUNC-C52-016): No-exception guarantee
+   --  @relation(FUNC-C52-017): One-probe-per-process caching
+   function Detect_Clipboard return Clipboard_Capabilities;
+
+   ---------------------------------------------------------------------------
+   --  Cache-Bypass Detection (FUNC-C52-017 Should Clause)
+   ---------------------------------------------------------------------------
+
+   --  @summary Run the full clipboard detection cascade without consulting or
+   --  updating the process-lifetime cache.
+   --  @description Executes the identical platform cascade as Detect_Clipboard
+   --  (all guards + DA1 phase + active OSC 52 probe phase + env-var heuristics
+   --  phase) but does not read from or write to the protected-object cache.
+   --  Intended for test harnesses that need a fresh probe result (e.g., after
+   --  a terminal change) and for integration tests that must verify detection
+   --  behaviour in isolation from the cache.
+   --  Like Detect_Clipboard, this function never propagates an exception; any
+   --  failure path returns NO_CLIPBOARD_CAPABILITIES or a partial result
+   --  (FUNC-C52-016).
+   --  @return Clipboard_Capabilities from a fresh cascade execution.
+   --  @relation(FUNC-C52-017): Cache-bypass detection for test use
+   --  @relation(FUNC-C52-016): No-exception guarantee
+   function Detect_Clipboard_Uncached return Clipboard_Capabilities;
+
+end Termicap.Clipboard.IO;
