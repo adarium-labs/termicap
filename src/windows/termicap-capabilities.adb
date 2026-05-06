@@ -11,10 +11,15 @@
 --  Linux (Detect_Color_Level, Get_Size, Detect_Unicode_Level, etc.).  Only
 --  the sub-detector bodies differ per platform.
 
+with Termicap.Clipboard.IO;
 with Termicap.DA1.IO;
 with Termicap.Environment.Capture;
+with Termicap.Graphics.IO;
+with Termicap.Keyboard.IO;
+with Termicap.Mouse.IO;
 with Termicap.Override;
 with Termicap.Win32_Color;
+with Termicap.XTVERSION.IO;
 
 package body Termicap.Capabilities
   with SPARK_Mode => Off
@@ -166,5 +171,122 @@ is
          return Result;
       end;
    end Get;
+
+   ---------------------------------------------------------------------------
+   --  Assemble_Full
+   ---------------------------------------------------------------------------
+
+   function Assemble_Full
+     (Base      : Terminal_Capabilities;
+      XTVERSION : Termicap.XTVERSION.XTVERSION_Result;
+      Keyboard  : Termicap.Keyboard.Keyboard_Capability;
+      Mouse     : Termicap.Mouse.Mouse_Capabilities;
+      Graphics  : Termicap.Graphics.Graphics_Capabilities;
+      Clipboard : Termicap.Clipboard.Clipboard_Capabilities) return Full_Terminal_Capabilities
+   is
+   begin
+      return
+        Full_Terminal_Capabilities'
+          (TTY_Stdin              => Base.TTY_Stdin,
+           TTY_Stdout             => Base.TTY_Stdout,
+           TTY_Stderr             => Base.TTY_Stderr,
+           Color                  => Base.Color,
+           Size                   => Base.Size,
+           Unicode                => Base.Unicode,
+           Identity               => Base.Identity,
+           Downsampling_Available => Base.Downsampling_Available,
+           DA1                    => Base.DA1,
+           XTVERSION              => XTVERSION,
+           Keyboard               => Keyboard,
+           Mouse                  => Mouse,
+           Graphics               => Graphics,
+           Clipboard              => Clipboard);
+   end Assemble_Full;
+
+   ---------------------------------------------------------------------------
+   --  Full_Cache -- protected object for lazy per-stream caching
+   ---------------------------------------------------------------------------
+
+   type Full_Cache_Slot is record
+      Initialized : Boolean := False;
+      Value       : Full_Terminal_Capabilities;
+   end record;
+
+   type Full_Cache_Array is array (Termicap.TTY.Stream_Kind) of Full_Cache_Slot;
+
+   protected Full_Cache is
+      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Full_Cache_Slot;
+      procedure Set_Cached (Stream : Termicap.TTY.Stream_Kind; Caps : Full_Terminal_Capabilities);
+   private
+      Slots : Full_Cache_Array;
+   end Full_Cache;
+
+   protected body Full_Cache is
+
+      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Full_Cache_Slot is
+      begin
+         return Slots (Stream);
+      end Get_Cached;
+
+      procedure Set_Cached (Stream : Termicap.TTY.Stream_Kind; Caps : Full_Terminal_Capabilities) is
+      begin
+         Slots (Stream) := (Initialized => True, Value => Caps);
+      end Set_Cached;
+
+   end Full_Cache;
+
+   ---------------------------------------------------------------------------
+   --  Detect_Full -- fresh, uncached full detection
+   ---------------------------------------------------------------------------
+
+   function Detect_Full
+     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities
+   is
+      --  Steps 1-8: Detect base capabilities (Env, Id, TTY, Color, Size, Unicode, DA1).
+      Base_Caps : constant Terminal_Capabilities := Detect (Stream);
+
+      --  Step 9: XTVERSION active probe (terminal name/version identification).
+      XTV : constant Termicap.XTVERSION.XTVERSION_Result :=
+        Termicap.XTVERSION.IO.Query_And_Identify (Timeout_Ms => 1_000);
+
+      --  Step 10: Graphics detection (self-contained; uses its own DA1 + XTVERSION probes).
+      GFX : constant Termicap.Graphics.Graphics_Capabilities :=
+        Termicap.Graphics.IO.Detect_Graphics_Uncached;
+
+      --  Step 11: Keyboard protocol detection.
+      KBD : constant Termicap.Keyboard.Keyboard_Capability :=
+        Termicap.Keyboard.IO.Probe_Keyboard_Protocol;
+
+      --  Step 12: Mouse protocol detection.
+      MSE : constant Termicap.Mouse.Mouse_Capabilities :=
+        Termicap.Mouse.IO.Probe_Mouse_Protocols;
+
+      --  Step 13: Clipboard detection (self-contained; uses its own DA1 probe).
+      CLB : constant Termicap.Clipboard.Clipboard_Capabilities :=
+        Termicap.Clipboard.IO.Detect_Clipboard_Uncached;
+   begin
+      return Assemble_Full (Base_Caps, XTV, KBD, MSE, GFX, CLB);
+   end Detect_Full;
+
+   ---------------------------------------------------------------------------
+   --  Get_Full -- lazy cached full detection
+   ---------------------------------------------------------------------------
+
+   function Get_Full
+     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities
+   is
+      Slot : constant Full_Cache_Slot := Full_Cache.Get_Cached (Stream);
+   begin
+      if Slot.Initialized then
+         return Slot.Value;
+      end if;
+
+      declare
+         Result : constant Full_Terminal_Capabilities := Detect_Full (Stream);
+      begin
+         Full_Cache.Set_Cached (Stream, Result);
+         return Result;
+      end;
+   end Get_Full;
 
 end Termicap.Capabilities;
