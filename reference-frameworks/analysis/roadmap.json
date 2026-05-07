@@ -1021,6 +1021,46 @@
               "approx_line": 166
             }
           ]
+        },
+        {
+          "id": "HYPERLINK",
+          "name": "OSC 8 Hyperlink Support Detection",
+          "summary": "Two-tier classification of OSC 8 hyperlink support. Passive (Terminal_Capabilities): four-state {Unsupported, Likely_Supported, Supported, Unknown} from Terminal_Identity + TERM exclusion list (vt*|ansi|linux|sun|dumb). Active (Full_Terminal_Capabilities): XTVERSION-confirmed identity refines the result against a version-aware known-good database (e.g., vte >= 0.50, gnome-terminal >= 3.26). No detection protocol exists for OSC 8 itself; reference libraries (termcolor, tcell, termenv, termwiz) all rely on terminal fingerprinting. Includes new shared utility Termicap.Version (ADR-0036); refactors Sixel kitty-version path to use it (FUNC-HYP-022).",
+          "status": "done",
+          "spark_level": "Silver",
+          "ffi": false,
+          "requirement_uids": [
+            "FUNC-HYP-001", "FUNC-HYP-002", "FUNC-HYP-003", "FUNC-HYP-004",
+            "FUNC-HYP-005", "FUNC-HYP-005b", "FUNC-HYP-006", "FUNC-HYP-007",
+            "FUNC-HYP-008", "FUNC-HYP-009", "FUNC-HYP-010", "FUNC-HYP-011",
+            "FUNC-HYP-012", "FUNC-HYP-013", "FUNC-HYP-014", "FUNC-HYP-015",
+            "FUNC-HYP-016", "FUNC-HYP-017", "FUNC-HYP-018", "FUNC-HYP-019",
+            "FUNC-HYP-020", "FUNC-HYP-021", "FUNC-HYP-022"
+          ],
+          "source_files": [
+            "src/termicap-version.ads",
+            "src/termicap-version.adb",
+            "src/termicap-hyperlinks.ads",
+            "src/termicap-hyperlinks.adb",
+            "src/termicap-graphics.ads",
+            "src/termicap-graphics.adb",
+            "src/termicap-capabilities.ads",
+            "src/posix/termicap-capabilities.adb",
+            "src/windows/termicap-capabilities.adb",
+            "examples/hyperlink_demo/src/hyperlink_demo.adb"
+          ],
+          "doc_refs": [
+            {
+              "file": "reference-frameworks/analysis/00-GLOBAL-SYNTHESIS.md",
+              "section": "2.8 OSC 8 Hyperlinks",
+              "approx_line": 326
+            },
+            {
+              "file": "reference-frameworks/analysis/00-Terminal_Capability_Detection.md",
+              "section": "Recommended feature set with prioritization \u2014 Advanced/optional features (P2) \u2014 Hyperlink support (OSC 8)",
+              "approx_line": 306
+            }
+          ]
         }
       ]
     }

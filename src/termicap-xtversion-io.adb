@@ -49,12 +49,11 @@ package body Termicap.XTVERSION.IO is
    begin
       --  Capture environment and detect terminal identity for multiplexer check
       Termicap.Environment.Capture.Capture_Current (Env);
-      Identity    := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
+      Identity := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
       Passthrough := Passthrough_For_Identity (Identity);
 
       declare
-         Wrapped : constant Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough (CSI_XTVERSION_QUERY, Passthrough);
+         Wrapped : constant Byte_Array := Termicap.OSC.Parsing.Wrap_For_Passthrough (CSI_XTVERSION_QUERY, Passthrough);
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;
       begin

@@ -54,12 +54,11 @@ package body Termicap.Color.BG_Query.IO is
    begin
       --  Capture environment and detect terminal identity for multiplexer check
       Termicap.Environment.Capture.Capture_Current (Env);
-      Identity    := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
+      Identity := Termicap.Terminal_Id.Detect_Terminal_Identity (Env);
       Passthrough := Passthrough_For_Identity (Identity);
 
       declare
-         Wrapped : constant Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough (Query_Bytes, Passthrough);
+         Wrapped : constant Byte_Array := Termicap.OSC.Parsing.Wrap_For_Passthrough (Query_Bytes, Passthrough);
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;
       begin

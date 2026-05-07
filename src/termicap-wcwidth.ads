@@ -205,8 +205,7 @@ is
    --  @relation(FUNC-WCW-005): Integration with existing Unicode detection cascade
    --  @relation(FUNC-WCW-012): Public API specification
    function Refine_Unicode_Level
-     (Env_Level : Termicap.Unicode.Unicode_Level; Wcw_Level : Wcwidth_Level)
-      return Termicap.Unicode.Unicode_Level
+     (Env_Level : Termicap.Unicode.Unicode_Level; Wcw_Level : Wcwidth_Level) return Termicap.Unicode.Unicode_Level
    with Global => null;
 
 end Termicap.Wcwidth;

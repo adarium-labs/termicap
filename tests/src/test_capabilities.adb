@@ -14,6 +14,7 @@ with Termicap.Capabilities; use Termicap.Capabilities;
 with Termicap.Color;
 with Termicap.DA1;
 with Termicap.Dimensions;
+with Termicap.Hyperlinks;
 with Termicap.Override;     use Termicap.Override;
 with Termicap.Terminal_Id;
 with Termicap.TTY;
@@ -21,6 +22,8 @@ with Termicap.Unicode;
 
 --  Bring equality operators into scope for comparison expressions.
 use type Termicap.Color.Color_Level;
+use type Termicap.Hyperlinks.Hyperlinks_Support;
+use type Termicap.Hyperlinks.Hyperlinks_Provenance;
 use type Termicap.Unicode.Unicode_Level;
 use type Termicap.Terminal_Id.Terminal_Kind;
 
@@ -116,6 +119,20 @@ package body Test_Capabilities is
         (T,
          Test_Record_Value_Semantics'Access,
          "FUNC-CAP-009: Modifying a copy does not affect the original (value semantics)");
+
+      --  Group 7 - Hyperlinks field (FUNC-HYP-014)
+      Register_Routine
+        (T,
+         Test_Hyperlinks_Default_When_Omitted'Access,
+         "FUNC-HYP-014: Assemble without Hyperlinks param uses DEFAULT_HYPERLINKS_RESULT");
+      Register_Routine
+        (T,
+         Test_Hyperlinks_Explicit_Preserved'Access,
+         "FUNC-HYP-014: Assemble with explicit Hyperlinks preserves the supplied value");
+      Register_Routine
+        (T,
+         Test_Hyperlinks_Other_Fields_Unchanged'Access,
+         "FUNC-HYP-014: Adding Hyperlinks param does not alter other fields (regression)");
    end Register_Tests;
 
 
@@ -573,5 +590,108 @@ package body Test_Capabilities is
       Assert (not Copy.TTY_Stdin, "Copy.TTY_Stdin should reflect the mutation");
       Assert (Copy.Color = Termicap.Color.None, "Copy.Color should reflect the mutation");
    end Test_Record_Value_Semantics;
+
+
+   ---------------------------------------------------------------------------
+   --  Group 7: Hyperlinks field in Terminal_Capabilities (FUNC-HYP-014)
+   ---------------------------------------------------------------------------
+
+   procedure Test_Hyperlinks_Default_When_Omitted (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      --  Omit the Hyperlinks parameter — it should default to DEFAULT_HYPERLINKS_RESULT.
+      Caps : constant Terminal_Capabilities :=
+        Assemble
+          (TTY_Stdin  => False,
+           TTY_Stdout => True,
+           TTY_Stderr => False,
+           Color      => Termicap.Color.None,
+           Size       => Default_Size,
+           Unicode    => Default_Unicode,
+           Identity   => Default_Identity,
+           DA1        => Default_DA1);
+   begin
+      Assert
+        (Caps.Hyperlinks.Support = Termicap.Hyperlinks.Unknown,
+         "Omitted Hyperlinks: Support should default to Unknown");
+      Assert
+        (Caps.Hyperlinks.Provenance = Termicap.Hyperlinks.Default,
+         "Omitted Hyperlinks: Provenance should default to Default");
+      Assert
+        (not Caps.Hyperlinks.Terminal_Version_Known,
+         "Omitted Hyperlinks: Terminal_Version_Known should default to False");
+   end Test_Hyperlinks_Default_When_Omitted;
+
+
+   procedure Test_Hyperlinks_Explicit_Preserved (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      --  Pass a non-default Hyperlinks value and verify it survives Assemble.
+      Custom_HL : constant Termicap.Hyperlinks.Hyperlinks_Result :=
+        (Support                => Termicap.Hyperlinks.Likely_Supported,
+         Provenance             => Termicap.Hyperlinks.Env_Known_Good,
+         Terminal_Version_Known => False);
+      Caps      : constant Terminal_Capabilities :=
+        Assemble
+          (TTY_Stdin  => False,
+           TTY_Stdout => True,
+           TTY_Stderr => False,
+           Color      => Termicap.Color.None,
+           Size       => Default_Size,
+           Unicode    => Default_Unicode,
+           Identity   => Default_Identity,
+           DA1        => Default_DA1,
+           Hyperlinks => Custom_HL);
+   begin
+      Assert
+        (Caps.Hyperlinks.Support = Termicap.Hyperlinks.Likely_Supported,
+         "Explicit Hyperlinks: Support should be Likely_Supported as supplied");
+      Assert
+        (Caps.Hyperlinks.Provenance = Termicap.Hyperlinks.Env_Known_Good,
+         "Explicit Hyperlinks: Provenance should be Env_Known_Good as supplied");
+      Assert
+        (not Caps.Hyperlinks.Terminal_Version_Known,
+         "Explicit Hyperlinks: Terminal_Version_Known should be False as supplied");
+   end Test_Hyperlinks_Explicit_Preserved;
+
+
+   procedure Test_Hyperlinks_Other_Fields_Unchanged (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      --  Verify that adding the Hyperlinks parameter does not change other fields.
+      Custom_HL : constant Termicap.Hyperlinks.Hyperlinks_Result :=
+        (Support                => Termicap.Hyperlinks.Supported,
+         Provenance             => Termicap.Hyperlinks.XTVERSION_Confirmed,
+         Terminal_Version_Known => True);
+      Caps      : constant Terminal_Capabilities :=
+        Assemble
+          (TTY_Stdin  => True,
+           TTY_Stdout => True,
+           TTY_Stderr => False,
+           Color      => Termicap.Color.True_Color,
+           Size       => Default_Size,
+           Unicode    => Termicap.Unicode.Extended,
+           Identity   => Default_Identity,
+           DA1        => Default_DA1,
+           Hyperlinks => Custom_HL);
+   begin
+      --  Verify other fields are populated correctly (regression guard).
+      Assert (Caps.TTY_Stdin,  "Hyperlinks present: TTY_Stdin should still be True");
+      Assert (Caps.TTY_Stdout, "Hyperlinks present: TTY_Stdout should still be True");
+      Assert (not Caps.TTY_Stderr, "Hyperlinks present: TTY_Stderr should still be False");
+      Assert
+        (Caps.Color = Termicap.Color.True_Color,
+         "Hyperlinks present: Color should still be True_Color");
+      Assert
+        (Caps.Downsampling_Available,
+         "Hyperlinks present: Downsampling_Available should still be True for True_Color");
+      Assert
+        (Caps.Unicode = Termicap.Unicode.Extended,
+         "Hyperlinks present: Unicode should still be Extended");
+      --  And the Hyperlinks field carries our custom value.
+      Assert
+        (Caps.Hyperlinks.Support = Termicap.Hyperlinks.Supported,
+         "Hyperlinks present: Support should be Supported as supplied");
+      Assert
+        (Caps.Hyperlinks.Terminal_Version_Known,
+         "Hyperlinks present: Terminal_Version_Known should be True as supplied");
+   end Test_Hyperlinks_Other_Fields_Unchanged;
 
 end Test_Capabilities;

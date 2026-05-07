@@ -129,8 +129,7 @@ is
    --  @relation(FUNC-CWM-010): ASCII printable fast path
    --  @relation(FUNC-CWM-011): Control characters return 0
    --  @relation(FUNC-CWM-012): Single-argument public API
-   function Cell_Width
-     (Codepoint : Unicode_Scalar_Value) return Cell_Width_Value
+   function Cell_Width (Codepoint : Unicode_Scalar_Value) return Cell_Width_Value
    with Global => null;
 
    --  @summary Return the terminal column width of a Unicode scalar value
@@ -145,9 +144,7 @@ is
    --  @relation(FUNC-CWM-010): ASCII printable fast path
    --  @relation(FUNC-CWM-011): Control characters return 0
    --  @relation(FUNC-CWM-012): Two-argument public API
-   function Cell_Width
-     (Codepoint : Unicode_Scalar_Value; Version : Table_Version)
-      return Cell_Width_Value
+   function Cell_Width (Codepoint : Unicode_Scalar_Value; Version : Table_Version) return Cell_Width_Value
    with Global => null;
 
 end Termicap.Cell_Width;

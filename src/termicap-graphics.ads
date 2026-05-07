@@ -335,4 +335,34 @@ is
    function Parse_Kitty_APC_Response (Buffer : Byte_Array; Length : Natural) return APC_Parse_Result
    with SPARK_Mode => On, Global => null, Pre => Length <= Buffer'Length, Post => True;
 
+   ---------------------------------------------------------------------------
+   --  Kitty Version Parsing (FUNC-SXL-003, FUNC-HYP-022)
+   ---------------------------------------------------------------------------
+
+   --  @summary Parse a kitty version string into the legacy Natural encoding
+   --           used by Graphics_Capabilities.Kitty_Graphics_Version.
+   --  @description Accepts a kitty version string of the form "MAJOR.MINOR.PATCH"
+   --  (e.g., "0.20.0") and encodes it into a Natural as MAJOR * 10_000 +
+   --  MINOR * 100 + PATCH.  This encoding preserves ordering for direct
+   --  numeric comparison, which is what FUNC-SXL-003 requires when gating
+   --  Kitty animation support on kitty >= 0.20.0.
+   --
+   --  The implementation delegates the structural parse to Termicap.Version.Parse
+   --  (FUNC-HYP-013), then projects the resulting Version components onto the
+   --  legacy Natural encoding.  This satisfies FUNC-HYP-022 by routing all
+   --  version comparisons through the shared utility while preserving the
+   --  observable type of the Kitty_Graphics_Version field.
+   --
+   --  Returns 0 (the canonical "version unknown" sentinel) when:
+   --    - The input string is empty.
+   --    - The input string is not a valid dotted-numeric version.
+   --    - Any component would overflow the encoded representation.
+   --
+   --  @param Version_String  The raw version token (no leading "v", no suffix).
+   --  @return The encoded Natural version, or 0 if parsing fails.
+   --  @relation(FUNC-SXL-003): Kitty_Graphics_Version field population
+   --  @relation(FUNC-HYP-022): Sixel refactor uses Termicap.Version
+   function Parse_Kitty_Version (Version_String : String) return Natural
+   with SPARK_Mode => On, Global => null;
+
 end Termicap.Graphics;

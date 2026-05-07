@@ -105,45 +105,42 @@ package body Termicap.Clipboard.IO is
    --  @param Caps The clipboard capabilities record to update in place.
    --  @relation(FUNC-C52-009): Passive env-var heuristics
 
-   procedure Infer_Clipboard_From_Env
-     (Env  :        Termicap.Environment.Environment;
-      Caps : in out Clipboard_Capabilities)
-   is
+   procedure Infer_Clipboard_From_Env (Env : Termicap.Environment.Environment; Caps : in out Clipboard_Capabilities) is
       TP : constant String := Termicap.Environment.Value (Env, "TERM_PROGRAM");
       T  : constant String := Termicap.Environment.Value (Env, "TERM");
       WT : constant String := Termicap.Environment.Value (Env, ENV_WT_SESSION);
    begin
       --  Step 1: TERM_PROGRAM = WezTerm (case-insensitive) -> Read_Write.
       if Termicap.Environment.Equal_Case_Insensitive (TP, TERM_PROGRAM_WEZTERM) then
-         Caps.Support           := Read_Write;
+         Caps.Support := Read_Write;
          Caps.Via_Env_Heuristic := True;
          return;
       end if;
 
       --  Step 1 continued: TERM_PROGRAM = iTerm.app (case-insensitive) -> Read_Write.
       if Termicap.Environment.Equal_Case_Insensitive (TP, TERM_PROGRAM_ITERM2) then
-         Caps.Support           := Read_Write;
+         Caps.Support := Read_Write;
          Caps.Via_Env_Heuristic := True;
          return;
       end if;
 
       --  Step 2: TERM_PROGRAM = vscode (case-insensitive) -> Write_Only.
       if Termicap.Environment.Equal_Case_Insensitive (TP, TERM_PROGRAM_VSCODE) then
-         Caps.Support           := Write_Only;
+         Caps.Support := Write_Only;
          Caps.Via_Env_Heuristic := True;
          return;
       end if;
 
       --  Step 3: WT_SESSION present and non-empty -> Write_Only (Windows Terminal).
       if WT'Length > 0 then
-         Caps.Support           := Write_Only;
+         Caps.Support := Write_Only;
          Caps.Via_Env_Heuristic := True;
          return;
       end if;
 
       --  Step 4: TERM = xterm-kitty (exact, case-insensitive) -> Read_Write.
       if Termicap.Environment.Equal_Case_Insensitive (T, TERM_XTERM_KITTY) then
-         Caps.Support           := Read_Write;
+         Caps.Support := Read_Write;
          Caps.Via_Env_Heuristic := True;
          return;
       end if;
@@ -151,10 +148,9 @@ package body Termicap.Clipboard.IO is
       --  Step 4 continued: TERM starts with "xterm" (prefix, lower-cased) -> Write_Only.
       --  Conservative: allowWindowOps (gates read-back) is disabled by default.
       if T'Length >= TERM_XTERM'Length
-        and then Ada.Characters.Handling.To_Lower
-                   (T (T'First .. T'First + TERM_XTERM'Length - 1)) = TERM_XTERM
+        and then Ada.Characters.Handling.To_Lower (T (T'First .. T'First + TERM_XTERM'Length - 1)) = TERM_XTERM
       then
-         Caps.Support           := Write_Only;
+         Caps.Support := Write_Only;
          Caps.Via_Env_Heuristic := True;
          return;
       end if;
@@ -177,9 +173,7 @@ package body Termicap.Clipboard.IO is
    --  @relation(FUNC-C52-007): Active OSC 52 probe with DA1 sentinel boundary
    --  @relation(FUNC-C52-011): tmux and screen passthrough wrapping
 
-   function Run_OSC52_Probe
-     (Env : Termicap.Environment.Environment) return OSC52_Parse_Result
-   is
+   function Run_OSC52_Probe (Env : Termicap.Environment.Environment) return OSC52_Parse_Result is
       Session     : Termicap.OSC.Probe_Session;
       Status      : Termicap.OSC.Session_Status;
       Resp_Buffer : Termicap.OSC.Response_Buffer;
@@ -194,12 +188,9 @@ package body Termicap.Clipboard.IO is
       --  Determine multiplexer passthrough mode from environment variables.
       --  TMUX set -> Tmux_Passthrough; STY set -> Screen_Passthrough; else No_Passthrough.
       declare
-         Tmux_Val    : constant String :=
-           Termicap.Environment.Value (Env, ENV_TMUX);
-         STY_Val     : constant String :=
-           Termicap.Environment.Value (Env, ENV_STY);
-         Passthrough : Termicap.OSC.Parsing.Passthrough_Mode :=
-           Termicap.OSC.Parsing.No_Passthrough;
+         Tmux_Val    : constant String := Termicap.Environment.Value (Env, ENV_TMUX);
+         STY_Val     : constant String := Termicap.Environment.Value (Env, ENV_STY);
+         Passthrough : Termicap.OSC.Parsing.Passthrough_Mode := Termicap.OSC.Parsing.No_Passthrough;
       begin
          if Tmux_Val'Length > 0 then
             Passthrough := Termicap.OSC.Parsing.Tmux_Passthrough;
@@ -209,8 +200,7 @@ package body Termicap.Clipboard.IO is
 
          --  Wrap OSC52_QUERY in the appropriate DCS envelope (or leave unwrapped).
          declare
-            Wrapped_Query : constant Byte_Array :=
-              Termicap.OSC.Parsing.Wrap_For_Passthrough (OSC52_QUERY, Passthrough);
+            Wrapped_Query : constant Byte_Array := Termicap.OSC.Parsing.Wrap_For_Passthrough (OSC52_QUERY, Passthrough);
          begin
             --  Sentinel_Query writes the (possibly wrapped) OSC52_QUERY, appends the
             --  DA1 sentinel (ESC [ c), then reads until the DA1 response terminates.
@@ -284,7 +274,7 @@ package body Termicap.Clipboard.IO is
             --  (e.g., xterm advertises Ps=52 even when allowWindowOps is false).
             Caps.Support := Write_Only;
             Caps.Via_DA1 := True;
-            Caps.Probed  := True;
+            Caps.Probed := True;
          elsif DA1_Caps.Supported then
             --  DA1 returned a valid response but Ps=52 absent: terminal
             --  explicitly reports no clipboard support.  Probed = True.
@@ -305,9 +295,9 @@ package body Termicap.Clipboard.IO is
             OSC52_Result : constant OSC52_Parse_Result := Run_OSC52_Probe (Env);
          begin
             if OSC52_Result = Valid_Response then
-               Caps.Support          := Read_Write;
+               Caps.Support := Read_Write;
                Caps.Via_Active_Probe := True;
-               Caps.Probed           := True;
+               Caps.Probed := True;
             end if;
          end;
       end if;

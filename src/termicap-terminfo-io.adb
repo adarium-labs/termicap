@@ -33,12 +33,7 @@ package body Termicap.Terminfo.IO is
    ---------------------------------------------------------------------------
 
    --  @relation(FUNC-TIF-006): POSIX read operation with Read_Error status
-   procedure Read_File
-     (Path   : String;
-      Buffer : out Byte_Array;
-      Size   : out Natural;
-      Error  : out Read_Error)
-   is
+   procedure Read_File (Path : String; Buffer : out Byte_Array; Size : out Natural; Error : out Read_Error) is
       use Ada.Streams.Stream_IO;
 
       File   : File_Type;
@@ -115,8 +110,7 @@ package body Termicap.Terminfo.IO is
       Lo        : constant Natural := Val mod 16;
       Hex_Chars : constant String := "0123456789abcdef";
    begin
-      return
-        [Hex_Chars (Hex_Chars'First + Hi), Hex_Chars (Hex_Chars'First + Lo)];
+      return [Hex_Chars (Hex_Chars'First + Hi), Hex_Chars (Hex_Chars'First + Lo)];
    end Hex_Of_Char;
 
    ---------------------------------------------------------------------------
@@ -127,9 +121,7 @@ package body Termicap.Terminfo.IO is
    MAX_DIRS : constant := 32;
 
    --  @relation(FUNC-TIF-015): Top-level Parse_Terminfo entry function
-   function Parse_Terminfo
-     (Env : Termicap.Environment.Environment) return Terminfo_Result
-   is
+   function Parse_Terminfo (Env : Termicap.Environment.Environment) return Terminfo_Result is
       use Termicap.Environment;
 
       --  Step 1: Read the TERM environment variable.
@@ -222,8 +214,7 @@ package body Termicap.Terminfo.IO is
             Primary_Sub : constant String := [Term_First];
             Alt_Sub     : constant String := Term_Hex;
 
-            Buffer    : Byte_Array (1 .. MAX_TERMINFO_FILE_SIZE) :=
-              [others => 0];
+            Buffer    : Byte_Array (1 .. MAX_TERMINFO_FILE_SIZE) := [others => 0];
             Read_Size : Natural;
             Read_Err  : Read_Error;
          begin
@@ -233,8 +224,7 @@ package body Termicap.Terminfo.IO is
                begin
                   --  Primary path: Dir/T(1)/Term
                   declare
-                     Primary_Path : constant String :=
-                       Dir_Str & "/" & Primary_Sub & "/" & Term;
+                     Primary_Path : constant String := Dir_Str & "/" & Primary_Sub & "/" & Term;
                   begin
                      if Primary_Path'Length <= MAX_PATH_LENGTH then
                         Read_File (Primary_Path, Buffer, Read_Size, Read_Err);
@@ -246,8 +236,7 @@ package body Termicap.Terminfo.IO is
 
                   --  Alternate path: Dir/HH/Term (hex encoding of first char)
                   declare
-                     Alt_Path : constant String :=
-                       Dir_Str & "/" & Alt_Sub & "/" & Term;
+                     Alt_Path : constant String := Dir_Str & "/" & Alt_Sub & "/" & Term;
                   begin
                      if Alt_Path'Length <= MAX_PATH_LENGTH then
                         Read_File (Alt_Path, Buffer, Read_Size, Read_Err);
@@ -255,8 +244,7 @@ package body Termicap.Terminfo.IO is
                            return Parse_Buffer (Buffer, Read_Size);
                         end if;
                         if Read_Err = Read_Too_Large then
-                           return
-                             (Success => False, Error => Error_File_Too_Large);
+                           return (Success => False, Error => Error_File_Too_Large);
                         end if;
                      end if;
                   end;

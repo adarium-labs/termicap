@@ -237,8 +237,7 @@ is
    ---------------------------------------------------------------------------
 
    --  @summary Index subtype for Capability_String length tracking.
-   subtype Capability_String_Index is
-     Natural range 0 .. MAX_CAPABILITY_STRING_LENGTH;
+   subtype Capability_String_Index is Natural range 0 .. MAX_CAPABILITY_STRING_LENGTH;
 
    --  @summary Bounded string holding an extracted terminfo string capability value.
    --  @description Data holds the raw bytes (converted to Character); Length is
@@ -394,8 +393,7 @@ is
    --  @param Header  A Parsed_Header previously produced by Parse_Header.
    --  @return True when the header fields satisfy all structural invariants.
    --  @relation(FUNC-TIF-018): Header_Is_Valid ghost predicate
-   function Header_Is_Valid
-     (Buffer : Byte_Array; Header : Parsed_Header) return Boolean
+   function Header_Is_Valid (Buffer : Byte_Array; Header : Parsed_Header) return Boolean
    is (Header.Format /= Unknown
        and then Header.Names_Size >= 1
        and then Header.Names_Size <= MAX_NAMES_SECTION_SIZE
@@ -416,9 +414,7 @@ is
    --  @param Ext     An Extended_Header previously produced by Parse_Extended_Header.
    --  @return True when the extended header fields satisfy all structural invariants.
    --  @relation(FUNC-TIF-018): Extended_Is_Valid ghost predicate
-   function Extended_Is_Valid
-     (Buffer : Byte_Array; Header : Parsed_Header; Ext : Extended_Header)
-      return Boolean
+   function Extended_Is_Valid (Buffer : Byte_Array; Header : Parsed_Header; Ext : Extended_Header) return Boolean
    is (Header_Is_Valid (Buffer, Header)
        and then Ext.Ext_Bool_Count <= 64
        and then Ext.Ext_Num_Count <= 128
@@ -439,10 +435,9 @@ is
    --  @param Size    Number of valid bytes in Buffer; must satisfy 2 <= Size <= Buffer'Length.
    --  @return Legacy_16bit, Extended_32bit, or Unknown.
    --  @relation(FUNC-TIF-007): Detect_Format pure function with SPARK contract
-   function Detect_Format
-     (Buffer : Byte_Array; Size : Natural) return Terminfo_Format
+   function Detect_Format (Buffer : Byte_Array; Size : Natural) return Terminfo_Format
    with
-     Pre  => Size >= 2 and then Size <= Buffer'Length,
+     Pre => Size >= 2 and then Size <= Buffer'Length,
      Post => Detect_Format'Result in Legacy_16bit | Extended_32bit | Unknown;
 
    ---------------------------------------------------------------------------
@@ -463,16 +458,9 @@ is
    --  @param Success  True on success; False when any validation check fails.
    --  @relation(FUNC-TIF-008): Parse_Header procedure with SPARK pre/post contracts
    procedure Parse_Header
-     (Buffer  : Byte_Array;
-      Size    : Natural;
-      Format  : Terminfo_Format;
-      Header  : out Parsed_Header;
-      Success : out Boolean)
+     (Buffer : Byte_Array; Size : Natural; Format : Terminfo_Format; Header : out Parsed_Header; Success : out Boolean)
    with
-     Pre  =>
-       Size >= HEADER_SIZE
-       and then Size <= Buffer'Length
-       and then Format /= Unknown,
+     Pre => Size >= HEADER_SIZE and then Size <= Buffer'Length and then Format /= Unknown,
      Post => (if Success then Header_Is_Valid (Buffer, Header));
 
    ---------------------------------------------------------------------------
@@ -489,14 +477,9 @@ is
    --  @param Index   Standard ncurses boolean capability index (0-based).
    --  @return The Boolean_Cap_Value for the capability.
    --  @relation(FUNC-TIF-009): Get_Boolean pure function
-   function Get_Boolean
-     (Buffer : Byte_Array; Header : Parsed_Header; Index : Natural)
-      return Boolean_Cap_Value
+   function Get_Boolean (Buffer : Byte_Array; Header : Parsed_Header; Index : Natural) return Boolean_Cap_Value
    with
-     Pre =>
-       Header_Is_Valid (Buffer, Header)
-       and then Header.Bool_Section_Offset + Header.Bool_Count
-                <= Buffer'Length;
+     Pre => Header_Is_Valid (Buffer, Header) and then Header.Bool_Section_Offset + Header.Bool_Count <= Buffer'Length;
 
    ---------------------------------------------------------------------------
    --  Numeric Capability Extraction (FUNC-TIF-010)
@@ -516,12 +499,9 @@ is
    --  @return The integer value, or ABSENT_NUMERIC (-1) when out of range.
    --  @relation(FUNC-TIF-010): Get_Numeric pure function with SPARK postcondition
    function Get_Numeric
-     (Buffer : Byte_Array;
-      Header : Parsed_Header;
-      Format : Terminfo_Format;
-      Index  : Natural) return Integer
+     (Buffer : Byte_Array; Header : Parsed_Header; Format : Terminfo_Format; Index : Natural) return Integer
    with
-     Pre  => Header_Is_Valid (Buffer, Header) and then Format /= Unknown,
+     Pre => Header_Is_Valid (Buffer, Header) and then Format /= Unknown,
      Post => Get_Numeric'Result >= CANCELLED_NUMERIC;
 
    ---------------------------------------------------------------------------
@@ -547,9 +527,7 @@ is
       Index   : Natural;
       Result  : out Capability_String;
       Present : out Boolean)
-   with
-     Pre  => Header_Is_Valid (Buffer, Header),
-     Post => (if not Present then Result.Length = 0);
+   with Pre => Header_Is_Valid (Buffer, Header), Post => (if not Present then Result.Length = 0);
 
    ---------------------------------------------------------------------------
    --  Extended Section Header Parsing (FUNC-TIF-012)
@@ -572,13 +550,9 @@ is
    --  @param Success  True when an extended section was found and validated.
    --  @relation(FUNC-TIF-012): Parse_Extended_Header procedure
    procedure Parse_Extended_Header
-     (Buffer  : Byte_Array;
-      Size    : Natural;
-      Header  : Parsed_Header;
-      Ext     : out Extended_Header;
-      Success : out Boolean)
+     (Buffer : Byte_Array; Size : Natural; Header : Parsed_Header; Ext : out Extended_Header; Success : out Boolean)
    with
-     Pre  => Header_Is_Valid (Buffer, Header) and then Size <= Buffer'Length,
+     Pre => Header_Is_Valid (Buffer, Header) and then Size <= Buffer'Length,
      Post => (if Success then Extended_Is_Valid (Buffer, Header, Ext));
 
    ---------------------------------------------------------------------------
@@ -611,9 +585,7 @@ is
       Has_Tc  : out Boolean)
    with
      Pre =>
-       Header_Is_Valid (Buffer, Header)
-       and then Extended_Is_Valid (Buffer, Header, Ext)
-       and then Format /= Unknown;
+       Header_Is_Valid (Buffer, Header) and then Extended_Is_Valid (Buffer, Header, Ext) and then Format /= Unknown;
 
    ---------------------------------------------------------------------------
    --  Full Buffer Parse (convenience aggregation)
@@ -640,8 +612,7 @@ is
    --  @relation(FUNC-TIF-011): Extracts setaf/setab via Get_String
    --  @relation(FUNC-TIF-012): Calls Parse_Extended_Header
    --  @relation(FUNC-TIF-014): Calls Extract_Truecolor_Flags
-   function Parse_Buffer
-     (Buffer : Byte_Array; Size : Natural) return Terminfo_Result
+   function Parse_Buffer (Buffer : Byte_Array; Size : Natural) return Terminfo_Result
    with Pre => Size >= 2 and then Size <= Buffer'Length;
 
 end Termicap.Terminfo;

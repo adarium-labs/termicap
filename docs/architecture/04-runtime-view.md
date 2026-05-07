@@ -2979,6 +2979,167 @@ end;
 
 ---
 
+## Scenario 33: Hyperlink Classification — Passive and XTVERSION Refinement
+
+End-to-end scenario showing how OSC 8 hyperlink support is classified as part of `Termicap.Capabilities.Detect` (passive tier only) and refined by `Termicap.Capabilities.Detect_Full` (XTVERSION-gated tier). Covers ADR-0038 (no second probe session), ADR-0037 (flat result record), and the SPARK boundary split.
+
+### Phase A — Passive Classification (runs inside `Detect`)
+
+```
+Caller (Termicap.Capabilities.Detect)
+  │
+  │  Step 1–7: identical to Scenario 17 (Env, Identity, TTY, Color, Size,
+  │            Unicode, DA1 — produces base fields)
+  │
+  │  Step 8: Classify_Hyperlinks_Support (Env, Identity)
+  ▼
+Termicap.Hyperlinks.Classify_Hyperlinks_Support
+  │                               [SPARK Silver, Global => null]
+  │
+  │  Step 1 — TERM legacy-prefix exclusion (FUNC-HYP-004):
+  │    TERM starts with "vt" or "sun" → (Unsupported, Env_Excluded, False)
+  │    TERM = "ansi" | "linux" | "dumb" → (Unsupported, Env_Excluded, False)
+  │
+  │  Step 2 — Terminal_Kind hard exclusion (FUNC-HYP-005b):
+  │    Kind in Apple_Terminal | Dumb | Linux_Console
+  │      → (Unsupported, Env_Excluded, False)
+  │
+  │  Step 3 — Terminal_Kind known-good list (FUNC-HYP-005):
+  │    Kind in Alacritty | Foot | Ghostty | ITerm2 | JediTerm | Kitty |
+  │             Konsole  | Mintty | VSCode | VTE | WarpTerminal |
+  │             WezTerm  | Windows_Terminal | Xterm
+  │      → (Likely_Supported, Env_Known_Good, False)
+  │
+  │  All other Terminal_Kind values (Rxvt, Screen, Tmux, Unknown, …):
+  │      → (Unknown, Env_Unknown, False)
+  │
+  └──► Hyperlinks_Result (Support, Provenance, Terminal_Version_Known=False)
+
+  │
+  │  Step 9: Assemble (…, Hyperlinks => passive_result)  [SPARK Silver]
+  │
+  └──► Terminal_Capabilities.Hyperlinks := passive_result
+```
+
+**Key properties:**
+
+- `Classify_Hyperlinks_Support` is a pure function: `Global => null`, no OS calls, no I/O, no global state (FUNC-HYP-008). GNATprove verifies the contract at Silver level (FUNC-HYP-018).
+- The `Env` parameter is the same immutable snapshot already captured in Step 1 of `Detect` (FUNC-CAP-011 — single-snapshot rule).
+- The `Assemble` postcondition still holds: `Downsampling_Available = (Color >= Extended_256)`. The `Hyperlinks` parameter is defaulted and does not affect the postcondition.
+- The result is included in the base `Terminal_Capabilities` record; callers that only need passive classification should use `Get` / `Detect`.
+
+### Phase B — XTVERSION Refinement (runs inside `Detect_Full`)
+
+```
+Caller (Termicap.Capabilities.Detect_Full)
+  │
+  │  Steps 1–8: identical to Detect (produces base Terminal_Capabilities incl.
+  │             Hyperlinks := passive_result from Phase A)
+  │
+  │  Step 9: XTVERSION active probe  [ADR-0038 — reuse existing probe]
+  │
+  │  Query_And_Identify (Timeout_Ms => 100)
+  ▼
+Termicap.XTVERSION.IO.Query_And_Identify     [SPARK_Mode => Off]
+  │
+  │  (see Scenario 21 for full XTVERSION probe lifecycle)
+  │
+  └──► xtv_result : XTVERSION_Result (Success | Timeout | Parse_Error)
+
+  │
+  │  Step 9a: Refine_With_XTVERSION (passive_result, xtv_result)
+  ▼
+Termicap.Hyperlinks.Refine_With_XTVERSION    [SPARK_Mode => Off]
+  │
+  │  Passive.Support = Unsupported, Provenance = Env_Excluded?
+  │    Yes → return Passive unchanged  ("Unsupported is terminal" invariant)
+  │
+  │  XTV.Status /= Success?
+  │    Yes → return (Passive.Support, XTVERSION_Unresolved, TVK)
+  │
+  │  Terminal name in known-good table?
+  │
+  │    Name found, "any" minimum (foot, WezTerm, Ghostty, Konsole):
+  │      → return (Supported, XTVERSION_Confirmed, True)
+  │
+  │    Name found, version string parseable, version >= minimum:
+  │      → return (Supported, XTVERSION_Confirmed, True)
+  │
+  │    Name found, version string parseable, version < minimum:
+  │      → return (Unsupported, XTVERSION_Rejected, True)
+  │
+  │    Name found, version string unparseable:
+  │      → return (Passive.Support, Env_Known_Good, True)
+  │
+  │    Name not found in table:
+  │      → return (Passive.Support, XTVERSION_Unresolved, False)
+  │
+  │  [outer exception handler: when others => return Passive]
+  │
+  └──► Hyperlinks_Result (refined Support, Provenance, Terminal_Version_Known)
+
+  │
+  │  Step 10–13: Graphics, Keyboard, Mouse, Clipboard probes
+  │  (see Scenarios 22, 24, 25, 30 for each)
+  │
+  │  Assemble_Full (Base => base_caps, XTVERSION => xtv_result, …)
+  │
+  └──► Full_Terminal_Capabilities
+         .Hyperlinks := refined_result  (from base_caps.Hyperlinks)
+```
+
+**Key properties:**
+
+- `Refine_With_XTVERSION` opens **no new probe session** (ADR-0038). It consumes the `XTVERSION_Result` from Step 9, which was already collected by `Query_And_Identify`. This keeps worst-case latency unchanged — the XTVERSION probe (1 s budget) doubles as the hyperlink classifier's evidence source.
+- `SPARK_Mode => Off` on `Refine_With_XTVERSION` is required because `XTVERSION_Result` contains `Ada.Strings.Unbounded.Unbounded_String`. The Tier 1 provable function (`Classify_Hyperlinks_Support`) remains SPARK Silver throughout.
+- The state-transition table (FUNC-HYP-012) is exhaustive. The outer `when others => return Passive` ensures no exception can propagate from the body.
+- The flat `Hyperlinks_Result` record (ADR-0037) means no discriminant change is needed between tiers — the caller always reads `Support`, `Provenance`, and `Terminal_Version_Known` without a case statement.
+- The `Hyperlinks` field appears in `Terminal_Capabilities` (base record, populated by `Assemble`), not separately in `Full_Terminal_Capabilities`. The full record inherits it from the `Base` parameter to `Assemble_Full`.
+
+### Testability Pattern
+
+Both tiers are fully testable without a real terminal:
+
+```ada
+--  Tier 1 — passive (pure, no I/O)
+Env      : Environment := EMPTY_ENVIRONMENT;
+Identity : Terminal_Identity;
+
+Insert (Env, "TERM", "xterm-256color");
+Insert (Env, "TERM_PROGRAM", "WezTerm");
+Identity := Detect_Terminal_Identity (Env);   --  Kind = WezTerm
+
+Result := Classify_Hyperlinks_Support (Env, Identity);
+pragma Assert (Result.Support    = Likely_Supported);
+pragma Assert (Result.Provenance = Env_Known_Good);
+
+--  Tier 2 — XTVERSION refinement (pure value-to-value, no I/O)
+XTV : constant XTVERSION_Result :=
+  (Status => Success,
+   Terminal_Name    => To_Unbounded_String ("WezTerm"),
+   Terminal_Version => To_Unbounded_String ("20240203-110809-5046fc22"));
+
+Refined := Refine_With_XTVERSION (Result, XTV);
+pragma Assert (Refined.Support               = Supported);
+pragma Assert (Refined.Provenance            = XTVERSION_Confirmed);
+pragma Assert (Refined.Terminal_Version_Known = True);
+```
+
+**See also:** `examples/hyperlink_demo/` for an interactive demonstration of the full detection pipeline.
+
+**SPARK Notes:**
+
+| Function | SPARK Level | Proof obligations |
+|----------|------------|-------------------|
+| `Classify_Hyperlinks_Support` | Silver | Termination (finite cascade); `Global => null` verified by GNATprove |
+| `Refine_With_XTVERSION` | Off | No proof; exception handler provides defence-in-depth |
+
+**Requirements Coverage:** FUNC-HYP-001..018
+
+**ADRs:** ADR-0036 (shared version utility), ADR-0037 (flat result record), ADR-0038 (XTVERSION reuse)
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -3028,4 +3189,8 @@ end;
 - **Tech Spec WCWIDTH** (`docs/tech-specs/wcwidth.md`): wcwidth() Probing for Unicode Level design rationale — sentinel codepoint selection, descending probe order, locale guard, caching strategy, platform dispatch, SPARK boundary
 - **ADR-0032** (`docs/adr/0032-wcwidth-package-placement.md`): Rationale for placing wcwidth probing in `Termicap.Wcwidth` (sibling of `Termicap.Unicode`) rather than as a child package
 - **Tech Spec CELL-WIDTH** (`docs/tech-specs/cell-width.md`): Cell Width Measurement Tables design rationale — table structure, binary search algorithm, fast paths, UNICODE_VERSION env-var selection, SPARK Gold strategy, relationship to WCWIDTH
+- **Tech Spec HYPERLINK** (`docs/tech-specs/hyperlink.md`): OSC 8 Hyperlink Support Detection design rationale — two-tier classification, TERM exclusion list, known-good Terminal_Kind list, version comparison algorithm, XTVERSION reuse strategy, SPARK boundary
+- **ADR-0036** (`docs/adr/0036-termicap-version-shared-utility.md`): Rationale for extracting a shared `Termicap.Version` utility package used by both `Termicap.Hyperlinks` and `Termicap.Graphics`
+- **ADR-0037** (`docs/adr/0037-hyperlinks-result-flat-record.md`): Rationale for a flat (non-discriminated) `Hyperlinks_Result` record
+- **ADR-0038** (`docs/adr/0038-hyperlinks-active-reuses-xtversion.md`): Rationale for reusing the `Detect_Full` XTVERSION result for hyperlink refinement rather than opening a second probe session
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018, FUNC-SXL-001 through FUNC-SXL-019

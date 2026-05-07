@@ -1,0 +1,1046 @@
+[DOCUMENT]
+TITLE: HYPERLINK — OSC 8 Hyperlink Support Detection
+UID: REQ-HYP
+
+[GRAMMAR]
+ELEMENTS:
+- TAG: REQUIREMENT
+  FIELDS:
+  - TITLE: UID
+    TYPE: String
+    REQUIRED: True
+  - TITLE: STATUS
+    TYPE: SingleChoice(Draft, Approved, In Progress, Implemented, Verified)
+    REQUIRED: False
+  - TITLE: PRIORITY
+    TYPE: SingleChoice(Must, Should, Could, Wont)
+    REQUIRED: False
+  - TITLE: GITHUB
+    TYPE: String
+    REQUIRED: False
+  - TITLE: TITLE
+    TYPE: String
+    REQUIRED: False
+  - TITLE: STATEMENT
+    TYPE: String
+    REQUIRED: True
+  - TITLE: COMMENT
+    TYPE: String
+    REQUIRED: False
+  RELATIONS:
+  - TYPE: Parent
+
+[TEXT]
+STATEMENT: >>>
+This document specifies the functional requirements for OSC 8 Hyperlink Support Detection
+(feature id HYPERLINK, Tier 4). The feature determines whether the controlling terminal
+emulator supports OSC 8 hyperlinks (the sequence ESC]8;params;urlST…textESC]8;;ST),
+which allow visible text to act as a clickable hyperlink in terminals that support it.
+
+Unlike most terminal capabilities, no standardised query mechanism exists for OSC 8
+hyperlink support. Libraries in the reference corpus (termenv, tcell, termcolor, lipgloss,
+wezterm/termwiz) consistently take one of two approaches:
+
+  1. Emit unconditionally (termenv, rich): OSC 8 sequences are written without any
+     detection, on the assumption that unsupported terminals simply display the raw text
+     in a degraded-but-safe way.
+  2. Passive exclusion list (tcell, termwiz): Suppress hyperlinks on known-unsupported
+     terminals identified by TERM pattern (vt*, ansi, linux, sun, dumb). All others
+     are assumed to support hyperlinks (termwiz defaults hyperlinks to true).
+
+This feature adopts a two-tier design consistent with both approaches:
+
+  Tier 1 — Passive heuristic (cheap): classifies support into a tri-state
+  Hyperlinks_Support enumeration using Terminal_Identity (already implemented in
+  Termicap.Terminal_Id) and the TERM environment variable. This result lives in the
+  Terminal_Capabilities record (FUNC-CAP-001) so it is available from the base
+  detection path without incurring any active I/O.
+
+  Tier 2 — XTVERSION refinement (active): promotes or demotes the passive result
+  using the XTVERSION query result (already available in Full_Terminal_Capabilities
+  via Termicap.XTVERSION.IO). This result lives in the Full_Terminal_Capabilities
+  record. No new FFI or probing protocol is introduced.
+
+Out-of-scope: active OSC 8 protocol probing. No terminal response protocol for OSC 8
+capability discovery exists; such a probe would be impossible. Terminfo lookup is also
+out of scope — there is no standard terminfo capability for OSC 8.
+
+SPARK Silver is the target for the passive heuristic logic (a pure function with no
+global state). The XTVERSION-based refinement (Tier 2) is Ada with SPARK_Mode Off,
+consistent with all other Tier 4 active-probe features.
+<<<
+
+[SECTION]
+TITLE: Result Types
+
+[REQUIREMENT]
+UID: FUNC-HYP-001
+STATUS: Approved
+PRIORITY: Must
+TITLE: Hyperlinks_Support Tri-State Enumeration
+STATEMENT: >>>
+The library shall provide an enumeration type Hyperlinks_Support with the following values,
+declared in a package Termicap.Hyperlinks (or a dedicated child package) with SPARK_Mode => On:
+
+  Unsupported
+    -- The controlling terminal is positively identified as not supporting OSC 8
+    -- hyperlinks, either by TERM pattern exclusion (FUNC-HYP-004) or by
+    -- XTVERSION-based version rejection (FUNC-HYP-010).
+
+  Likely_Supported
+    -- The Terminal_Identity resolves to a terminal emulator in the known-good list
+    -- (FUNC-HYP-005) and the TERM pattern exclusion has not fired.  This is the
+    -- strongest result producible by the passive heuristic alone.
+
+  Supported
+    -- Promoted from Likely_Supported by XTVERSION active refinement (FUNC-HYP-009),
+    -- confirming that the identified emulator+version is known to support OSC 8.
+    -- This value is never produced by the passive heuristic alone.
+
+  Unknown
+    -- No exclusion rule fired and no known-good emulator was identified, or the
+    -- detection function was not called.  This is the safe default value.
+
+The enumeration ordering shall be Unsupported < Likely_Supported < Supported, with Unknown
+occupying a sentinel position.  Callers should treat Unknown as equivalent to Likely_Supported
+for the purpose of emitting OSC 8 sequences (consistent with the unconditional-emit approach
+in the reference corpus).
+<<<
+COMMENT: >>>
+A tri-state (plus Unknown sentinel) is preferred over a Boolean "supported/not" because
+the distinction between Likely_Supported (passive only) and Supported (XTVERSION-confirmed)
+allows callers to make informed decisions: a TUI library that wants maximum compatibility
+may emit on Likely_Supported; a library that must avoid garbled output (e.g., on older VTE
+versions) may wait for Supported. The Unsupported value enables the tcell/termwiz exclusion-
+list behaviour. The Unknown sentinel enables the unconditional-emit approach: callers treating
+Unknown as "may emit" replicate the termenv behaviour. Ordering Unsupported < Likely_Supported
+< Supported also gives callers a natural threshold test without needing case analysis.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-002
+STATUS: Approved
+PRIORITY: Must
+TITLE: Hyperlinks_Result Record Type
+STATEMENT: >>>
+The library shall provide a record type Hyperlinks_Result declared with SPARK_Mode => On:
+
+  type Hyperlinks_Result is record
+    Support    : Hyperlinks_Support;
+      -- The determined support level; defaults to Unknown.
+
+    Provenance : Hyperlinks_Provenance;
+      -- Records the source that produced the Support value (FUNC-HYP-003).
+
+    Terminal_Version_Known : Boolean;
+      -- True when the Tier 2 refinement (FUNC-HYP-009) was performed and the
+      -- XTVERSION result carried a recognised emulator name and version string.
+      -- False otherwise (including when the passive heuristic is the sole source).
+  end record;
+
+The canonical "no result / safe default" value shall be:
+  Support = Unknown, Provenance = Default, Terminal_Version_Known = False.
+
+The type shall be defined in the same package or child package as Hyperlinks_Support.
+<<<
+COMMENT: >>>
+The Hyperlinks_Result record follows the provenance-tracking pattern established by
+Graphics_Capabilities (FUNC-SXL-001) and Mouse_Capabilities (FUNC-MSE-002). Separating
+Support from Provenance allows test harnesses and callers to inspect not just the outcome
+but how it was reached. Terminal_Version_Known is a lightweight flag (rather than a full
+version copy) because the consumer rarely needs the version string — the XTVERSION_Result
+already carries it in Full_Terminal_Capabilities.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-003
+STATUS: Approved
+PRIORITY: Must
+TITLE: Hyperlinks_Provenance Enumeration
+STATEMENT: >>>
+The library shall provide an enumeration type Hyperlinks_Provenance declared with
+SPARK_Mode => On:
+
+  Default
+    -- No classification was attempted; the result is the safe default (Unknown).
+
+  Env_Excluded
+    -- Support was set to Unsupported by the TERM pattern exclusion rule
+    -- (FUNC-HYP-004); no known-good emulator check was reached.
+
+  Env_Known_Good
+    -- Support was set to Likely_Supported because Terminal_Identity.Kind matches
+    -- one of the known-good emulator identifiers (FUNC-HYP-005).
+
+  Env_Unknown
+    -- Neither the exclusion list nor the known-good list matched; Support remains
+    -- Unknown after the passive heuristic.
+
+  XTVERSION_Confirmed
+    -- Support was promoted to Supported by the XTVERSION active refinement
+    -- (FUNC-HYP-009): emulator name and version are in the known-confirmed set.
+
+  XTVERSION_Rejected
+    -- Support was demoted to Unsupported by the XTVERSION active refinement
+    -- (FUNC-HYP-010): emulator name and version are in the known-too-old set.
+
+  XTVERSION_Unresolved
+    -- The XTVERSION active refinement was performed but the XTVERSION result
+    -- was Timeout, Parse_Error, or an unrecognised emulator name; Support is
+    -- unchanged from the passive heuristic value.
+
+The type shall be declared with SPARK_Mode => On.
+<<<
+COMMENT: >>>
+Fine-grained provenance follows the SIXEL pattern (Sixel_Via_DA1, Kitty_Via_Active_Probe)
+but uses a single enumeration rather than multiple Boolean flags, because hyperlink detection
+has a linear provenance chain (exclusion -> known-good -> XTVERSION refinement) rather than
+independent parallel paths. Seven provenance values cover all reachable states without
+ambiguity and make automated traceability testing straightforward.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Passive Heuristic — Exclusion List
+
+[REQUIREMENT]
+UID: FUNC-HYP-004
+STATUS: Approved
+PRIORITY: Must
+TITLE: TERM Pattern Exclusion for Legacy Terminals
+STATEMENT: >>>
+The passive heuristic function shall read the TERM environment variable from the supplied
+environment snapshot and classify the terminal as Unsupported when the TERM value matches
+the following legacy patterns (case-insensitive prefix or exact match):
+
+  Prefix "vt"     -- DEC VT-series terminals (vt100, vt220, vt320, etc.)
+  Prefix "ansi"   -- Generic ANSI terminals
+  "linux"         -- Linux kernel text console (exact match)
+  Prefix "sun"    -- Sun workstation terminal types
+  "dumb"          -- Dumb terminal (exact match)
+
+When any of the above patterns matches, the function shall return:
+  Support    = Unsupported
+  Provenance = Env_Excluded
+  Terminal_Version_Known = False
+
+The exclusion check shall be applied before the known-good emulator check (FUNC-HYP-005).
+If the exclusion fires, the known-good check is not evaluated.
+
+The pattern set is derived from the tcell and termwiz/termcolor reference implementations.
+The constants for these pattern strings shall be defined as named Ada constants per
+FUNC-HYP-006.
+<<<
+COMMENT: >>>
+The tcell exclusion list (analysis §2.8) is the canonical source for legacy terminal patterns
+that are known not to support OSC 8. Termwiz uses the same set implicitly by defaulting
+hyperlinks to true and only suppressing them when the user opts out via ProbeHints.
+The Termicap implementation makes the exclusion explicit and named-constant-backed for
+SPARK provability and testability. The "ansi" prefix covers the ANSI terminal type and
+variants like ansi-bbs. The "sun" prefix covers sun-cmd, sun-color, and related Sun types.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-005
+STATUS: Approved
+PRIORITY: Must
+TITLE: Known-Good Emulator List for Likely_Supported Classification
+STATEMENT: >>>
+When the TERM exclusion (FUNC-HYP-004) has not fired and the Terminal_Kind exclusion
+(FUNC-HYP-005b) has not fired, the passive heuristic function shall inspect
+Terminal_Identity.Kind (from the supplied Terminal_Identity parameter, FUNC-HYP-007)
+and classify the terminal as Likely_Supported when the Kind value is one of the following:
+
+  Alacritty       -- Alacritty: supports OSC 8 (version-gated; XTVERSION can confirm).
+  Foot            -- foot Wayland terminal: supports OSC 8.
+  Ghostty         -- Ghostty: supports OSC 8.
+  ITerm2          -- iTerm2 for macOS: supports OSC 8 since version 3.1.
+  JediTerm        -- JetBrains JediTerm (IntelliJ, PyCharm, etc.): supports OSC 8.
+  Kitty           -- kitty terminal: supports OSC 8.
+  Konsole         -- KDE Konsole: supports OSC 8.
+  Mintty          -- mintty (MSYS2/Cygwin): supports OSC 8.
+  VSCode          -- Visual Studio Code integrated terminal: supports OSC 8.
+  VTE             -- Any VTE-based terminal (gnome-terminal >= 3.26, tilix, etc.):
+                     supports OSC 8 since VTE 0.50 / gnome-terminal 3.26.
+  WarpTerminal    -- Warp terminal: supports OSC 8.
+  WezTerm         -- WezTerm: supports OSC 8 from initial public release.
+  Windows_Terminal -- Windows Terminal: supports OSC 8 (version-gated; XTVERSION can confirm).
+  Xterm           -- xterm: supports OSC 8 (version-gated; XTVERSION can confirm).
+
+For Terminal_Kind values not in the known-good list above and not in the known-bad
+exclusion list (FUNC-HYP-005b), the function shall return Unknown:
+  - Rxvt: basic rxvt does not support OSC 8; urxvt has partial support; the risk of
+    false-positive rendering of raw escape sequences is too high to default to Likely_Supported.
+  - Screen, Tmux: multiplexers whose OSC 8 passthrough depends on the version and
+    configuration of the inner terminal; cannot be determined passively (see FUNC-HYP-021).
+  - Unknown, Dumb, Linux_Console: handled by the Terminal_Kind exclusion (FUNC-HYP-005b).
+
+When the known-good check produces a match, the function shall return:
+  Support    = Likely_Supported
+  Provenance = Env_Known_Good
+  Terminal_Version_Known = False
+
+When neither the TERM exclusion, the Terminal_Kind exclusion, nor the known-good list
+matches, the function shall return:
+  Support    = Unknown
+  Provenance = Env_Unknown
+  Terminal_Version_Known = False
+<<<
+COMMENT: >>>
+The known-good list is derived from the OSC 8 adoption tracker (github.com/Alhadis/OSC8-Adoption)
+cross-referenced with the reference corpus analysis (§2.8). VSCode, JediTerm, and WarpTerminal
+are included because their OSC 8 support is broadly available and consistent with current
+versions; XTVERSION refinement (FUNC-HYP-009) can further confirm or reject based on version.
+Windows_Terminal is included because OSC 8 is available from version 1.4+, and Xterm is
+included because OSC 8 is available from patch 357+; both are version-gated and benefit from
+XTVERSION confirmation (FUNC-HYP-009). Rxvt is excluded from the known-good list due to
+high risk of garbled rendering. Screen and Tmux are excluded because passthrough is
+configuration-dependent (see FUNC-HYP-021 for the explicit non-goal). Apple_Terminal is
+excluded by the Terminal_Kind exclusion (FUNC-HYP-005b) because it does not implement OSC 8
+rendering, consistent with the pattern in Termicap.Graphics where Apple Terminal is also
+excluded from the graphics known-good set.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-005b
+STATUS: Approved
+PRIORITY: Must
+TITLE: Terminal_Kind Exclusion for Known-Bad Emulators
+STATEMENT: >>>
+In addition to the TERM pattern exclusion (FUNC-HYP-004), the passive heuristic function
+shall classify the terminal as Unsupported when Terminal_Identity.Kind matches any of the
+following Terminal_Kind values, regardless of the TERM environment variable value:
+
+  Apple_Terminal  -- macOS Terminal.app does not implement OSC 8 rendering as of macOS 14
+                     (Sonoma). Setting TERM to xterm-256color (which Apple Terminal does)
+                     would otherwise escape the TERM-pattern exclusion; the explicit
+                     Terminal_Kind exclusion prevents this false-negative.
+  Dumb            -- Dumb terminals have no escape sequence support.
+  Linux_Console   -- The Linux kernel text console does not support OSC 8.
+
+When this exclusion fires, the function shall return:
+  Support    = Unsupported
+  Provenance = Env_Excluded
+  Terminal_Version_Known = False
+
+The Terminal_Kind exclusion shall be applied after the TERM pattern exclusion (FUNC-HYP-004)
+and before the known-good check (FUNC-HYP-005). If the Terminal_Kind exclusion fires, the
+known-good check is not evaluated.
+<<<
+COMMENT: >>>
+Apple_Terminal is the primary motivation for this requirement. Apple Terminal reports
+TERM=xterm-256color, which does not match any legacy exclusion pattern in FUNC-HYP-004.
+Without an explicit Terminal_Kind exclusion, Apple Terminal would fall through to the
+Unknown branch, potentially leading callers to emit OSC 8 sequences that Terminal.app
+renders as raw visible text (a garbled-output failure). The same exclusion pattern is
+applied in Termicap.Graphics (TERM_PROGRAM_APPLE_TERMINAL constant, termicap-graphics.ads),
+where Apple Terminal is explicitly excluded from the Sixel/Kitty known-good set. Dumb and
+Linux_Console are also excluded here for completeness; they may also have been caught by
+TERM pattern exclusion (TERM=dumb, TERM=linux) but the Terminal_Kind exclusion provides a
+defence-in-depth layer independent of the TERM variable.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-006
+STATUS: Approved
+PRIORITY: Must
+TITLE: Named Constants for TERM Pattern Strings
+STATEMENT: >>>
+The library shall define the following named string constants in the Termicap.Hyperlinks
+package (or its child) with SPARK_Mode => On and ALL_CAPS_WITH_UNDERSCORES naming:
+
+  TERM_PREFIX_VT     : constant String := "vt";
+    -- Prefix for DEC VT-series terminal types.
+  TERM_PREFIX_ANSI   : constant String := "ansi";
+    -- Prefix for generic ANSI terminal types.
+  TERM_LINUX         : constant String := "linux";
+    -- Exact value for the Linux kernel text console.
+  TERM_PREFIX_SUN    : constant String := "sun";
+    -- Prefix for Sun workstation terminal types.
+  TERM_DUMB          : constant String := "dumb";
+    -- Exact value for a dumb terminal.
+
+All constants shall be used by the TERM exclusion logic (FUNC-HYP-004) rather than
+inline string literals, ensuring the exclusion set is testable as named units.
+<<<
+COMMENT: >>>
+Centralising the exclusion-list patterns as named constants follows the style established
+for SIXEL (FUNC-SXL-004) and allows test harnesses to import and iterate over the constant
+set directly. The constants are intentionally short (prefix strings rather than full values)
+because the matching rule is prefix-based; using the prefix as the constant value makes the
+matching relationship self-documenting.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Passive Heuristic — Public API
+
+[REQUIREMENT]
+UID: FUNC-HYP-007
+STATUS: Approved
+PRIORITY: Must
+TITLE: Classify_Hyperlinks_Support Pure Function Signature
+STATEMENT: >>>
+The library shall provide a pure SPARK function that applies the passive heuristic and
+returns a Hyperlinks_Result:
+
+  function Classify_Hyperlinks_Support
+    (Env      : Termicap.Environment.Environment;
+     Identity : Termicap.Terminal_Id.Terminal_Identity)
+     return Hyperlinks_Result
+  with
+    SPARK_Mode => On,
+    Global     => null;
+
+Parameters:
+  Env      — An immutable environment variable snapshot.  The function reads only the
+              TERM key from this snapshot (for the exclusion check, FUNC-HYP-004).
+  Identity — The Terminal_Identity record produced by Detect_Terminal_Identity.
+              The function reads only the Kind field.
+
+The function shall apply the TERM exclusion check (FUNC-HYP-004) first, then the
+Terminal_Kind exclusion check (FUNC-HYP-005b), then the known-good check (FUNC-HYP-005),
+and return a Hyperlinks_Result (FUNC-HYP-002) with the appropriate
+Support and Provenance values.
+
+The function shall not raise an exception under any input.  It shall not read any global
+state, perform any I/O, or call any subprogram whose Global contract is not null.  The
+function body shall be located in the package body with a locally applied SPARK_Mode => On.
+<<<
+COMMENT: >>>
+Accepting Env and Identity as parameters (rather than reading global state) follows the
+pure-function pattern of Detect_Terminal_Identity (FUNC-TID-003) and keeps the function
+independently testable with synthetic inputs.  The Global => null contract enforces SPARK
+Silver provability.  Passing the full Environment snapshot (rather than the TERM string
+alone) is consistent with the existing API surface: all pure detection functions in this
+library accept an Environment snapshot, enabling consistent snapshot semantics when the
+caller assembles Terminal_Capabilities.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-008
+STATUS: Approved
+PRIORITY: Must
+TITLE: No Global State in Passive Heuristic
+STATEMENT: >>>
+The function Classify_Hyperlinks_Support (FUNC-HYP-007) shall not read or write any global
+state.  Specifically:
+
+  - No package-level variables or protected objects shall be accessed.
+  - No environment variables shall be read via OS calls; all environment data shall
+    arrive through the Env parameter.
+  - No cached results from prior calls shall influence the return value.
+  - The function shall produce identical output for identical inputs on all platforms
+    (POSIX, Windows, and any future target).
+
+This requirement ensures the function is deterministic, re-entrant, and SPARK Silver-provable
+(Global => null).
+<<<
+COMMENT: >>>
+Global-state freedom is the defining property of SPARK Silver pure functions in this library.
+Classify_Hyperlinks_Support is deliberately designed to be called multiple times with
+different snapshots (e.g., in tests) and must not accumulate or share state between calls.
+This contrasts with the active refinement functions (FUNC-HYP-009, FUNC-HYP-010) which
+may hold state via the XTVERSION cached result.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: XTVERSION Active Refinement
+
+[REQUIREMENT]
+UID: FUNC-HYP-009
+STATUS: Approved
+PRIORITY: Must
+TITLE: XTVERSION Promotion to Supported
+STATEMENT: >>>
+When the XTVERSION result (Termicap.XTVERSION.XTVERSION_Result) has Status = Success and
+the Terminal_Name token matches a terminal emulator in the confirmed-supported set below,
+the Hyperlinks_Result shall be promoted according to the following rules:
+
+  From Likely_Supported:
+    If the emulator+version satisfies the minimum version in the table below:
+      -> Support := Supported; Provenance := XTVERSION_Confirmed;
+         Terminal_Version_Known := True
+    If the version is below the minimum:
+      -> Demoted to Unsupported (handled by FUNC-HYP-010).
+    If the version string cannot be parsed as a version number:
+      -> Support remains Likely_Supported; Provenance remains Env_Known_Good;
+         Terminal_Version_Known := True (name was recognised, version was not parseable)
+
+  From Unknown:
+    If the XTVERSION name matches a terminal in the confirmed-supported set and the
+    version satisfies the minimum:
+      -> Support := Supported; Provenance := XTVERSION_Confirmed;
+         Terminal_Version_Known := True
+    Otherwise:
+      -> Support remains Unknown; Provenance := XTVERSION_Unresolved;
+         Terminal_Version_Known := (name was recognised)
+
+Confirmed-supported terminal minimum versions (only emulators enumerated in Terminal_Kind):
+
+  Terminal Name Token  | Minimum Version | Notes
+  ---------------------|-----------------|------------------------------------------
+  "iTerm2"             | 3.1.0           | OSC 8 added in iTerm2 3.1 (Aug 2017)
+  "kitty"              | 0.19.0          | OSC 8 added in kitty 0.19 (Sept 2020)
+  "WezTerm"            | (any)           | OSC 8 present from initial public release;
+                       |                 | no precise minimum version — any reported
+                       |                 | version shall be treated as Likely_Supported
+  "VTE"                | 0.50.0          | gnome-terminal 3.26 / VTE 0.50 (Sept 2017)
+  "foot"               | (any)           | OSC 8 present from initial public release;
+                       |                 | no precise minimum version — any reported
+                       |                 | version shall be treated as Likely_Supported
+  "Alacritty"          | 0.11.0          | OSC 8 added in Alacritty 0.11 (Oct 2022)
+  "mintty"             | 3.4.0           | OSC 8 added in mintty 3.4 (Aug 2020)
+  "xterm"              | 357             | xterm OSC 8 support since patch 357 (May 2020);
+                       |                 | xterm patch levels are single integers
+  "Windows_Terminal"   | 1.4.0           | OSC 8 added in Windows Terminal 1.4 (Sept 2020)
+  "VSCode"             | 1.72.0          | OSC 8 added in VSCode 1.72 (Oct 2022)
+  "Ghostty"            | (any)           | OSC 8 present from initial public release
+  "Konsole"            | (any)           | OSC 8 via VTE; any current Konsole version
+
+Terminals not enumerated in Terminal_Kind (e.g., Contour, mlterm, Hyper) are not included
+in this table.  Extending the known-good version database to additional emulators requires
+first extending the Terminal_Kind enumeration in Termicap.Terminal_Id, which is outside the
+scope of this feature.
+
+For emulators with "(any)" minimum version, the version comparison (FUNC-HYP-013) shall
+treat any successfully parsed version as satisfying the minimum (equivalent to minimum 0.0.0).
+
+The terminal name comparison shall be case-insensitive.  Version comparison shall use the
+Termicap.Version.Compare function from the shared version comparison utility (FUNC-HYP-013).
+
+If XTVERSION_Result.Status /= Success (Timeout or Parse_Error), no promotion or demotion
+shall occur; Provenance shall be set to XTVERSION_Unresolved and Support shall remain as
+determined by the passive heuristic.
+<<<
+COMMENT: >>>
+The minimum version table is derived from the OSC 8 Adoption tracker and individual
+project changelogs.  Only emulators that appear as named values in Terminal_Kind are
+included, so the table is bounded by the Terminal_Kind enumeration.  Minimum versions
+are cited only when a specific public release can be identified with confidence; emulators
+with OSC 8 support from their initial release (WezTerm, foot, Ghostty) are marked "(any)"
+to avoid fabricating version numbers.  Alacritty 0.11 (Oct 2022) added OSC 8 support.
+xterm patch 357 (May 2020) is the first patch with OSC 8 rendering; xterm patch levels
+are single integers so the version comparison treats the level as a single-component version.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-010
+STATUS: Approved
+PRIORITY: Must
+TITLE: XTVERSION Demotion to Unsupported (Known-Too-Old)
+STATEMENT: >>>
+When the XTVERSION result has Status = Success, the Terminal_Name token matches a terminal
+in the demotion table below, and the parsed version is strictly less than the minimum
+OSC 8 support version for that terminal, the Hyperlinks_Result shall be demoted:
+
+  Support    := Unsupported
+  Provenance := XTVERSION_Rejected
+  Terminal_Version_Known := True
+
+Demotion shall be applied regardless of the prior passive heuristic result (whether
+Likely_Supported, Unknown, or even a prior Supported value — though Supported can only
+arise from FUNC-HYP-009 in the same call and demotion takes precedence).
+
+Demotion table (same terminals and minimum versions as FUNC-HYP-009):
+  Terminal versions strictly below the table minimums shall cause demotion.
+
+Specifically documented known-problematic versions:
+  VTE < 0.50.0 / gnome-terminal < 3.26:
+    Early VTE versions displayed raw OSC 8 sequences as visible garbage rather than
+    ignoring them, making this the most important demotion case.
+  Alacritty < 0.12.0:
+    Older Alacritty builds do not support OSC 8.
+  xterm < patch 380:
+    xterm builds prior to patch 380 do not support OSC 8.
+
+If the version string is present but unparseable (not a valid version number), demotion
+shall NOT be applied; the version is treated as unknown and Provenance is set to
+XTVERSION_Unresolved.
+<<<
+COMMENT: >>>
+VTE < 0.50 is the canonical known-too-old case documented in the reference corpus: these
+older VTE versions rendered raw OSC 8 sequences as visible junk characters rather than
+ignoring unknown OSC codes, making demotion critical for correctness. The symmetric
+design (FUNC-HYP-009 for promotion, FUNC-HYP-010 for demotion) mirrors the XTVERSION
+refinement pattern described in the feature brief. Unparseable versions receive
+XTVERSION_Unresolved rather than demotion to avoid false negatives: if an emulator
+reports a non-standard version string, it is more likely a recent release than an old one.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-011
+STATUS: Approved
+PRIORITY: Must
+TITLE: Refine_With_XTVERSION Function Signature
+STATEMENT: >>>
+The library shall provide a function that applies the XTVERSION refinement to a passive
+Hyperlinks_Result:
+
+  function Refine_With_XTVERSION
+    (Passive  : Hyperlinks_Result;
+     XTV      : Termicap.XTVERSION.XTVERSION_Result)
+     return Hyperlinks_Result
+  with SPARK_Mode => Off;
+
+Parameters:
+  Passive — The result of Classify_Hyperlinks_Support (FUNC-HYP-007); the starting point
+            for refinement.
+  XTV     — The XTVERSION query result; may have Status = Success, Timeout, or Parse_Error.
+
+The function shall return a new Hyperlinks_Result reflecting the state transitions defined
+in FUNC-HYP-009 (promotion) and FUNC-HYP-010 (demotion), or return Passive unchanged
+when XTV.Status /= Success.
+
+SPARK_Mode is Off because Ada.Strings.Unbounded.Unbounded_String (used in XTVERSION_Result)
+is outside the SPARK 2014 subset.  The function body shall contain no I/O and shall not
+raise an exception under any input.
+<<<
+COMMENT: >>>
+Separating the refinement into an explicit function allows Detect_Full (in
+Termicap.Capabilities) to call Classify_Hyperlinks_Support first (with the base Terminal_Id
+result) and then pass the result through Refine_With_XTVERSION with the XTVERSION probe
+output, matching the layered assembly pattern of the Full_Terminal_Capabilities record.
+SPARK_Mode Off is required because Unbounded_String is used by XTVERSION_Result.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-012
+STATUS: Approved
+PRIORITY: Must
+TITLE: Allowed State Transitions in XTVERSION Refinement
+STATEMENT: >>>
+The following is the complete set of allowed state transitions from the passive heuristic
+result (input column) to the XTVERSION-refined result (output column):
+
+  Passive Support   | XTVERSION outcome               | Refined Support | Provenance
+  ------------------|----------------------------------|-----------------|------------------------
+  Unsupported       | Any                              | Unsupported     | Env_Excluded (unchanged)
+  Likely_Supported  | Confirmed emulator, version >= min | Supported    | XTVERSION_Confirmed
+  Likely_Supported  | Confirmed emulator, version < min  | Unsupported  | XTVERSION_Rejected
+  Likely_Supported  | Confirmed emulator, version unparseable | Likely_Supported | Env_Known_Good
+  Likely_Supported  | Unrecognised emulator or Timeout | Likely_Supported | XTVERSION_Unresolved
+  Unknown           | Confirmed emulator, version >= min | Supported    | XTVERSION_Confirmed
+  Unknown           | Confirmed emulator, version < min  | Unsupported  | XTVERSION_Rejected
+  Unknown           | Unrecognised emulator or Timeout | Unknown        | XTVERSION_Unresolved
+  Unknown           | Status /= Success                | Unknown        | XTVERSION_Unresolved
+
+Once Unsupported (from the passive exclusion, FUNC-HYP-004), the result shall not be
+changed by XTVERSION refinement.  There is no known case where a terminal matching the
+legacy exclusion list (vt*, ansi, linux, sun, dumb) would be identified as an OSC 8
+supporter via XTVERSION.  This constraint prevents false positives from an unexpected
+XTVERSION response on an old terminal.
+<<<
+COMMENT: >>>
+The state-transition table is included as an explicit requirement (rather than only in
+comments) to serve as the normative reference for test-case derivation and implementation
+review.  Each row maps to one or more unit tests in the test suite (FUNC-HYP-012 is
+therefore a key traceability anchor).  The "Unsupported is terminal" invariant prevents
+a scenario where Env_Excluded fires on TERM=linux but the terminal self-reports via
+XTVERSION as a hyperlink-capable emulator (which would indicate a misconfigured TERM).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Shared Version Comparison Utility
+
+[REQUIREMENT]
+UID: FUNC-HYP-013
+STATUS: Approved
+PRIORITY: Must
+TITLE: Termicap.Version Package — Shared Version Type and Compare Operation
+STATEMENT: >>>
+The library shall provide a new public package Termicap.Version with SPARK_Mode => On
+at the package level.  The package shall declare:
+
+  A type Version representing a parsed dotted-numeric version (e.g., "3.1.0", "0.50",
+  "357").  The representation shall use only bounded or fixed-length storage; no heap
+  allocation is permitted.  The type shall be usable in SPARK Silver-provable subprograms
+  (pure arithmetic; no access types; no unbounded containers).
+
+  A function Parse that converts a String to a Version or signals that the string is
+  not a valid version:
+
+    function Parse
+      (S      : String;
+       Result : out Version)
+       return Boolean
+    with
+      SPARK_Mode => On,
+      Global     => null;
+    -- Returns True and populates Result when S consists of one or more dot-separated
+    -- non-negative decimal integer components.  Returns False (and Result is undefined)
+    -- when any component is not a valid non-negative decimal integer.
+
+  A function Compare that compares two Version values:
+
+    type Version_Ordering is (Less_Than, Equal, Greater_Than);
+
+    function Compare
+      (Left  : Version;
+       Right : Version)
+       return Version_Ordering
+    with
+      SPARK_Mode => On,
+      Global     => null;
+
+Comparison rules implemented by Compare:
+  1. Components are compared left to right as non-negative integers.
+  2. A shorter version with all matching leading components is Less_Than a longer version
+     (e.g., Version("0.50") < Version("0.50.1")).
+  3. Single-integer versions (e.g., "357" for xterm patch levels) are valid one-component
+     versions and compare correctly via rule 1.
+
+The package body shall be provable at SPARK Silver level (no unproved VCs other than those
+suppressed by a justified pragma Annotate).  No FFI, no I/O, no global state.
+
+File naming: src/termicap-version.ads and src/termicap-version.adb.
+<<<
+COMMENT: >>>
+Version comparison is a cross-cutting concern needed by both the HYPERLINK XTVERSION
+refinement (FUNC-HYP-009, FUNC-HYP-010) and the Sixel/Kitty graphics feature
+(FUNC-SXL-003 notes kitty animation requires kitty >= 0.20.0; see also FUNC-HYP-022
+for the Sixel refactor).  A shared package avoids logic duplication across features.
+SPARK Silver provability is achievable because the logic is pure arithmetic on bounded
+arrays of non-negative integers — no allocation, no FFI, no unbounded strings.
+The "shorter is less" rule handles the common case where a terminal reports "0.50" and
+the minimum is "0.50.0".  Separating Parse (returns Boolean) from Compare (takes
+pre-parsed Version values) ensures that unparseable strings are handled at the call site,
+allowing Compare itself to have unconditional postconditions.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-022
+STATUS: Approved
+PRIORITY: Must
+TITLE: Sixel Graphics — Refactor to Use Termicap.Version Shared Utility
+STATEMENT: >>>
+The Sixel / Kitty Graphics detection implementation (Termicap.Graphics, src/termicap-graphics.*)
+shall be refactored to use Termicap.Version.Parse and Termicap.Version.Compare (FUNC-HYP-013)
+for any version comparison currently embedded in its body (e.g., gating kitty animation on
+kitty >= 0.20.0 per FUNC-SXL-003).
+
+This is a non-functional refactor requirement: the observable behaviour of the Graphics
+detection feature shall remain unchanged after the refactor.  Specifically:
+
+  - All existing FUNC-SXL-* requirements remain in force; no requirement shall change
+    its acceptance criteria as a result of this refactor.
+  - The return values of Detect_Graphics and Assemble_Graphics shall be identical for
+    all inputs before and after the refactor (regression-free).
+  - Any test that passed before the refactor shall continue to pass after the refactor.
+
+The refactor shall be implemented as part of the same development iteration that introduces
+Termicap.Version, to prevent a period where both local and shared version comparison logic
+coexist in the codebase.
+<<<
+COMMENT: >>>
+This requirement ensures that Termicap.Version (FUNC-HYP-013) is adopted consistently
+across the codebase from its introduction, rather than leaving the Sixel feature with a
+parallel local implementation.  The non-functional / regression-free framing protects the
+Sixel feature against accidental behaviour changes during the refactor.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Capability Record Integration
+
+[REQUIREMENT]
+UID: FUNC-HYP-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: Hyperlinks Field in Terminal_Capabilities (Passive Result)
+STATEMENT: >>>
+The Terminal_Capabilities record (FUNC-CAP-001, src/termicap-capabilities.ads) shall be
+extended with the following field:
+
+  Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result
+    -- The passive hyperlink support classification computed by
+    -- Classify_Hyperlinks_Support (FUNC-HYP-007).  Populated during Detect
+    -- (FUNC-CAP-004) using the Terminal_Identity and environment snapshot
+    -- already computed in that call.  Defaults to the canonical default value
+    -- (Support = Unknown, Provenance = Default, Terminal_Version_Known = False).
+
+The Termicap.Capabilities.Assemble pure function (FUNC-CAP-012) shall gain a new
+parameter:
+
+  Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result
+
+with default value equal to the canonical default Hyperlinks_Result
+(Support = Unknown, Provenance = Default, Terminal_Version_Known = False).
+The function shall store the supplied Hyperlinks value in the returned
+Terminal_Capabilities.Hyperlinks field.
+
+No additional I/O is required: Classify_Hyperlinks_Support is a pure function that
+consumes the already-captured environment snapshot and Terminal_Identity.  The caller
+(Detect, FUNC-CAP-004) shall call Classify_Hyperlinks_Support and pass the result as
+the Hyperlinks argument to Assemble.
+
+The field name Hyperlinks shall follow the naming convention of sibling fields in the record
+(Identity, DA1, Unicode, etc.) — mixed case, no type suffix.
+<<<
+COMMENT: >>>
+Integrating the passive Hyperlinks_Result into Terminal_Capabilities (the base record, not
+only Full_Terminal_Capabilities) gives callers access to the exclusion-list and known-good
+classification without requiring a Tier 4 active probe. This is consistent with the
+design philosophy of the library: passive heuristics are fast and should be available in
+the base detection path. The Assemble pure function is extended with a new parameter
+(following the DA1 parameter addition precedent in FUNC-DA1-015) rather than computing
+Hyperlinks inside Assemble, keeping the pure assembly function free of environment access.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Hyperlinks Field in Full_Terminal_Capabilities (XTVERSION-Refined Result)
+STATEMENT: >>>
+The Full_Terminal_Capabilities record (src/termicap-capabilities.ads, below the
+pragma SPARK_Mode (Off) boundary) shall be extended with a field:
+
+  Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result
+    -- The XTVERSION-refined hyperlink support result computed by calling
+    -- Refine_With_XTVERSION (FUNC-HYP-011) with:
+    --   Passive => Base.Hyperlinks (the passive result from Terminal_Capabilities)
+    --   XTV     => Full_Terminal_Capabilities.XTVERSION (already present in the record)
+    -- Replaces the passive Base.Hyperlinks with the refined result.
+
+The Assemble_Full function shall accept a Hyperlinks parameter and store it in the returned
+Full_Terminal_Capabilities.  The Hyperlinks field in Full_Terminal_Capabilities shall shadow
+(replace) the Hyperlinks field from the base Terminal_Capabilities embedded results: the
+Full record is a flat projection, not a nested record, so both the base and full results are
+represented as top-level fields with the same name Hyperlinks.
+
+The Detect_Full function shall:
+  1. Obtain Base.Hyperlinks from the base Terminal_Capabilities detection (Tier 1).
+  2. Obtain the XTVERSION result from Step 9 of Detect_Full's sub-detector sequence.
+  3. Call Refine_With_XTVERSION (Passive => Base.Hyperlinks, XTV => XTVERSION_result).
+  4. Store the refined result in Full_Terminal_Capabilities.Hyperlinks.
+
+The refinement call shall be placed after the XTVERSION probe (Step 9) and before Graphics
+detection (Step 10) in Detect_Full's sub-detector invocation order, consistent with the
+existing annotation in src/termicap-capabilities.ads.
+<<<
+COMMENT: >>>
+Placing the refinement after XTVERSION (Step 9) and before Graphics (Step 10) follows the
+existing sequencing comment in termicap-capabilities.ads.  The flat Full_Terminal_Capabilities
+design (all fields at top level, no nested Terminal_Capabilities sub-record) means the
+Hyperlinks field is simply overwritten with the refined value; there is no ambiguity about
+which value a caller sees.  This is consistent with how Mouse, Keyboard, and Graphics
+results are stored alongside the base fields.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Package Structure and SPARK Boundary
+
+[REQUIREMENT]
+UID: FUNC-HYP-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: Package Structure and SPARK Boundary
+STATEMENT: >>>
+The HYPERLINK feature shall be implemented in a new package Termicap.Hyperlinks, structured
+as follows:
+
+Package specification (src/termicap-hyperlinks.ads):
+  - SPARK_Mode => On at the package level.
+  - Declares Hyperlinks_Support (FUNC-HYP-001), Hyperlinks_Provenance (FUNC-HYP-003),
+    and Hyperlinks_Result (FUNC-HYP-002) as public types with SPARK_Mode => On.
+  - Declares named constants TERM_PREFIX_VT, TERM_PREFIX_ANSI, TERM_LINUX,
+    TERM_PREFIX_SUN, TERM_DUMB (FUNC-HYP-006) with SPARK_Mode => On.
+  - Declares Classify_Hyperlinks_Support (FUNC-HYP-007) with SPARK_Mode => On and
+    Global => null.  The function implements the TERM exclusion (FUNC-HYP-004), the
+    Terminal_Kind exclusion (FUNC-HYP-005b), and the known-good check (FUNC-HYP-005).
+  - Declares Refine_With_XTVERSION (FUNC-HYP-011) with SPARK_Mode => Off (because
+    it handles Unbounded_String from XTVERSION_Result).
+  - Does NOT declare version comparison types; version comparison is provided by the
+    separate package Termicap.Version (FUNC-HYP-013).
+
+Package body (src/termicap-hyperlinks.adb):
+  - SPARK_Mode => Off at the package level.
+  - Body of Classify_Hyperlinks_Support with a locally applied SPARK_Mode => On pragma
+    (mixed SPARK pattern, consistent with FUNC-KKB-018 and FUNC-MSE-017).
+  - Body of Refine_With_XTVERSION with SPARK_Mode => Off.
+  - Withed packages: Termicap.Environment, Termicap.Terminal_Id, Termicap.XTVERSION,
+    Termicap.Version.
+  - No with of Termicap.OSC or any I/O package — this package performs no I/O.
+  - No protected objects, no global state.
+
+No platform-specific body files are required: the passive heuristic is purely data-driven
+from environment variables and Terminal_Identity, both of which abstract all platform
+differences.  The XTVERSION result already abstracts the Windows vs POSIX I/O boundary.
+
+File naming shall follow the project convention: lowercase with dashes matching the package
+hierarchy (termicap-hyperlinks.ads, termicap-hyperlinks.adb).
+<<<
+COMMENT: >>>
+The absence of platform-specific body files distinguishes this feature from Mouse, Keyboard,
+and Graphics (which each have posix/ and windows/ variants) and reflects the no-new-FFI
+constraint in the feature brief.  The mixed SPARK pattern (body SPARK_Mode Off, pure
+subprogram bodies locally SPARK On) is the established project pattern for packages that
+contain both provable pure logic and Ada-only support code.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Cross-Platform Behaviour
+
+[REQUIREMENT]
+UID: FUNC-HYP-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: Identical Behaviour on POSIX and Windows
+STATEMENT: >>>
+The passive heuristic (Classify_Hyperlinks_Support, FUNC-HYP-007) shall produce identical
+results on all supported platforms (POSIX, Windows/Cygwin, Windows/MSYS2, Windows/WSL) for
+identical environment snapshots and Terminal_Identity inputs.
+
+No platform-specific code path, preprocessor conditional, or OS system call shall appear in
+the passive heuristic logic.  All platform differences relevant to terminal identification
+are already abstracted by Terminal_Identity (via Detect_Terminal_Identity) and the
+environment snapshot.
+
+The XTVERSION refinement (Refine_With_XTVERSION, FUNC-HYP-011) is also platform-agnostic:
+it operates solely on the XTVERSION_Result value, which is already produced by the
+platform-specific Termicap.XTVERSION.IO.  No additional platform branching is required in
+Termicap.Hyperlinks.
+<<<
+COMMENT: >>>
+Cross-platform parity is straightforward here because the feature has no FFI component and
+no direct OS calls.  All platform-specific behaviour is upstream (Terminal_Id, XTVERSION.IO).
+This requirement is stated explicitly to prevent future implementors from introducing
+Windows-specific code paths in Termicap.Hyperlinks, which would unnecessarily complicate
+the package and break SPARK provability.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Determinism and SPARK Provability
+
+[REQUIREMENT]
+UID: FUNC-HYP-018
+STATUS: Approved
+PRIORITY: Must
+TITLE: SPARK Silver Provability of Classify_Hyperlinks_Support
+STATEMENT: >>>
+The function Classify_Hyperlinks_Support (FUNC-HYP-007) shall be provable at SPARK Silver
+level using GNATprove with the -gnat2022 and --level=1 (or higher) options, with no
+unproved verification conditions (VCs) other than those suppressed by a justified
+pragma Annotate.
+
+Specifically, the following SPARK contracts shall hold and be machine-verified:
+
+  Global     => null
+    -- No global state is read or written.
+
+  No exceptions propagate
+    -- The function body shall contain no explicit raise statements and shall not
+    -- call any subprogram that raises without a corresponding handler.
+
+The function is deterministic: for any fixed (Env, Identity) pair, successive calls shall
+return the same Hyperlinks_Result.  This determinism is implied by Global => null and the
+absence of shared mutable state.
+<<<
+COMMENT: >>>
+SPARK Silver provability is required for all pure detection logic in this library (consistent
+with FUNC-TID-007, FUNC-SXL-011, FUNC-KKB-006).  The specific contracts (Global => null,
+no exceptions) are the minimum Silver-level requirements.  Gold-level contracts (full
+functional postconditions) are not required for v1 but are encouraged for the final
+implementation.
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Out-of-Scope Explicit Non-Goals
+
+[REQUIREMENT]
+UID: FUNC-HYP-019
+STATUS: Approved
+PRIORITY: Wont
+TITLE: No OSC 8 Protocol Active Probe
+STATEMENT: >>>
+The HYPERLINK feature shall not implement any form of active protocol probing for OSC 8
+hyperlink capability discovery.  Specifically:
+
+  - No escape sequence shall be written to the terminal in order to detect hyperlink support.
+  - No response from the terminal shall be read or parsed as part of hyperlink detection.
+  - No new I/O session lifecycle (open /dev/tty, raw mode, read response, restore termios)
+    shall be introduced for this feature.
+
+Rationale: As documented in the global synthesis (§2.8), no terminal capability detection
+protocol for OSC 8 has been standardised or is in common use.  The OSC 8 sequence itself
+is a one-way announcement (no response expected); terminals that do not support it are
+expected to ignore it silently.  The known exceptions (older VTE versions displaying raw
+OSC 8 as garbage) are handled by the XTVERSION version demotion mechanism (FUNC-HYP-010).
+<<<
+COMMENT: >>>
+Explicitly stating this as a Wont requirement prevents future implementors from attempting
+to add an OSC 8 probe (which would be futile — no terminal responds to OSC 8 queries) and
+documents the architectural rationale.  This mirrors the pattern of stating non-goals
+explicitly in the sixel-graphics.sdoc for the XTSMGRAPHICS deferral.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-020
+STATUS: Approved
+PRIORITY: Wont
+TITLE: No Terminfo Database Lookup for OSC 8
+STATEMENT: >>>
+The HYPERLINK feature shall not consult the terminfo or termcap database to determine OSC 8
+hyperlink support.
+
+Rationale: No standard terminfo capability for OSC 8 hyperlink support exists as of the
+writing of this specification.  The terminfo capabilities "Su" (set underline colour) and
+related entries do not encode OSC 8 support.  Adding a terminfo dependency would introduce
+a platform-specific I/O boundary, violate the no-new-FFI constraint, and add complexity
+without reliable benefit.  If a future terminfo capability for OSC 8 is standardised,
+this non-goal shall be revisited in a separate requirements document.
+<<<
+COMMENT: >>>
+The terminfo non-goal is documented because wezterm/termwiz (the most relevant reference
+implementation for OSC 8) explicitly considers and rejects the terminfo approach for
+hyperlink detection, noting that the database lacks an appropriate capability.  The
+Termicap library similarly avoids terminfo for the same reasons, and this non-goal
+enforces that decision for the hyperlink feature specifically.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-HYP-021
+STATUS: Approved
+PRIORITY: Wont
+TITLE: No Multiplexer Passthrough for Hyperlinks
+STATEMENT: >>>
+The HYPERLINK feature shall not attempt to determine whether a terminal multiplexer
+(tmux, GNU screen) will correctly pass through OSC 8 sequences to the outer terminal.
+
+When Terminal_Identity.Is_Multiplexer is True, the passive heuristic shall return
+Support = Unknown (the Terminal_Kind for Tmux and Screen is not in the known-good list
+per FUNC-HYP-005), rather than attempting to probe whether the multiplexer or its outer
+terminal supports OSC 8.
+
+Rationale: OSC 8 passthrough through multiplexers is highly version-specific and
+configuration-dependent (e.g., tmux 3.2+ with set -g allow-passthrough) and cannot
+be reliably determined from environment variables or XTVERSION alone.  This is an area
+of active development in the tmux ecosystem; a future extension may add a tmux-specific
+heuristic when the configuration can be reliably inspected.
+<<<
+COMMENT: >>>
+Multiplexer passthrough is a well-known problem for OSC sequences in general; OSC 8 is
+not unique in this regard.  Returning Unknown for multiplexers is the safe and correct
+choice: it neither incorrectly enables hyperlinks (which may be garbled by an old tmux)
+nor incorrectly disables them (which would suppress hyperlinks in tmux 3.2+ sessions
+where passthrough works).  Callers that have out-of-band knowledge that passthrough is
+enabled can override the result programmatically.
+<<<
+
+[/SECTION]

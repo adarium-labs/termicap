@@ -64,6 +64,7 @@ Top-level requirement documents at this level:
   sigwinch.sdoc              — SIGWINCH handler for terminal resize notification
   kitty-keyboard.sdoc        — Kitty Keyboard Protocol detection (CSI ? u sentinel probe)
   mouse-protocol.sdoc        — Mouse Protocol Detection (DECRPM modes 1000/1002/1003/1006/1015/1016, GPM fallback)
+  hyperlink.sdoc             — OSC 8 Hyperlink Support Detection (passive tri-state heuristic + XTVERSION refinement)
 <<<
 COMMENT: >>>
 This index document exists as a navigational aid and cross-reference hub for the full Termicap requirements corpus. StrictDoc discovers all .sdoc files in the docs/requirements/ directory tree automatically; this index does not need to enumerate every file for the tool to process them. Its value is human navigability: a reader opening the requirements directory can find this file first and use it to understand the scope and organisation of the specification before diving into individual feature documents.

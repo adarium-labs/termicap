@@ -18,7 +18,7 @@
 --  Requirements Coverage:
 --    - @relation(FUNC-SXL-011): Parse_Kitty_APC_Response body
 
-pragma SPARK_Mode (On);
+with Termicap.Version;
 
 package body Termicap.Graphics
   with SPARK_Mode
@@ -140,5 +140,29 @@ is
       --  No APC G envelope found.
       return Not_Present;
    end Parse_Kitty_APC_Response;
+
+   ---------------------------------------------------------------------------
+   --  Parse_Kitty_Version (FUNC-SXL-003, FUNC-HYP-022)
+   ---------------------------------------------------------------------------
+   --  Delegates to Termicap.Version.Parse (ADR-0036) and encodes the result
+   --  as MAJOR * 10_000 + MINOR * 100 + PATCH.
+   --  Returns 0 on any parse failure, preserving the previous "unknown" sentinel.
+
+   function Parse_Kitty_Version (Version_String : String) return Natural is
+      V  : Termicap.Version.Version;
+      Ok : Boolean;
+   begin
+      Termicap.Version.Parse (Version_String, V, Ok);
+      if not Ok or else V.Count = 0 then
+         return 0;
+      end if;
+      declare
+         Major : constant Natural := (if V.Count >= 1 then V.Parts (1) else 0);
+         Minor : constant Natural := (if V.Count >= 2 then V.Parts (2) else 0);
+         Patch : constant Natural := (if V.Count >= 3 then V.Parts (3) else 0);
+      begin
+         return Major * 10_000 + Minor * 100 + Patch;
+      end;
+   end Parse_Kitty_Version;
 
 end Termicap.Graphics;

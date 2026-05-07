@@ -60,8 +60,7 @@ package body Termicap.DECRPM.IO is
       Passthrough := Passthrough_For_Identity (Identity);
 
       declare
-         Wrapped : constant Byte_Array :=
-           Termicap.OSC.Parsing.Wrap_For_Passthrough (Query_Bytes, Passthrough);
+         Wrapped : constant Byte_Array := Termicap.OSC.Parsing.Wrap_For_Passthrough (Query_Bytes, Passthrough);
          Session : Termicap.OSC.Probe_Session;
          Status  : Termicap.OSC.Session_Status;
       begin
@@ -142,8 +141,7 @@ package body Termicap.DECRPM.IO is
       for I in 1 .. Count loop
          declare
             Query_Bytes : constant Byte_Array := DECRPM_Query (Modes (I));
-            Wrapped     : constant Byte_Array :=
-              Termicap.OSC.Parsing.Wrap_For_Passthrough (Query_Bytes, Passthrough);
+            Wrapped     : constant Byte_Array := Termicap.OSC.Parsing.Wrap_For_Passthrough (Query_Bytes, Passthrough);
          begin
             Resp_Buffer := [others => 0];
             Resp_Length := 0;

@@ -239,8 +239,7 @@ package body Termicap.Mouse.IO is
          declare
             Q : constant Byte_Array := Termicap.DECRPM.DECRPM_Query (Modes (I));
          begin
-            Termicap.OSC.Write_Query
-              (Session => Session, Query => Q, Written => Written, Success => Write_OK);
+            Termicap.OSC.Write_Query (Session => Session, Query => Q, Written => Written, Success => Write_OK);
             if not Write_OK then
                --  Partial/failed write: bail; Probed stays False.
                return NO_MOUSE_CAPABILITIES;

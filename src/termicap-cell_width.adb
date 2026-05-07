@@ -50,8 +50,7 @@ is
       end if;
 
       declare
-         Value : constant String :=
-           Ada.Environment_Variables.Value ("UNICODE_VERSION");
+         Value : constant String := Ada.Environment_Variables.Value ("UNICODE_VERSION");
       begin
          if Value'Length = 0 then
             return Table_Version'Last;
@@ -85,15 +84,12 @@ is
       return Active_Version_Value;
    end Active_Version;
 
-   function Cell_Width
-     (Codepoint : Unicode_Scalar_Value) return Cell_Width_Value is
+   function Cell_Width (Codepoint : Unicode_Scalar_Value) return Cell_Width_Value is
    begin
       return Cell_Width (Codepoint, Active_Version_Value);
    end Cell_Width;
 
-   function Cell_Width
-     (Codepoint : Unicode_Scalar_Value; Version : Table_Version)
-      return Cell_Width_Value is
+   function Cell_Width (Codepoint : Unicode_Scalar_Value; Version : Table_Version) return Cell_Width_Value is
    begin
       --  Step 1: ASCII printable fast path (FUNC-CWM-010)
       --  U+0020..U+007E are the printable ASCII characters.  They all have

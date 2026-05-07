@@ -51,6 +51,7 @@ with Ada.Text_IO;
 
 with Termicap.Capabilities;
 with Termicap.Color;
+with Termicap.Hyperlinks;
 with Termicap.Override;
 with Termicap.Terminal_Id;
 with Termicap.TTY;
@@ -93,6 +94,12 @@ procedure Capabilities_Demo is
                 & To_String (Caps.Identity.Program_Name) & """");
       Put_Line ("  Downsampling_Available : "
                 & Boolean'Image (Caps.Downsampling_Available));
+      Put_Line ("  Hyperlinks.Support     : "
+                & Termicap.Hyperlinks.Hyperlinks_Support'Image
+                    (Caps.Hyperlinks.Support));
+      Put_Line ("  Hyperlinks.Provenance  : "
+                & Termicap.Hyperlinks.Hyperlinks_Provenance'Image
+                    (Caps.Hyperlinks.Provenance));
    end Print_Caps;
 
 begin

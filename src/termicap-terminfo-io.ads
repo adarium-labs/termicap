@@ -88,11 +88,7 @@ package Termicap.Terminfo.IO is
    --  @param Size    Number of bytes written into Buffer (0 on error).
    --  @param Error   Outcome code from the Read_Error enumeration.
    --  @relation(FUNC-TIF-006): POSIX read operation with Read_Error status
-   procedure Read_File
-     (Path   : String;
-      Buffer : out Byte_Array;
-      Size   : out Natural;
-      Error  : out Read_Error);
+   procedure Read_File (Path : String; Buffer : out Byte_Array; Size : out Natural; Error : out Read_Error);
 
    ---------------------------------------------------------------------------
    --  Top-Level Parse Entry Point (FUNC-TIF-015)
@@ -132,7 +128,6 @@ package Termicap.Terminfo.IO is
    --  @relation(FUNC-TIF-015): Top-level Parse_Terminfo entry function
    --  @relation(FUNC-TIF-019): No exception propagation guarantee
    --  @relation(FUNC-TIF-020): Error_File_Not_Found is a non-fatal advisory result
-   function Parse_Terminfo
-     (Env : Termicap.Environment.Environment) return Terminfo_Result;
+   function Parse_Terminfo (Env : Termicap.Environment.Environment) return Terminfo_Result;
 
 end Termicap.Terminfo.IO;

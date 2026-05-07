@@ -30,6 +30,8 @@
 --  contains Ada.Strings.Unbounded.Unbounded_String (via XTVERSION_Result).
 --
 --  Requirements Coverage:
+--    - @relation(FUNC-HYP-014): Hyperlinks field in Terminal_Capabilities; Assemble parameter
+--    - @relation(FUNC-HYP-015): Hyperlinks field in Full_Terminal_Capabilities; Assemble_Full parameter
 --    - @relation(FUNC-CAP-001): Terminal_Capabilities record type
 --    - @relation(FUNC-CAP-002): Stream selection for per-stream color detection
 --    - @relation(FUNC-CAP-003): Get function Ã¢ÂÂ cached lazy initialisation
@@ -50,6 +52,7 @@ with Termicap.Color;
 with Termicap.DA1;
 with Termicap.Dimensions;
 with Termicap.Graphics;
+with Termicap.Hyperlinks;
 with Termicap.Keyboard;
 with Termicap.Mouse;
 with Termicap.Terminal_Id;
@@ -85,6 +88,8 @@ is
       Identity               : Termicap.Terminal_Id.Terminal_Identity;
       Downsampling_Available : Boolean;
       DA1                    : Termicap.DA1.DA1_Capabilities;
+      --  @relation(FUNC-HYP-014): Passive OSC 8 hyperlink classification
+      Hyperlinks             : Termicap.Hyperlinks.Hyperlinks_Result := Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT;
    end record;
 
    ---------------------------------------------------------------------------
@@ -107,7 +112,9 @@ is
    --  @relation(FUNC-CAP-012): SPARK Silver Ã¢ÂÂ Global => null, provable postcondition
    --  @relation(FUNC-CAP-013): No FFI Ã¢ÂÂ all inputs supplied as parameters
    --  @param DA1        DA1 primary device attributes result.
+   --  @param Hyperlinks Passive OSC 8 hyperlink classification result.
    --  @relation(FUNC-DA1-015): DA1 parameter added to Assemble
+   --  @relation(FUNC-HYP-014): Hyperlinks parameter added to Assemble
    function Assemble
      (TTY_Stdin  : Boolean;
       TTY_Stdout : Boolean;
@@ -116,13 +123,13 @@ is
       Size       : Termicap.Dimensions.Terminal_Size;
       Unicode    : Termicap.Unicode.Unicode_Level;
       Identity   : Termicap.Terminal_Id.Terminal_Identity;
-      DA1        : Termicap.DA1.DA1_Capabilities) return Terminal_Capabilities
+      DA1        : Termicap.DA1.DA1_Capabilities;
+      Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result := Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
+      return Terminal_Capabilities
    with
      SPARK_Mode => On,
-     Global     => null,
-     Post       =>
-       Assemble'Result.Downsampling_Available
-       = (Assemble'Result.Color >= Termicap.Color.Extended_256);
+     Global => null,
+     Post => Assemble'Result.Downsampling_Available = (Assemble'Result.Color >= Termicap.Color.Extended_256);
 
    ---------------------------------------------------------------------------
    --  Detection Functions (FUNC-CAP-003, FUNC-CAP-004, FUNC-CAP-005)
@@ -145,9 +152,7 @@ is
    --  @relation(FUNC-CAP-010): Sub-detector invocation order enforced in body
    --  @relation(FUNC-CAP-011): Single Capture_Current call per Detect invocation
    --  @relation(FUNC-CAP-014): Every Detect call performs a full detection run
-   function Detect
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Terminal_Capabilities;
+   function Detect (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities;
 
    --  @summary Return a cached Terminal_Capabilities value for the given stream.
    --  @description On the first call for a given Stream, invokes Detect and
@@ -161,9 +166,7 @@ is
    --  @relation(FUNC-CAP-005): Default Stream => Stdout for the common case
    --  @relation(FUNC-CAP-008): Thread safety via protected object in body
    --  @relation(FUNC-CAP-009): Returned record is a copy; cache is not aliased
-   function Get
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Terminal_Capabilities;
+   function Get (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities;
 
    ---------------------------------------------------------------------------
    --  Full Detection (SPARK_Mode Off)
@@ -194,11 +197,18 @@ is
    --  (Sixel / Kitty), and OSC 52 clipboard detection.  All fields are directly
    --  accessible without indirection.  Callers that do not need Tier 4
    --  information should continue using Terminal_Capabilities via Get / Detect.
-   --  @field XTVERSION Active terminal name/version identification result.
-   --  @field Keyboard  Keyboard protocol detection result (Kitty / XTerm CSI / Legacy).
-   --  @field Mouse     Mouse encoding detection result (SGR_Pixels / SGR / URXVT / X10).
-   --  @field Graphics  Sixel and Kitty graphics protocol detection result.
-   --  @field Clipboard OSC 52 clipboard access level detection result.
+   --  @field XTVERSION  Active terminal name/version identification result.
+   --  @field Keyboard   Keyboard protocol detection result (Kitty / XTerm CSI / Legacy).
+   --  @field Mouse      Mouse encoding detection result (SGR_Pixels / SGR / URXVT / X10).
+   --  @field Graphics   Sixel and Kitty graphics protocol detection result.
+   --  @field Clipboard  OSC 52 clipboard access level detection result.
+   --  @field Hyperlinks XTVERSION-refined OSC 8 hyperlink classification (FUNC-HYP-015).
+   --                    The base passive classification lives in
+   --                    Terminal_Capabilities.Hyperlinks; the field here carries
+   --                    the refined value produced by
+   --                    Termicap.Hyperlinks.Refine_With_XTVERSION using the
+   --                    XTVERSION result already collected by Detect_Full
+   --                    Step 9 (ADR-0038).
    type Full_Terminal_Capabilities is record
       TTY_Stdin              : Boolean;
       TTY_Stdout             : Boolean;
@@ -214,6 +224,9 @@ is
       Mouse                  : Termicap.Mouse.Mouse_Capabilities;
       Graphics               : Termicap.Graphics.Graphics_Capabilities;
       Clipboard              : Termicap.Clipboard.Clipboard_Capabilities;
+      --  @relation(FUNC-HYP-015): Hyperlinks field in Full_Terminal_Capabilities
+      Hyperlinks             : Termicap.Hyperlinks.Hyperlinks_Result :=
+                                 Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT;
    end record;
 
    ---------------------------------------------------------------------------
@@ -225,20 +238,26 @@ is
    --  by extending an already-assembled Terminal_Capabilities value with the five
    --  Tier 4 sub-detector results.  Called internally by Detect_Full; may also be
    --  called directly by test code with known inputs.
-   --  @param Base      Already-assembled base capability snapshot (parent view).
-   --  @param XTVERSION Result of the XTVERSION active probe.
-   --  @param Keyboard  Result of keyboard protocol detection.
-   --  @param Mouse     Result of mouse protocol detection.
-   --  @param Graphics  Result of graphics (Sixel / Kitty) detection.
-   --  @param Clipboard Result of OSC 52 clipboard detection.
+   --  @param Base       Already-assembled base capability snapshot (parent view).
+   --  @param XTVERSION  Result of the XTVERSION active probe.
+   --  @param Keyboard   Result of keyboard protocol detection.
+   --  @param Mouse      Result of mouse protocol detection.
+   --  @param Graphics   Result of graphics (Sixel / Kitty) detection.
+   --  @param Clipboard  Result of OSC 52 clipboard detection.
+   --  @param Hyperlinks Refined OSC 8 hyperlink classification (FUNC-HYP-015).
+   --                    Defaults to Base.Hyperlinks (i.e. the unrefined passive
+   --                    value) so callers that do not yet supply the refinement
+   --                    keep the previous behaviour.
    --  @return A fully populated Full_Terminal_Capabilities record.
    function Assemble_Full
-     (Base      : Terminal_Capabilities;
-      XTVERSION : Termicap.XTVERSION.XTVERSION_Result;
-      Keyboard  : Termicap.Keyboard.Keyboard_Capability;
-      Mouse     : Termicap.Mouse.Mouse_Capabilities;
-      Graphics  : Termicap.Graphics.Graphics_Capabilities;
-      Clipboard : Termicap.Clipboard.Clipboard_Capabilities)
+     (Base       : Terminal_Capabilities;
+      XTVERSION  : Termicap.XTVERSION.XTVERSION_Result;
+      Keyboard   : Termicap.Keyboard.Keyboard_Capability;
+      Mouse      : Termicap.Mouse.Mouse_Capabilities;
+      Graphics   : Termicap.Graphics.Graphics_Capabilities;
+      Clipboard  : Termicap.Clipboard.Clipboard_Capabilities;
+      Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result :=
+                     Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
       return Full_Terminal_Capabilities;
 
    ---------------------------------------------------------------------------
@@ -272,9 +291,7 @@ is
    --                Size is always derived from stdout (same as Detect).
    --  @return A Full_Terminal_Capabilities record reflecting terminal state at
    --          the moment of the call.
-   function Detect_Full
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Full_Terminal_Capabilities;
+   function Detect_Full (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities;
 
    --  @summary Return a cached Full_Terminal_Capabilities value for the given stream.
    --  @description On the first call for a given Stream, invokes Detect_Full and
@@ -284,8 +301,6 @@ is
    --  populate the Get_Full cache and vice versa.
    --  @param Stream The stream for which full capabilities are requested.
    --  @return A Full_Terminal_Capabilities record; a copy of the cached value.
-   function Get_Full
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Full_Terminal_Capabilities;
+   function Get_Full (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities;
 
 end Termicap.Capabilities;

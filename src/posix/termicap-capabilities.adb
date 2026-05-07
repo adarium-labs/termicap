@@ -16,6 +16,7 @@ with Termicap.Clipboard.IO;
 with Termicap.DA1.IO;
 with Termicap.Environment.Capture;
 with Termicap.Graphics.IO;
+with Termicap.Hyperlinks;
 with Termicap.Keyboard.IO;
 with Termicap.Mouse.IO;
 with Termicap.XTVERSION.IO;
@@ -25,7 +26,7 @@ package body Termicap.Capabilities
 is
 
    ---------------------------------------------------------------------------
-   --  Assemble (FUNC-CAP-012, FUNC-CAP-013)
+   --  Assemble (FUNC-CAP-012, FUNC-CAP-013, FUNC-HYP-014)
    ---------------------------------------------------------------------------
 
    function Assemble
@@ -36,8 +37,9 @@ is
       Size       : Termicap.Dimensions.Terminal_Size;
       Unicode    : Termicap.Unicode.Unicode_Level;
       Identity   : Termicap.Terminal_Id.Terminal_Identity;
-      DA1        : Termicap.DA1.DA1_Capabilities) return Terminal_Capabilities
-   is
+      DA1        : Termicap.DA1.DA1_Capabilities;
+      Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result := Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
+      return Terminal_Capabilities is
    begin
       return
         Terminal_Capabilities'
@@ -49,7 +51,8 @@ is
            Unicode                => Unicode,
            Identity               => Identity,
            Downsampling_Available => Color >= Termicap.Color.Extended_256,
-           DA1                    => DA1);
+           DA1                    => DA1,
+           Hyperlinks             => Hyperlinks);
    end Assemble;
 
    ---------------------------------------------------------------------------
@@ -64,24 +67,20 @@ is
    type Cache_Array is array (Termicap.TTY.Stream_Kind) of Cache_Slot;
 
    protected Cache is
-      function Get_Cached
-        (Stream : Termicap.TTY.Stream_Kind) return Cache_Slot;
-      procedure Set_Cached
-        (Stream : Termicap.TTY.Stream_Kind; Caps : Terminal_Capabilities);
+      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Cache_Slot;
+      procedure Set_Cached (Stream : Termicap.TTY.Stream_Kind; Caps : Terminal_Capabilities);
    private
       Slots : Cache_Array;
    end Cache;
 
    protected body Cache is
 
-      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Cache_Slot
-      is
+      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Cache_Slot is
       begin
          return Slots (Stream);
       end Get_Cached;
 
-      procedure Set_Cached
-        (Stream : Termicap.TTY.Stream_Kind; Caps : Terminal_Capabilities) is
+      procedure Set_Cached (Stream : Termicap.TTY.Stream_Kind; Caps : Terminal_Capabilities) is
       begin
          Slots (Stream) := (Initialized => True, Value => Caps);
       end Set_Cached;
@@ -92,10 +91,7 @@ is
    --  Detect (FUNC-CAP-004) Ã¢ÂÂ fresh, uncached detection
    ---------------------------------------------------------------------------
 
-   function Detect
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Terminal_Capabilities
-   is
+   function Detect (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities is
       Env               : Termicap.Environment.Environment;
       Id                : Termicap.Terminal_Id.Terminal_Identity;
       TTY_All           : Termicap.TTY.TTY_Status;
@@ -117,7 +113,7 @@ is
       --  Step 4: Select the TTY flag for the requested stream.
       Is_TTY_For_Stream :=
         (case Stream is
-           when Termicap.TTY.Stdin  => TTY_All.Stdin,
+           when Termicap.TTY.Stdin => TTY_All.Stdin,
            when Termicap.TTY.Stdout => TTY_All.Stdout,
            when Termicap.TTY.Stderr => TTY_All.Stderr);
 
@@ -133,27 +129,32 @@ is
       --  Step 7: Detect DA1 primary device attributes (active probe).
       DA1_Caps := Termicap.DA1.IO.Detect_DA1 (Timeout_Ms => 100);
 
-      --  Steps 8 + 9: Derive Downsampling_Available and assemble the record.
-      return
-        Assemble
-          (TTY_Stdin  => TTY_All.Stdin,
-           TTY_Stdout => TTY_All.Stdout,
-           TTY_Stderr => TTY_All.Stderr,
-           Color      => Color,
-           Size       => Size,
-           Unicode    => Uni,
-           Identity   => Id,
-           DA1        => DA1_Caps);
+      --  Step 7.5: Passive OSC 8 hyperlink classification (FUNC-HYP-014).
+      --  Uses already-captured Env and Id; no I/O.
+      declare
+         HL : constant Termicap.Hyperlinks.Hyperlinks_Result :=
+           Termicap.Hyperlinks.Classify_Hyperlinks_Support (Env, Id);
+      begin
+         --  Steps 8 + 9: Derive Downsampling_Available and assemble the record.
+         return
+           Assemble
+             (TTY_Stdin  => TTY_All.Stdin,
+              TTY_Stdout => TTY_All.Stdout,
+              TTY_Stderr => TTY_All.Stderr,
+              Color      => Color,
+              Size       => Size,
+              Unicode    => Uni,
+              Identity   => Id,
+              DA1        => DA1_Caps,
+              Hyperlinks => HL);
+      end;
    end Detect;
 
    ---------------------------------------------------------------------------
    --  Get (FUNC-CAP-003) Ã¢ÂÂ lazy cached detection
    ---------------------------------------------------------------------------
 
-   function Get
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Terminal_Capabilities
-   is
+   function Get (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities is
       Slot : constant Cache_Slot := Cache.Get_Cached (Stream);
    begin
       if Slot.Initialized then
@@ -173,12 +174,14 @@ is
    ---------------------------------------------------------------------------
 
    function Assemble_Full
-     (Base      : Terminal_Capabilities;
-      XTVERSION : Termicap.XTVERSION.XTVERSION_Result;
-      Keyboard  : Termicap.Keyboard.Keyboard_Capability;
-      Mouse     : Termicap.Mouse.Mouse_Capabilities;
-      Graphics  : Termicap.Graphics.Graphics_Capabilities;
-      Clipboard : Termicap.Clipboard.Clipboard_Capabilities)
+     (Base       : Terminal_Capabilities;
+      XTVERSION  : Termicap.XTVERSION.XTVERSION_Result;
+      Keyboard   : Termicap.Keyboard.Keyboard_Capability;
+      Mouse      : Termicap.Mouse.Mouse_Capabilities;
+      Graphics   : Termicap.Graphics.Graphics_Capabilities;
+      Clipboard  : Termicap.Clipboard.Clipboard_Capabilities;
+      Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result :=
+                     Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
       return Full_Terminal_Capabilities is
    begin
       return
@@ -196,7 +199,8 @@ is
            Keyboard               => Keyboard,
            Mouse                  => Mouse,
            Graphics               => Graphics,
-           Clipboard              => Clipboard);
+           Clipboard              => Clipboard,
+           Hyperlinks             => Hyperlinks);
    end Assemble_Full;
 
    ---------------------------------------------------------------------------
@@ -208,29 +212,23 @@ is
       Value       : Full_Terminal_Capabilities;
    end record;
 
-   type Full_Cache_Array is
-     array (Termicap.TTY.Stream_Kind) of Full_Cache_Slot;
+   type Full_Cache_Array is array (Termicap.TTY.Stream_Kind) of Full_Cache_Slot;
 
    protected Full_Cache is
-      function Get_Cached
-        (Stream : Termicap.TTY.Stream_Kind) return Full_Cache_Slot;
-      procedure Set_Cached
-        (Stream : Termicap.TTY.Stream_Kind; Caps : Full_Terminal_Capabilities);
+      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Full_Cache_Slot;
+      procedure Set_Cached (Stream : Termicap.TTY.Stream_Kind; Caps : Full_Terminal_Capabilities);
    private
       Slots : Full_Cache_Array;
    end Full_Cache;
 
    protected body Full_Cache is
 
-      function Get_Cached
-        (Stream : Termicap.TTY.Stream_Kind) return Full_Cache_Slot is
+      function Get_Cached (Stream : Termicap.TTY.Stream_Kind) return Full_Cache_Slot is
       begin
          return Slots (Stream);
       end Get_Cached;
 
-      procedure Set_Cached
-        (Stream : Termicap.TTY.Stream_Kind; Caps : Full_Terminal_Capabilities)
-      is
+      procedure Set_Cached (Stream : Termicap.TTY.Stream_Kind; Caps : Full_Terminal_Capabilities) is
       begin
          Slots (Stream) := (Initialized => True, Value => Caps);
       end Set_Cached;
@@ -241,10 +239,7 @@ is
    --  Detect_Full -- fresh, uncached full detection
    ---------------------------------------------------------------------------
 
-   function Detect_Full
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Full_Terminal_Capabilities
-   is
+   function Detect_Full (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities is
       --  Steps 1-8: Detect base capabilities (Env, Id, TTY, Color, Size, Unicode, DA1).
       Base_Caps : constant Terminal_Capabilities := Detect (Stream);
 
@@ -253,32 +248,30 @@ is
         Termicap.XTVERSION.IO.Query_And_Identify (Timeout_Ms => 1_000);
 
       --  Step 10: Graphics detection (self-contained; uses its own DA1 + XTVERSION probes).
-      GFX : constant Termicap.Graphics.Graphics_Capabilities :=
-        Termicap.Graphics.IO.Detect_Graphics_Uncached;
+      GFX : constant Termicap.Graphics.Graphics_Capabilities := Termicap.Graphics.IO.Detect_Graphics_Uncached;
 
       --  Step 11: Keyboard protocol detection.
-      KBD : constant Termicap.Keyboard.Keyboard_Capability :=
-        Termicap.Keyboard.IO.Probe_Keyboard_Protocol;
+      KBD : constant Termicap.Keyboard.Keyboard_Capability := Termicap.Keyboard.IO.Probe_Keyboard_Protocol;
 
       --  Step 12: Mouse protocol detection.
-      MSE : constant Termicap.Mouse.Mouse_Capabilities :=
-        Termicap.Mouse.IO.Probe_Mouse_Protocols;
+      MSE : constant Termicap.Mouse.Mouse_Capabilities := Termicap.Mouse.IO.Probe_Mouse_Protocols;
 
       --  Step 13: Clipboard detection (self-contained; uses its own DA1 probe).
-      CLB : constant Termicap.Clipboard.Clipboard_Capabilities :=
-        Termicap.Clipboard.IO.Detect_Clipboard_Uncached;
+      CLB : constant Termicap.Clipboard.Clipboard_Capabilities := Termicap.Clipboard.IO.Detect_Clipboard_Uncached;
+
+      --  Step 14: Hyperlinks XTVERSION refinement (FUNC-HYP-015, ADR-0038).
+      --  Reuses the XTV value above; opens no new probe session.
+      HLR : constant Termicap.Hyperlinks.Hyperlinks_Result :=
+        Termicap.Hyperlinks.Refine_With_XTVERSION (Base_Caps.Hyperlinks, XTV);
    begin
-      return Assemble_Full (Base_Caps, XTV, KBD, MSE, GFX, CLB);
+      return Assemble_Full (Base_Caps, XTV, KBD, MSE, GFX, CLB, HLR);
    end Detect_Full;
 
    ---------------------------------------------------------------------------
    --  Get_Full -- lazy cached full detection
    ---------------------------------------------------------------------------
 
-   function Get_Full
-     (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout)
-      return Full_Terminal_Capabilities
-   is
+   function Get_Full (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities is
       Slot : constant Full_Cache_Slot := Full_Cache.Get_Cached (Stream);
    begin
       if Slot.Initialized then

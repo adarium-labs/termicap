@@ -31,7 +31,7 @@ is
    function Get_Table (Version : Table_Version) return Width_Table is
    begin
       case Version is
-         when Unicode_3  =>
+         when Unicode_3 =>
             return TABLE_UNICODE_3;
 
          when Unicode_13 =>
@@ -46,10 +46,7 @@ is
    --  Binary Search Lookup (FUNC-CWM-003, FUNC-CWM-014, FUNC-CWM-015)
    ---------------------------------------------------------------------------
 
-   function Cell_Width_In_Table
-     (Codepoint : Unicode_Scalar_Value; Table : Width_Table)
-      return Cell_Width_Value
-   is
+   function Cell_Width_In_Table (Codepoint : Unicode_Scalar_Value; Table : Width_Table) return Cell_Width_Value is
       Low  : Table_Index := Table'First;
       High : Table_Index := Table'Last;
       Mid  : Table_Index;
@@ -65,16 +62,9 @@ is
       end if;
 
       while Low <= High loop
-         pragma
-           Loop_Invariant (Low in Table'Range and then High in Table'Range);
-         pragma
-           Loop_Invariant
-             (for all I in Table'First .. Low - 1 =>
-                Table (I).Last < Codepoint);
-         pragma
-           Loop_Invariant
-             (for all I in High + 1 .. Table'Last =>
-                Table (I).First > Codepoint);
+         pragma Loop_Invariant (Low in Table'Range and then High in Table'Range);
+         pragma Loop_Invariant (for all I in Table'First .. Low - 1 => Table (I).Last < Codepoint);
+         pragma Loop_Invariant (for all I in High + 1 .. Table'Last => Table (I).First > Codepoint);
          pragma Loop_Variant (Decreases => High - Low);
 
          Mid := Low + (High - Low) / 2;

@@ -49,6 +49,7 @@ with Termicap.Capabilities;
 with Termicap.Clipboard;
 with Termicap.Color;
 with Termicap.Graphics;
+with Termicap.Hyperlinks;
 with Termicap.Keyboard;
 with Termicap.Mouse;
 with Termicap.Terminal_Id;
@@ -178,6 +179,17 @@ procedure Full_Capabilities_Demo is
                 & Boolean'Image (Caps.Clipboard.Via_Active_Probe));
       Put_Line ("  Clipboard.Via_Env_Heuristic: "
                 & Boolean'Image (Caps.Clipboard.Via_Env_Heuristic));
+
+      --  ---- Tier 4: Hyperlinks (XTVERSION-refined; FUNC-HYP-015) ----
+
+      Put_Line ("  Hyperlinks.Support     : "
+                & Termicap.Hyperlinks.Hyperlinks_Support'Image
+                    (Caps.Hyperlinks.Support));
+      Put_Line ("  Hyperlinks.Provenance  : "
+                & Termicap.Hyperlinks.Hyperlinks_Provenance'Image
+                    (Caps.Hyperlinks.Provenance));
+      Put_Line ("  Hyperlinks.Version_Known: "
+                & Boolean'Image (Caps.Hyperlinks.Terminal_Version_Known));
    end Print_Full_Caps;
 
 begin
@@ -337,6 +349,26 @@ begin
             Put_Line ("OSC 52 write-only -- can push to clipboard, not read back.");
          when Termicap.Clipboard.None =>
             Put_Line ("No OSC 52 support -- use OS-level clipboard fallback.");
+      end case;
+
+      --  Gate 6: choose OSC 8 hyperlink emission strategy (FUNC-HYP-015).
+      --  Use the *refined* Hyperlinks classification: it is at least as
+      --  confident as the base passive value and may be promoted to Supported
+      --  (or demoted to Unsupported) by the XTVERSION minimum-version table.
+      Put ("  Hyperlinks strategy    : ");
+      case Caps.Hyperlinks.Support is
+         when Termicap.Hyperlinks.Supported =>
+            Put_Line
+              ("emit OSC 8 (XTVERSION-confirmed: "
+               & Termicap.Hyperlinks.Hyperlinks_Provenance'Image
+                   (Caps.Hyperlinks.Provenance)
+               & ").");
+         when Termicap.Hyperlinks.Likely_Supported =>
+            Put_Line ("emit OSC 8 (heuristic; safe default for known-good emulators).");
+         when Termicap.Hyperlinks.Unsupported =>
+            Put_Line ("avoid OSC 8 -- terminal does not render the sequence.");
+         when Termicap.Hyperlinks.Unknown =>
+            Put_Line ("avoid OSC 8 by default; fall back to plain text.");
       end case;
    end;
 

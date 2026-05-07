@@ -22,6 +22,12 @@ Reference documentation is **information-oriented** and provides technical descr
 - **[Termicap.XTVERSION / Termicap.XTVERSION.IO](xtversion.md)**
   Active terminal identification via XTVERSION — `XTVERSION_Result` discriminated record, `CSI_XTVERSION_QUERY` constant, DCS response parsing (`Parse_XTVERSION_Response`), I/O procedure (`Query_XTVERSION`), convenience function (`Query_And_Identify`)
 
+- **[Termicap.Hyperlinks](hyperlinks.md)**
+  OSC 8 hyperlink support detection — `Hyperlinks_Support` (Unsupported/Likely_Supported/Supported/Unknown), `Hyperlinks_Provenance`, `Hyperlinks_Result` flat record; pure SPARK passive `Classify_Hyperlinks_Support` and value-to-value active `Refine_With_XTVERSION` (no new I/O — reuses XTVERSION result per ADR-0038)
+
+- **[Termicap.Version](version.md)**
+  Shared dotted-numeric version utility — `Version` bounded record (≤8 components), `Version_Ordering` enum, `Parse` (procedure, SPARK), `Compare`, `Make`; used by `Termicap.Hyperlinks` and `Termicap.Graphics` (Sixel kitty-version refactor per ADR-0036, FUNC-HYP-022)
+
 - **[Termicap.Keyboard / Termicap.Keyboard.IO](keyboard.md)**
   Kitty Keyboard Protocol detection — `Keyboard_Protocol` enum, `Kitty_Flags` record, `Keyboard_Capability` result; pure SPARK Silver parsers (`Parse_Kitty_Response`, `Parse_Kitty_Flags`, `Parse_XTerm_Keyboard_Response`); cached entry point (`Detect_Keyboard_Protocol`) and uncached variant (`Probe_Keyboard_Protocol`) implementing the Win32 → Kitty → XTerm → Legacy cascade
 

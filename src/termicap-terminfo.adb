@@ -42,8 +42,7 @@ is
    --  Read two bytes at Buffer(Offset) and Buffer(Offset+1) as a
    --  little-endian unsigned 16-bit value, then sign-extend to Integer.
    --  Pre: Offset >= Buffer'First and then Offset + 1 <= Buffer'Last.
-   function Read_LE16 (Buffer : Byte_Array; Offset : Positive) return Integer
-   is
+   function Read_LE16 (Buffer : Byte_Array; Offset : Positive) return Integer is
       Low  : constant Integer := Integer (Buffer (Offset));
       High : constant Integer := Integer (Buffer (Offset + 1));
       Raw  : Integer := Low + High * 256;
@@ -57,8 +56,7 @@ is
    --  Read four bytes at Buffer(Offset..Offset+3) as a little-endian unsigned
    --  32-bit value, then sign-extend to Integer.
    --  Pre: Offset >= Buffer'First and then Offset + 3 <= Buffer'Last.
-   function Read_LE32 (Buffer : Byte_Array; Offset : Positive) return Integer
-   is
+   function Read_LE32 (Buffer : Byte_Array; Offset : Positive) return Integer is
       B0  : constant Integer := Integer (Buffer (Offset));
       B1  : constant Integer := Integer (Buffer (Offset + 1));
       B2  : constant Integer := Integer (Buffer (Offset + 2));
@@ -80,9 +78,7 @@ is
    ---------------------------------------------------------------------------
 
    --  @relation(FUNC-TIF-007): Detect_Format pure function with SPARK contract
-   function Detect_Format
-     (Buffer : Byte_Array; Size : Natural) return Terminfo_Format
-   is
+   function Detect_Format (Buffer : Byte_Array; Size : Natural) return Terminfo_Format is
       pragma Unreferenced (Size);
       Low   : constant Integer := Integer (Buffer (Buffer'First));
       High  : constant Integer := Integer (Buffer (Buffer'First + 1));
@@ -103,15 +99,10 @@ is
 
    --  @relation(FUNC-TIF-008): Parse_Header procedure with SPARK pre/post contracts
    procedure Parse_Header
-     (Buffer  : Byte_Array;
-      Size    : Natural;
-      Format  : Terminfo_Format;
-      Header  : out Parsed_Header;
-      Success : out Boolean)
+     (Buffer : Byte_Array; Size : Natural; Format : Terminfo_Format; Header : out Parsed_Header; Success : out Boolean)
    is
       --  Byte size of each numeric field: 2 for Legacy_16bit, 4 for Extended_32bit.
-      Num_Size : constant Natural :=
-        (if Format = Extended_32bit then 4 else 2);
+      Num_Size : constant Natural := (if Format = Extended_32bit then 4 else 2);
 
       --  Offsets of the five header fields (1-based in Buffer, starting at byte 3).
       Names_Size_Offset   : constant Positive := Buffer'First + 2;
@@ -257,10 +248,7 @@ is
    ---------------------------------------------------------------------------
 
    --  @relation(FUNC-TIF-009): Get_Boolean pure function
-   function Get_Boolean
-     (Buffer : Byte_Array; Header : Parsed_Header; Index : Natural)
-      return Boolean_Cap_Value
-   is
+   function Get_Boolean (Buffer : Byte_Array; Header : Parsed_Header; Index : Natural) return Boolean_Cap_Value is
       B : Byte;
    begin
       --  Out-of-range index -> Absent.
@@ -292,13 +280,9 @@ is
 
    --  @relation(FUNC-TIF-010): Get_Numeric pure function with SPARK postcondition
    function Get_Numeric
-     (Buffer : Byte_Array;
-      Header : Parsed_Header;
-      Format : Terminfo_Format;
-      Index  : Natural) return Integer
+     (Buffer : Byte_Array; Header : Parsed_Header; Format : Terminfo_Format; Index : Natural) return Integer
    is
-      Num_Size : constant Positive :=
-        (if Format = Extended_32bit then 4 else 2);
+      Num_Size : constant Positive := (if Format = Extended_32bit then 4 else 2);
       Offset   : Natural;
       Value    : Integer;
    begin
@@ -383,15 +367,11 @@ is
       Copy_Index := 1;
       loop
          pragma Loop_Variant (Increases => Copy_Index);
-         pragma
-           Loop_Invariant
-             (Copy_Index >= 1
-                and then Copy_Index <= MAX_CAPABILITY_STRING_LENGTH + 1);
+         pragma Loop_Invariant (Copy_Index >= 1 and then Copy_Index <= MAX_CAPABILITY_STRING_LENGTH + 1);
          exit when Copy_Index > MAX_CAPABILITY_STRING_LENGTH;
          exit when String_Start + Copy_Index - 1 > Buffer'Last;
          exit when Buffer (String_Start + Copy_Index - 1) = 0;
-         Result.Data (Copy_Index) :=
-           Character'Val (Natural (Buffer (String_Start + Copy_Index - 1)));
+         Result.Data (Copy_Index) := Character'Val (Natural (Buffer (String_Start + Copy_Index - 1)));
          Copy_Index := Copy_Index + 1;
       end loop;
 
@@ -405,11 +385,7 @@ is
 
    --  @relation(FUNC-TIF-012): Parse_Extended_Header procedure
    procedure Parse_Extended_Header
-     (Buffer  : Byte_Array;
-      Size    : Natural;
-      Header  : Parsed_Header;
-      Ext     : out Extended_Header;
-      Success : out Boolean)
+     (Buffer : Byte_Array; Size : Natural; Header : Parsed_Header; Ext : out Extended_Header; Success : out Boolean)
    is
       EXT_HEADER_SIZE : constant := 10;  --  5 x 2-byte LE fields
 
@@ -433,8 +409,7 @@ is
       Ext_Str_Table_Off : Natural;
       Ext_Data_Off      : Natural;
 
-      Num_Size : constant Positive :=
-        (if Header.Format = Extended_32bit then 4 else 2);
+      Num_Size : constant Positive := (if Header.Format = Extended_32bit then 4 else 2);
 
       Ext_Bool_Pad : Natural;
       Raw_Val      : Integer;
@@ -544,11 +519,7 @@ is
       end if;
 
       --  All offsets must be valid Positive values.
-      if Ext_Bool_Off < 1
-        or else Ext_Num_Off < 1
-        or else Ext_Str_Table_Off < 1
-        or else Ext_Data_Off < 1
-      then
+      if Ext_Bool_Off < 1 or else Ext_Num_Off < 1 or else Ext_Str_Table_Off < 1 or else Ext_Data_Off < 1 then
          return;
       end if;
 
@@ -624,10 +595,8 @@ is
          return;
       end if;
 
-      Ext_Str_Count :=
-        Ext.Ext_String_Count - Ext.Ext_Bool_Count - Ext.Ext_Num_Count;
-      Total_Name_Count :=
-        Ext.Ext_Bool_Count + Ext.Ext_Num_Count + Ext_Str_Count;
+      Ext_Str_Count := Ext.Ext_String_Count - Ext.Ext_Bool_Count - Ext.Ext_Num_Count;
+      Total_Name_Count := Ext.Ext_Bool_Count + Ext.Ext_Num_Count + Ext_Str_Count;
 
       --  The name offset entries follow the value offset entries in the table.
       --  Value entries: Ext_Str_Count * 2 bytes (one 16-bit offset per pure string cap).
@@ -724,10 +693,8 @@ is
                --  Extended numeric: value >= 1 -> set the flag.
                declare
                   Num_Idx  : constant Natural := I - Ext.Ext_Bool_Count;
-                  Num_Size : constant Positive :=
-                    (if Header.Format = Extended_32bit then 4 else 2);
-                  Num_Off  : constant Natural :=
-                    Ext.Ext_Num_Offset + Num_Idx * Num_Size;
+                  Num_Size : constant Positive := (if Header.Format = Extended_32bit then 4 else 2);
+                  Num_Off  : constant Natural := Ext.Ext_Num_Offset + Num_Idx * Num_Size;
                   Num_Val  : Integer;
                begin
                   if Num_Off + Num_Size - 1 <= Buffer'Last then
@@ -750,10 +717,8 @@ is
                --  Extended string: any non-empty string -> set the flag.
                --  We treat any present string (not absent, non-zero-length) as True.
                declare
-                  Str_Idx     : constant Natural :=
-                    I - Ext.Ext_Bool_Count - Ext.Ext_Num_Count;
-                  Str_Off_Pos : constant Natural :=
-                    Ext.Ext_Str_Table_Offset + Str_Idx * 2;
+                  Str_Idx     : constant Natural := I - Ext.Ext_Bool_Count - Ext.Ext_Num_Count;
+                  Str_Off_Pos : constant Natural := Ext.Ext_Str_Table_Offset + Str_Idx * 2;
                   Str_Off     : Integer;
                   Str_Start   : Natural;
                begin
@@ -761,9 +726,7 @@ is
                      Str_Off := Read_LE16 (Buffer, Str_Off_Pos);
                      if Str_Off >= 0 then
                         Str_Start := Ext.Ext_Data_Offset + Natural (Str_Off);
-                        if Str_Start <= Buffer'Last
-                          and then Buffer (Str_Start) /= 0
-                        then
+                        if Str_Start <= Buffer'Last and then Buffer (Str_Start) /= 0 then
                            if Is_RGB then
                               Has_RGB := True;
                            end if;
@@ -790,9 +753,7 @@ is
    --  The names section starts at Buffer(HEADER_SIZE + 1) and is
    --  Names_Size bytes long.  We copy bytes until '|', NUL, or
    --  MAX_TERM_NAME_LENGTH, whichever comes first.
-   procedure Extract_Term_Name
-     (Buffer : Byte_Array; Header : Parsed_Header; Name : out Term_Name_String)
-   is
+   procedure Extract_Term_Name (Buffer : Byte_Array; Header : Parsed_Header; Name : out Term_Name_String) is
       --  The names section starts at HEADER_SIZE + 1 (1-based).
       Names_Start : constant Positive := Buffer'First + HEADER_SIZE;
       Names_End   : constant Natural := Names_Start + Header.Names_Size - 1;
@@ -803,9 +764,7 @@ is
 
       loop
          pragma Loop_Variant (Increases => Copy_Index);
-         pragma
-           Loop_Invariant
-             (Copy_Index >= 1 and then Copy_Index <= MAX_TERM_NAME_LENGTH + 1);
+         pragma Loop_Invariant (Copy_Index >= 1 and then Copy_Index <= MAX_TERM_NAME_LENGTH + 1);
          exit when Copy_Index > MAX_TERM_NAME_LENGTH;
          exit when Names_Start + Copy_Index - 1 > Names_End;
          exit when Names_Start + Copy_Index - 1 > Buffer'Last;
@@ -829,9 +788,7 @@ is
    --  @relation(FUNC-TIF-011): Extracts setaf/setab via Get_String
    --  @relation(FUNC-TIF-012): Calls Parse_Extended_Header
    --  @relation(FUNC-TIF-014): Calls Extract_Truecolor_Flags
-   function Parse_Buffer
-     (Buffer : Byte_Array; Size : Natural) return Terminfo_Result
-   is
+   function Parse_Buffer (Buffer : Byte_Array; Size : Natural) return Terminfo_Result is
       Format : Terminfo_Format;
       Header : Parsed_Header;
       Hdr_Ok : Boolean;
@@ -850,12 +807,7 @@ is
          return (Success => False, Error => Error_Header_Corrupt);
       end if;
 
-      Parse_Header
-        (Buffer  => Buffer,
-         Size    => Size,
-         Format  => Format,
-         Header  => Header,
-         Success => Hdr_Ok);
+      Parse_Header (Buffer => Buffer, Size => Size, Format => Format, Header => Header, Success => Hdr_Ok);
 
       if not Hdr_Ok then
          return (Success => False, Error => Error_Header_Corrupt);
@@ -877,12 +829,7 @@ is
       Snap.Has_RGB_Flag := False;
       Snap.Has_Tc_Flag := False;
 
-      Parse_Extended_Header
-        (Buffer  => Buffer,
-         Size    => Size,
-         Header  => Header,
-         Ext     => Ext,
-         Success => Ext_Ok);
+      Parse_Extended_Header (Buffer => Buffer, Size => Size, Header => Header, Ext => Ext, Success => Ext_Ok);
 
       --  Step 8: Extract truecolor flags if extended section is valid.
       if Ext_Ok then

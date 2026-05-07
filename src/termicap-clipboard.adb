@@ -63,7 +63,7 @@ is
       I := Base;
       while I <= Last - (MIN_SCAN_LEN - 1) loop
 
-         if Buffer (I)     = BYTE_ESC
+         if Buffer (I) = BYTE_ESC
            and then Buffer (I + 1) = BYTE_OSC
            and then Buffer (I + 2) = BYTE_5
            and then Buffer (I + 3) = BYTE_2

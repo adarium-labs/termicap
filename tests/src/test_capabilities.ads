@@ -115,4 +115,17 @@ package Test_Capabilities is
    --  not change the original (Ada value semantics)
    procedure Test_Record_Value_Semantics (T : in out AUnit.Test_Cases.Test_Case'Class);
 
+   ---------------------------------------------------------------------------
+   --  Group 7: Hyperlinks field in Terminal_Capabilities (FUNC-HYP-014)
+   ---------------------------------------------------------------------------
+
+   --  @relation(FUNC-HYP-014): Assemble without explicit Hyperlinks uses DEFAULT
+   procedure Test_Hyperlinks_Default_When_Omitted (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  @relation(FUNC-HYP-014): Assemble with explicit Hyperlinks preserves the value
+   procedure Test_Hyperlinks_Explicit_Preserved (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  @relation(FUNC-HYP-014): Other fields unaffected when Hyperlinks added (regression)
+   procedure Test_Hyperlinks_Other_Fields_Unchanged (T : in out AUnit.Test_Cases.Test_Case'Class);
+
 end Test_Capabilities;

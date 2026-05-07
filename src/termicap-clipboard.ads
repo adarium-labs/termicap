@@ -150,11 +150,7 @@ is
    --  to this value via default initialisation.
    --  @relation(FUNC-C52-002): Canonical safe-default "no result" value
    NO_CLIPBOARD_CAPABILITIES : constant Clipboard_Capabilities :=
-     (Support           => None,
-      Via_DA1           => False,
-      Via_Active_Probe  => False,
-      Via_Env_Heuristic => False,
-      Probed            => False);
+     (Support => None, Via_DA1 => False, Via_Active_Probe => False, Via_Env_Heuristic => False, Probed => False);
 
    ---------------------------------------------------------------------------
    --  Named Terminal Identifier Constants (FUNC-C52-005)
@@ -336,10 +332,6 @@ is
    --  @return OSC52_Parse_Result per the rules above.
    --  @relation(FUNC-C52-008): OSC 52 response parser (SPARK Silver)
    function Parse_OSC52_Response (Buffer : Byte_Array; Length : Natural) return OSC52_Parse_Result
-   with
-     SPARK_Mode => On,
-     Global     => null,
-     Pre        => Length <= Buffer'Length,
-     Post       => True;
+   with SPARK_Mode => On, Global => null, Pre => Length <= Buffer'Length, Post => True;
 
 end Termicap.Clipboard;

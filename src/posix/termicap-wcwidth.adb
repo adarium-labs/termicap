@@ -45,8 +45,7 @@ is
    --  Unchecked_Conversion from a 32-bit unsigned integer is the safe way to
    --  construct a wchar_t value for supplementary-plane sentinels.
    subtype Wchar_Int is Interfaces.C.unsigned;
-   function To_Wchar is new
-     Ada.Unchecked_Conversion (Wchar_Int, Interfaces.C.wchar_t);
+   function To_Wchar is new Ada.Unchecked_Conversion (Wchar_Int, Interfaces.C.wchar_t);
 
    ---------------------------------------------------------------------------
    --  C FFI Bindings (FUNC-WCW-001, FUNC-WCW-006)
@@ -65,8 +64,7 @@ is
    --  locale string for the given category without changing it.
    --  @relation(FUNC-WCW-006): setlocale() binding for locale guard
    function C_Setlocale
-     (Category : Interfaces.C.int; Locale : Interfaces.C.Strings.chars_ptr)
-      return Interfaces.C.Strings.chars_ptr;
+     (Category : Interfaces.C.int; Locale : Interfaces.C.Strings.chars_ptr) return Interfaces.C.Strings.chars_ptr;
    pragma Import (C, C_Setlocale, "setlocale");
 
    --  @summary C helper returning the platform-specific LC_CTYPE constant.
@@ -168,22 +166,17 @@ is
    ---------------------------------------------------------------------------
 
    function Refine_Unicode_Level
-     (Env_Level : Termicap.Unicode.Unicode_Level; Wcw_Level : Wcwidth_Level)
-      return Termicap.Unicode.Unicode_Level is
+     (Env_Level : Termicap.Unicode.Unicode_Level; Wcw_Level : Wcwidth_Level) return Termicap.Unicode.Unicode_Level is
    begin
       case Wcw_Level is
-         when Unknown                =>
+         when Unknown =>
             return Env_Level;
 
          when Unicode_3 | Unicode_13 =>
-            return
-              Termicap.Unicode.Unicode_Level'Max
-                (Env_Level, Termicap.Unicode.Basic);
+            return Termicap.Unicode.Unicode_Level'Max (Env_Level, Termicap.Unicode.Basic);
 
-         when Unicode_16             =>
-            return
-              Termicap.Unicode.Unicode_Level'Max
-                (Env_Level, Termicap.Unicode.Extended);
+         when Unicode_16 =>
+            return Termicap.Unicode.Unicode_Level'Max (Env_Level, Termicap.Unicode.Extended);
       end case;
    end Refine_Unicode_Level;
 

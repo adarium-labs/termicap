@@ -33,7 +33,9 @@ Termicap                          (root namespace — no types or subprograms)
 │   └── Termicap.Keyboard.IO      [SPARK_Mode => Off] — Detect_Keyboard_Protocol (cached) and Probe_Keyboard_Protocol (uncached); platform-dispatched (POSIX/Windows) via GPR Source_Dirs
 ├── Termicap.Mouse                [SPARK Silver (spec)] — Mouse_Encoding/Mouse_Capabilities/DECRPM_Parse_Result types; MODE_MOUSE_* constants; pure Parse_Mouse_DECRPM_Response and Resolve_Best_Encoding functions
 │   └── Termicap.Mouse.IO         [SPARK_Mode => Off] — Detect_Mouse_Protocols (cached) and Probe_Mouse_Protocols (uncached); platform-dispatched (POSIX/Windows) via GPR Source_Dirs
-├── Termicap.Graphics             [SPARK Silver (spec)] — Graphics_Capabilities record; APC_Parse_Result enumeration; 11 named constants (TERM_*, TERM_PROGRAM_*, ENV_*, XTVERSION_*); KITTY_APC_QUERY byte array; GRAPHICS_PROBE_TIMEOUT_MS; pure Parse_Kitty_APC_Response function
+├── Termicap.Version              [SPARK Silver] — Version record; Component_Index/Component_Array types; Version_Ordering enumeration; ZERO_VERSION/MAX_VERSION_COMPONENTS constants; Parse, Compare, Make subprograms; shared by Termicap.Graphics and Termicap.Hyperlinks
+├── Termicap.Hyperlinks           [SPARK Silver (spec)] — Hyperlinks_Support/Hyperlinks_Provenance/Hyperlinks_Result types; TERM_PREFIX_* / TERM_* exclusion constants; DEFAULT_HYPERLINKS_RESULT constant; pure Classify_Hyperlinks_Support (SPARK Silver, Global => null); Refine_With_XTVERSION (SPARK_Mode Off — consumes XTVERSION_Result)
+├── Termicap.Graphics             [SPARK Silver (spec)] — Graphics_Capabilities record; APC_Parse_Result enumeration; 11 named constants (TERM_*, TERM_PROGRAM_*, ENV_*, XTVERSION_*); KITTY_APC_QUERY byte array; GRAPHICS_PROBE_TIMEOUT_MS; pure Parse_Kitty_APC_Response function; pure Parse_Kitty_Version (delegates to Termicap.Version)
 │   └── Termicap.Graphics.IO      [SPARK_Mode => Off] — Detect_Graphics (cached) and Detect_Graphics_Uncached; platform-dispatched (POSIX/Windows) via GPR Source_Dirs
 ├── Termicap.Clipboard            [SPARK Silver (spec + body)] — Clipboard_Support enumeration; Clipboard_Capabilities result record; 9 named constants (TERM_PROGRAM_*, ENV_*, TERM_*); OSC52_QUERY byte array; CLIPBOARD_PROBE_TIMEOUT_MS; OSC52_Parse_Result enumeration; pure Parse_OSC52_Response function
 │   └── Termicap.Clipboard.IO     [SPARK_Mode => Off] — Detect_Clipboard (cached) and Detect_Clipboard_Uncached; platform-dispatched (POSIX/Windows) via GPR Source_Dirs
@@ -42,7 +44,7 @@ Termicap                          (root namespace — no types or subprograms)
 ├── Termicap.Wcwidth              [spec: SPARK On, body: SPARK_Mode => Off] — Wcwidth_Level/Optional_Wcwidth_Level types; WCW_SENTINEL_UNI3/13/16 constants; Probe_Wcwidth_Level (cached, FFI); pure Refine_Unicode_Level; platform-dispatched (POSIX/Windows) via GPR Source_Dirs; C helper termicap_wcwidth.c
 ├── Termicap.Cell_Width           [SPARK Gold (spec + body)] — Unicode_Scalar_Value/Cell_Width_Value subtypes; Table_Version enumeration; pure Active_Version (elaboration-time UNICODE_VERSION env-var read isolated in Off region); two Cell_Width overloads (Global => null); standalone, no FFI
 │   └── Termicap.Cell_Width.Tables [SPARK Gold (spec + body)] — Table_Index/Width_Entry/Width_Table types; ghost predicates All_Widths_Valid/Is_Sorted_Non_Overlapping; TABLE_UNICODE_3/13/16 compile-time constants; Get_Table dispatch; Cell_Width_In_Table binary search (O(log N), no heap, Global => null)
-└── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Get (cached) and Detect (fresh) entry points
+└── Termicap.Capabilities         [spec: SPARK, body: mixed] — aggregated capability record; Terminal_Capabilities (incl. Hyperlinks field, FUNC-HYP-014); Full_Terminal_Capabilities; Assemble (Hyperlinks parameter added, FUNC-HYP-014); Get (cached) and Detect (fresh) entry points
 ```
 
 ### Windows Platform Packages (`src/windows/`)
@@ -581,22 +583,26 @@ The pure `Assemble` function is SPARK Silver-provable (`Global => null`) and car
 | Property | Value |
 |----------|-------|
 | Files | `src/termicap-capabilities.ads`, `src/termicap-capabilities.adb` |
-| SPARK_Mode | On (spec and `Assemble` function); Off (protected cache, `Detect` and `Get` bodies) |
-| Dependencies | `Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, `Termicap.Terminal_Id`, `Termicap.DA1`, `Termicap.DA1.IO` |
+| SPARK_Mode | On (spec and `Assemble` function); Off (protected cache, `Detect` and `Get` bodies; all `Full_*` declarations) |
+| Dependencies | `Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, `Termicap.Terminal_Id`, `Termicap.DA1`, `Termicap.DA1.IO`, `Termicap.Hyperlinks` |
 
 #### Key Types
 
 | Type | Description |
 |------|-------------|
-| `Terminal_Capabilities` | Plain Ada record with nine fields: `TTY_Stdin : Boolean`, `TTY_Stdout : Boolean`, `TTY_Stderr : Boolean`, `Color : Termicap.Color.Color_Level`, `Size : Termicap.Dimensions.Terminal_Size`, `Unicode : Termicap.Unicode.Unicode_Level`, `Identity : Termicap.Terminal_Id.Terminal_Identity`, `Downsampling_Available : Boolean`, and `DA1 : Termicap.DA1.DA1_Capabilities`. Value semantics — assignment produces an independent copy with no aliasing. |
+| `Terminal_Capabilities` | Plain Ada record with **ten** fields: `TTY_Stdin : Boolean`, `TTY_Stdout : Boolean`, `TTY_Stderr : Boolean`, `Color : Termicap.Color.Color_Level`, `Size : Termicap.Dimensions.Terminal_Size`, `Unicode : Termicap.Unicode.Unicode_Level`, `Identity : Termicap.Terminal_Id.Terminal_Identity`, `Downsampling_Available : Boolean`, `DA1 : Termicap.DA1.DA1_Capabilities`, and `Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result` (FUNC-HYP-014). `Hyperlinks` defaults to `DEFAULT_HYPERLINKS_RESULT`. Value semantics — assignment produces an independent copy with no aliasing. |
+| `Full_Terminal_Capabilities` | Extends the base record with five Tier 4 fields: `XTVERSION`, `Keyboard`, `Mouse`, `Graphics`, `Clipboard`. Does **not** include a separate `Hyperlinks` field — the `Hyperlinks` field is inherited via the `Base : Terminal_Capabilities` parameter to `Assemble_Full`. SPARK_Mode Off because `XTVERSION_Result` contains `Unbounded_String`. |
 
 #### Public Operations
 
 | Subprogram | Kind | SPARK Contract | Requirements |
 |-----------|------|---------------|--------------|
-| `Assemble` | Function | `Global => null`; `Post => Assemble'Result.Downsampling_Available = (Assemble'Result.Color >= Termicap.Color.Extended_256)` | FUNC-CAP-012, FUNC-CAP-013 |
+| `Assemble` | Function | `Global => null`; `Post => Assemble'Result.Downsampling_Available = (Assemble'Result.Color >= Termicap.Color.Extended_256)`. Accepts optional `Hyperlinks` parameter (default `DEFAULT_HYPERLINKS_RESULT`). | FUNC-CAP-012, FUNC-CAP-013, FUNC-HYP-014 |
 | `Detect` | Function | No Global contract (delegates to OS-calling sub-detectors) | FUNC-CAP-004, FUNC-CAP-005, FUNC-CAP-006, FUNC-CAP-007, FUNC-CAP-010, FUNC-CAP-011, FUNC-CAP-014 |
 | `Get` | Function | No Global contract (reads/writes protected cache) | FUNC-CAP-003, FUNC-CAP-005, FUNC-CAP-008, FUNC-CAP-009 |
+| `Assemble_Full` | Function | SPARK_Mode Off; pure (no I/O). Extends a base `Terminal_Capabilities` with five Tier 4 results. | FUNC-HYP-015 |
+| `Detect_Full` | Function | SPARK_Mode Off; runs all Tier 4 probes including XTVERSION (Step 9) and Hyperlinks refinement (Step 9a via `Refine_With_XTVERSION`). | ADR-0038 |
+| `Get_Full` | Function | SPARK_Mode Off; lazy per-stream cache for the full record. | — |
 
 Both `Detect` and `Get` accept a `Stream : Termicap.TTY.Stream_Kind` parameter with default value `Stdout` (FUNC-CAP-005). `Detect` always performs a full detection run; `Get` populates the per-stream cache slot on the first call and returns a copy of the cached value on subsequent calls (FUNC-CAP-003). Override state installed via `Termicap.Override.Set_Override` is reflected in the `Color` and TTY fields of both `Detect` and `Get` results (FUNC-CAP-006, FUNC-CAP-007).
 
@@ -1254,6 +1260,123 @@ Platform dispatch via GPR `Source_Dirs` (ADR-0018):
 
 ---
 
+### `Termicap.Version`
+
+**Responsibility:** Shared allocation-free utility for parsing and comparing dotted-numeric version strings (e.g., `"0.50.0"`, `"3.1.0"`, `"357"`). Used by both `Termicap.Hyperlinks` (for the known-good version table comparison in `Refine_With_XTVERSION`) and `Termicap.Graphics` (for `Parse_Kitty_Version`, FUNC-HYP-022).
+
+The parser accepts only non-negative integer components separated by dots (no pre-release tags, no build metadata). Up to `MAX_VERSION_COMPONENTS` (8) components are accepted; a version with more components is rejected. The comparator uses lexicographic component ordering: a shorter prefix that matches all its components is `Less_Than` the longer version.
+
+All subprograms are pure SPARK Silver (`Global => null`, no allocation, no I/O, no exceptions).
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-version.ads`, `src/termicap-version.adb` |
+| SPARK_Mode | On (spec and body) — **Silver level** |
+| Dependencies | None (leaf package) |
+
+#### Key Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MAX_VERSION_COMPONENTS` | `8` | Maximum number of dotted components accepted by `Parse`. Sufficient for any observed terminal version string. |
+| `ZERO_VERSION` | `(Count => 0, Parts => [others => 0])` | Canonical uninitialised / floor version. Used as the `Result` initial value on `Parse` failure, and as the "any version" floor in the hyperlink known-good table. |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Component_Index` | Subtype of `Positive` with range `1 .. MAX_VERSION_COMPONENTS`. Used as both loop variable and array index in `Parse` and `Compare`. |
+| `Component_Array` | Fixed-size array `(Component_Index)` of `Natural`. Indices beyond `Count` are zero. |
+| `Version` | Record with `Count : Natural` (number of valid components) and `Parts : Component_Array` (component values). `Count = 0` means uninitialised or `ZERO_VERSION`. |
+| `Version_Ordering` | Three-literal enumeration: `Less_Than`, `Equal`, `Greater_Than`. Returned by `Compare`. |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Parse` | Procedure | `Global => null`; `Post => if Success then Count >= 1 and <= MAX_VERSION_COMPONENTS else Count = 0` | FUNC-HYP-013 |
+| `Compare` | Function | `Global => null`; `Post` encodes antisymmetry and transitivity of the ordering | FUNC-HYP-013 |
+| `Make` | Function | `Global => null`; `Post => Count >= 1 and <= 3 and Parts(1) = Major` | FUNC-HYP-013 |
+
+#### Relationship to Other Packages
+
+`Termicap.Version` has **no dependency** on any other Termicap package. It is a leaf in the dependency graph. `Termicap.Hyperlinks` depends on it for the `Refine_With_XTVERSION` version comparison (FUNC-HYP-013). `Termicap.Graphics` depends on it for `Parse_Kitty_Version` (FUNC-HYP-022). All other detection packages remain independent of `Termicap.Version`.
+
+---
+
+### `Termicap.Hyperlinks`
+
+**Responsibility:** Two-tier OSC 8 hyperlink support detection. Tier 1 (passive) classifies the terminal purely from environment variables and `Terminal_Identity.Kind` without any OS interaction — fully SPARK Silver-provable. Tier 2 (active refinement) promotes or demotes the Tier 1 result based on a known-good version table and the XTVERSION result already collected in `Detect_Full` Step 9 (ADR-0038), with no new probe session.
+
+Single mixed-SPARK package — no `.IO` child (ADR-0038). No platform-specific body files required (FUNC-HYP-017).
+
+| Property | Value |
+|----------|-------|
+| Files | `src/termicap-hyperlinks.ads`, `src/termicap-hyperlinks.adb` |
+| SPARK_Mode | On (spec and `Classify_Hyperlinks_Support`); Off (`Refine_With_XTVERSION`) |
+| Dependencies | `Termicap.Environment`, `Termicap.Terminal_Id`, `Termicap.XTVERSION`, `Termicap.Version` |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Hyperlinks_Support` | Four-literal enumeration: `Unsupported` (do not emit OSC 8), `Likely_Supported` (passive heuristic; OSC 8 is safe), `Supported` (XTVERSION-confirmed minimum version), `Unknown` (no evidence either way). Note: `Unknown` is placed last but is **not** ordered relative to `Supported` — callers comparing with `>=` must handle `Unknown` explicitly. |
+| `Hyperlinks_Provenance` | Seven-literal enumeration recording the detection step that last set `Support`: `Default`, `Env_Excluded`, `Env_Known_Good`, `Env_Unknown`, `XTVERSION_Confirmed`, `XTVERSION_Rejected`, `XTVERSION_Unresolved`. |
+| `Hyperlinks_Result` | Flat record (ADR-0037) with `Support : Hyperlinks_Support`, `Provenance : Hyperlinks_Provenance`, `Terminal_Version_Known : Boolean`. All fields unconditionally meaningful for every `Support` value. |
+
+#### Key Constants
+
+| Constant | Description |
+|----------|-------------|
+| `DEFAULT_HYPERLINKS_RESULT` | `(Unknown, Default, False)` — canonical uninitialised value; default for `Hyperlinks` fields in `Terminal_Capabilities` / `Full_Terminal_Capabilities` and default argument to `Assemble` / `Assemble_Full`. |
+| `TERM_PREFIX_VT` | `"vt"` — TERM prefix excluding VT-family terminals (FUNC-HYP-006). |
+| `TERM_PREFIX_ANSI` | `"ansi"` — TERM exact match excluding legacy ANSI terminals (FUNC-HYP-006). |
+| `TERM_LINUX` | `"linux"` — TERM exact match excluding the Linux virtual console (FUNC-HYP-006). |
+| `TERM_PREFIX_SUN` | `"sun"` — TERM prefix excluding Sun terminals (FUNC-HYP-006). |
+| `TERM_DUMB` | `"dumb"` — TERM exact match excluding dumb terminals (FUNC-HYP-006). |
+
+#### Public Operations
+
+| Subprogram | Kind | SPARK Contract | Requirements |
+|-----------|------|---------------|--------------|
+| `Classify_Hyperlinks_Support` | Function | `SPARK_Mode => On`; `Global => null` | FUNC-HYP-007, FUNC-HYP-008, FUNC-HYP-018 |
+| `Refine_With_XTVERSION` | Function | `SPARK_Mode => Off` (signature uses `Unbounded_String` via `XTVERSION_Result`) | FUNC-HYP-009, FUNC-HYP-010, FUNC-HYP-011, FUNC-HYP-012 |
+
+#### Detection Algorithm — `Classify_Hyperlinks_Support`
+
+Applies three steps in normative order (FUNC-HYP-007):
+
+| Step | Check | Result |
+|------|-------|--------|
+| 1 | TERM legacy-prefix exclusion: starts with `"vt"` or `"sun"`, or equals `"ansi"`, `"linux"`, `"dumb"` (FUNC-HYP-004) | `(Unsupported, Env_Excluded, False)` |
+| 2 | Terminal_Kind hard exclusion: `Apple_Terminal`, `Dumb`, `Linux_Console` (FUNC-HYP-005b) | `(Unsupported, Env_Excluded, False)` |
+| 3 | Terminal_Kind known-good list: Alacritty, Foot, Ghostty, ITerm2, JediTerm, Kitty, Konsole, Mintty, VSCode, VTE, WarpTerminal, WezTerm, Windows_Terminal, Xterm (FUNC-HYP-005) | `(Likely_Supported, Env_Known_Good, False)` |
+| — | All other Terminal_Kind values | `(Unknown, Env_Unknown, False)` |
+
+#### Detection Algorithm — `Refine_With_XTVERSION`
+
+State-transition rules (FUNC-HYP-012):
+
+| Condition | Result |
+|-----------|--------|
+| Passive support = `Unsupported` and provenance = `Env_Excluded` | Return Passive unchanged ("Unsupported is terminal" invariant) |
+| XTV status ≠ `Success` | `(Passive.Support, XTVERSION_Unresolved, Passive.Terminal_Version_Known)` |
+| Terminal name found, version ≥ minimum | `(Supported, XTVERSION_Confirmed, True)` |
+| Terminal name found, version < minimum | `(Unsupported, XTVERSION_Rejected, True)` |
+| Terminal name found, version unparseable | `(Passive.Support, Env_Known_Good, True)` |
+| Terminal name found, "any" minimum | `(Supported, XTVERSION_Confirmed, True)` |
+| Terminal name not found | `(Passive.Support, XTVERSION_Unresolved, False)` |
+
+Known-good terminal table (body-private constants): iTerm2 (≥ 3.1.0), kitty (≥ 0.19.0), WezTerm (any), VTE (≥ 0.50.0), foot (any), Alacritty (≥ 0.11.0), mintty (≥ 3.4.0), xterm (≥ 357), Windows_Terminal (≥ 1.4.0), VSCode (≥ 1.72.0), Ghostty (any), Konsole (any).
+
+#### Relationship to Other Packages
+
+`Termicap.Hyperlinks` depends on `Termicap.Environment` (TERM variable lookup in `Classify_Hyperlinks_Support`), `Termicap.Terminal_Id` (the `Terminal_Identity` parameter to `Classify_Hyperlinks_Support`), `Termicap.XTVERSION` (the `XTVERSION_Result` parameter to `Refine_With_XTVERSION`), and `Termicap.Version` (the shared version-comparison utility, FUNC-HYP-013). `Termicap.Capabilities` calls `Classify_Hyperlinks_Support` as part of `Detect` (Step 8) and `Refine_With_XTVERSION` as part of `Detect_Full` (Step 9a, after XTVERSION — ADR-0038). No platform-specific bodies are required.
+
+**See also:** ADR-0036 (`docs/adr/0036-termicap-version-shared-utility.md`) — rationale for the shared `Termicap.Version` package; ADR-0037 (`docs/adr/0037-hyperlinks-result-flat-record.md`) — rationale for the flat (non-discriminated) `Hyperlinks_Result` record; ADR-0038 (`docs/adr/0038-hyperlinks-active-reuses-xtversion.md`) — rationale for reusing the `Detect_Full` XTVERSION result rather than opening a second probe session.
+
+---
+
 ### `Termicap.Graphics`
 
 **Responsibility:** Pure SPARK types, constants, and parsing functions for Sixel and Kitty graphics protocol detection (Tier 4 Stretch Goal — SIXEL). Defines the `Graphics_Capabilities` aggregate result record (seven fields: `Sixel_Supported`, `Kitty_Graphics_Supported`, provenance flags `Sixel_Via_DA1` and `Kitty_Via_Active_Probe`, `Probed`, and optional sub-fields `Sixel_Color_Registers` and `Kitty_Graphics_Version`). Defines the three-value `APC_Parse_Result` enumeration (`Not_Present`, `OK`, `Error`) and the pure parser function `Parse_Kitty_APC_Response` for the Kitty graphics APC response (FUNC-SXL-011). Exposes 11 named string constants centralising known terminal identifier values: five `TERM_*` constants (`TERM_XTERM_KITTY`, `TERM_FOOT`, `TERM_FOOT_EXTRA`, `TERM_XTERM`, `TERM_MLTERM`, `TERM_YAFT`), two `TERM_PROGRAM_*` constants (`TERM_PROGRAM_WEZTERM`, `TERM_PROGRAM_ITERM2`), one `ENV_KITTY_WINDOW_ID` constant, and two `XTVERSION_NAME_*` constants (`XTVERSION_NAME_KITTY`, `XTVERSION_NAME_WEZTERM`). Also provides `KITTY_APC_QUERY` (the 12-byte APC query sequence `ESC _ G i=1,a=q ESC \`) and `GRAPHICS_PROBE_TIMEOUT_MS` (1 000 ms per session). No I/O, no global state, no exceptions.
@@ -1302,7 +1425,7 @@ Re-declares `Byte` and `Byte_Array` independently of `Termicap.OSC` (which is `S
 
 #### Relationship to Other Packages
 
-`Termicap.Graphics` depends only on `Interfaces.C`. It does not depend on `Termicap.OSC` (SPARK Off), `Termicap.DA1`, `Termicap.XTVERSION`, or any I/O package, preserving SPARK provability. Its child `Termicap.Graphics.IO` is the I/O boundary and carries `SPARK_Mode => Off`. Platform dispatch follows ADR-0018: `Termicap.Graphics.IO` has two bodies (`src/posix/termicap-graphics-io.adb` and `src/windows/termicap-graphics-io.adb`) selected by GPR `Source_Dirs`. Integration of `Graphics_Capabilities` into `Terminal_Capabilities` is deferred; see ADR-0029.
+`Termicap.Graphics` depends on `Interfaces.C` and `Termicap.Version` (for the `Parse_Kitty_Version` function, FUNC-HYP-022). It does not depend on `Termicap.OSC` (SPARK Off), `Termicap.DA1`, `Termicap.XTVERSION`, or any I/O package, preserving SPARK provability. Its child `Termicap.Graphics.IO` is the I/O boundary and carries `SPARK_Mode => Off`. Platform dispatch follows ADR-0018: `Termicap.Graphics.IO` has two bodies (`src/posix/termicap-graphics-io.adb` and `src/windows/termicap-graphics-io.adb`) selected by GPR `Source_Dirs`. Integration of `Graphics_Capabilities` into `Terminal_Capabilities` is deferred; see ADR-0029.
 
 ---
 

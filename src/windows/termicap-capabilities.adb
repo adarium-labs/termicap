@@ -15,6 +15,7 @@ with Termicap.Clipboard.IO;
 with Termicap.DA1.IO;
 with Termicap.Environment.Capture;
 with Termicap.Graphics.IO;
+with Termicap.Hyperlinks;
 with Termicap.Keyboard.IO;
 with Termicap.Mouse.IO;
 with Termicap.Override;
@@ -28,7 +29,7 @@ is
    use type Termicap.Override.Override_Mode;
 
    ---------------------------------------------------------------------------
-   --  Assemble (FUNC-CAP-012, FUNC-CAP-013)
+   --  Assemble (FUNC-CAP-012, FUNC-CAP-013, FUNC-HYP-014)
    ---------------------------------------------------------------------------
 
    function Assemble
@@ -39,7 +40,9 @@ is
       Size       : Termicap.Dimensions.Terminal_Size;
       Unicode    : Termicap.Unicode.Unicode_Level;
       Identity   : Termicap.Terminal_Id.Terminal_Identity;
-      DA1        : Termicap.DA1.DA1_Capabilities)
+      DA1        : Termicap.DA1.DA1_Capabilities;
+      Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result :=
+                     Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
       return Terminal_Capabilities is
    begin
       return
@@ -52,7 +55,8 @@ is
            Unicode                => Unicode,
            Identity               => Identity,
            Downsampling_Available => Color >= Termicap.Color.Extended_256,
-           DA1                    => DA1);
+           DA1                    => DA1,
+           Hyperlinks             => Hyperlinks);
    end Assemble;
 
    ---------------------------------------------------------------------------
@@ -138,16 +142,24 @@ is
       Uni      := Termicap.Unicode.Detect_Unicode_Level (Env);
       DA1_Caps := Termicap.DA1.IO.Detect_DA1 (Timeout_Ms => 100);
 
-      return
-        Assemble
-          (TTY_Stdin  => TTY_All.Stdin,
-           TTY_Stdout => TTY_All.Stdout,
-           TTY_Stderr => TTY_All.Stderr,
-           Color      => Color,
-           Size       => Size,
-           Unicode    => Uni,
-           Identity   => Id,
-           DA1        => DA1_Caps);
+      --  Step 7.5: Passive OSC 8 hyperlink classification (FUNC-HYP-014).
+      --  Uses already-captured Env and Id; no I/O.
+      declare
+         HL : constant Termicap.Hyperlinks.Hyperlinks_Result :=
+           Termicap.Hyperlinks.Classify_Hyperlinks_Support (Env, Id);
+      begin
+         return
+           Assemble
+             (TTY_Stdin  => TTY_All.Stdin,
+              TTY_Stdout => TTY_All.Stdout,
+              TTY_Stderr => TTY_All.Stderr,
+              Color      => Color,
+              Size       => Size,
+              Unicode    => Uni,
+              Identity   => Id,
+              DA1        => DA1_Caps,
+              Hyperlinks => HL);
+      end;
    end Detect;
 
    ---------------------------------------------------------------------------
@@ -177,12 +189,15 @@ is
    ---------------------------------------------------------------------------
 
    function Assemble_Full
-     (Base      : Terminal_Capabilities;
-      XTVERSION : Termicap.XTVERSION.XTVERSION_Result;
-      Keyboard  : Termicap.Keyboard.Keyboard_Capability;
-      Mouse     : Termicap.Mouse.Mouse_Capabilities;
-      Graphics  : Termicap.Graphics.Graphics_Capabilities;
-      Clipboard : Termicap.Clipboard.Clipboard_Capabilities) return Full_Terminal_Capabilities
+     (Base       : Terminal_Capabilities;
+      XTVERSION  : Termicap.XTVERSION.XTVERSION_Result;
+      Keyboard   : Termicap.Keyboard.Keyboard_Capability;
+      Mouse      : Termicap.Mouse.Mouse_Capabilities;
+      Graphics   : Termicap.Graphics.Graphics_Capabilities;
+      Clipboard  : Termicap.Clipboard.Clipboard_Capabilities;
+      Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result :=
+                     Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
+      return Full_Terminal_Capabilities
    is
    begin
       return
@@ -200,7 +215,8 @@ is
            Keyboard               => Keyboard,
            Mouse                  => Mouse,
            Graphics               => Graphics,
-           Clipboard              => Clipboard);
+           Clipboard              => Clipboard,
+           Hyperlinks             => Hyperlinks);
    end Assemble_Full;
 
    ---------------------------------------------------------------------------
@@ -264,8 +280,13 @@ is
       --  Step 13: Clipboard detection (self-contained; uses its own DA1 probe).
       CLB : constant Termicap.Clipboard.Clipboard_Capabilities :=
         Termicap.Clipboard.IO.Detect_Clipboard_Uncached;
+
+      --  Step 14: Hyperlinks XTVERSION refinement (FUNC-HYP-015, ADR-0038).
+      --  Reuses the XTV value above; opens no new probe session.
+      HLR : constant Termicap.Hyperlinks.Hyperlinks_Result :=
+        Termicap.Hyperlinks.Refine_With_XTVERSION (Base_Caps.Hyperlinks, XTV);
    begin
-      return Assemble_Full (Base_Caps, XTV, KBD, MSE, GFX, CLB);
+      return Assemble_Full (Base_Caps, XTV, KBD, MSE, GFX, CLB, HLR);
    end Detect_Full;
 
    ---------------------------------------------------------------------------

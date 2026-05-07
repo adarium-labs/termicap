@@ -39,8 +39,7 @@ package body Termicap.Color.Detection is
 
          if not Timed_Out and then Resp_Len > 0 then
             declare
-               Strip : constant BG_Query.Strip_Result :=
-                 BG_Query.Strip_OSC_Header (Resp_Buffer, Resp_Len, Kind);
+               Strip : constant BG_Query.Strip_Result := BG_Query.Strip_OSC_Header (Resp_Buffer, Resp_Len, Kind);
             begin
                if Strip.Success then
                   declare
