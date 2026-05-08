@@ -1,0 +1,19 @@
+[package]
+name = "termbg-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance shim for termbg (Rust)"
+
+[[bin]]
+name = "termbg-shim"
+path = "src/main.rs"
+
+[dependencies]
+termbg = { path = "../../../../../reference-frameworks/termbg" }
+serde_json = "1"
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true

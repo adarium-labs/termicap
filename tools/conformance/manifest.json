@@ -19,6 +19,12 @@
       "language": "go",
       "binary": "shims/go/termenv/bin/termenv-shim",
       "build": "cd tools/conformance/shims/go/termenv && go build -o bin/termenv-shim ."
+    },
+    {
+      "name": "termbg",
+      "language": "rust",
+      "binary": "shims/rust/termbg/target/release/termbg-shim",
+      "build": "cd tools/conformance/shims/rust/termbg && cargo build --release"
     }
   ]
 }

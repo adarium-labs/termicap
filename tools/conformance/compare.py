@@ -45,7 +45,11 @@ def load_results(paths: list[str]) -> list[dict]:
 def group_by_run_id(results: list[dict]) -> dict[str, list[dict]]:
     groups: dict[str, list[dict]] = defaultdict(list)
     for r in results:
-        groups[r["run"]["run_id"]].append(r)
+        run = r.get("run")
+        if not isinstance(run, dict) or "run_id" not in run or "lib" not in r:
+            # Not a canonical result document (e.g. it's the envelope itself).
+            continue
+        groups[run["run_id"]].append(r)
     return groups
 
 
