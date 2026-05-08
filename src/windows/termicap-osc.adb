@@ -111,8 +111,14 @@ package body Termicap.OSC is
    end Timed_Read;
 
    function Is_Foreground_Process (FD : File_Descriptor) return Boolean is
-      pragma Unreferenced (FD);
    begin
+      --  Windows has no controlling-terminal / process-group concept matching
+      --  POSIX tcgetpgrp.  Treat INVALID_FD as a hard failure (FUNC-FGP-005,
+      --  FUNC-FGP-006); for a valid FD, assume the process is foreground —
+      --  there is no signal-based gating to enforce against on Windows.
+      if FD = INVALID_FD then
+         return False;
+      end if;
       return True;
    end Is_Foreground_Process;
 

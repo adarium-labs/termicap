@@ -48,7 +48,12 @@ with Win32.Winnt;
 
 package body Termicap.Keyboard.IO is
 
-   use type Win32.BOOL;
+   --  The Win32 package name is shadowed inside this body by the Win32
+   --  enum literal in Termicap.Keyboard.Keyboard_Protocol.  Rename through
+   --  Standard to disambiguate; child packages remain accessible via W32.
+   package W32 renames Standard.Win32;
+
+   use type W32.BOOL;
 
    ---------------------------------------------------------------------------
    --  Process-lifetime cache (FUNC-KKB-017)
@@ -96,16 +101,16 @@ package body Termicap.Keyboard.IO is
       Kitty_Parse : Parse_Result;
 
       --  Win32 gate (FUNC-KKB-010)
-      H    : Win32.Winnt.HANDLE;
-      Mode : aliased Win32.DWORD := 0;
-      Res  : Win32.BOOL;
+      H    : W32.Winnt.HANDLE;
+      Mode : aliased W32.DWORD := 0;
+      Res  : W32.BOOL;
    begin
       --  Step 1: Win32 Console gate (FUNC-KKB-010).
       --  GetStdHandle may return INVALID_HANDLE_VALUE or null on failure.
-      H := Win32.Winbase.GetStdHandle (Win32.Winbase.STD_INPUT_HANDLE);
+      H := W32.Winbase.GetStdHandle (W32.Winbase.STD_INPUT_HANDLE);
       if Termicap.Win32_VT.Is_Valid_Handle (H) then
-         Res := Win32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
-         if Res /= Win32.FALSE then
+         Res := W32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
+         if Res /= W32.FALSE then
             --  Native Windows Console confirmed; no escape probe needed.
             return
               (Protocol => Win32,
