@@ -1,0 +1,12 @@
+{
+  "name": "terminal-size-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conformance shim for terminal-size (Node.js)",
+  "bin": "./shim.mjs",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "terminal-size": "file:../../../../../reference-frameworks/terminal-size"
+  }
+}

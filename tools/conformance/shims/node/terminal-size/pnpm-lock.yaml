@@ -1,0 +1,23 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      terminal-size:
+        specifier: file:../../../../../reference-frameworks/terminal-size
+        version: file:../../../../../reference-frameworks/terminal-size
+
+packages:
+
+  terminal-size@file:../../../../../reference-frameworks/terminal-size:
+    resolution: {directory: ../../../../../reference-frameworks/terminal-size, type: directory}
+    engines: {node: '>=18'}
+
+snapshots:
+
+  terminal-size@file:../../../../../reference-frameworks/terminal-size: {}

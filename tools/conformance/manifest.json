@@ -37,6 +37,12 @@
       "language": "node",
       "binary": "shims/node/is-unicode-supported/shim.mjs",
       "build": "cd tools/conformance/shims/node/is-unicode-supported && npm install"
+    },
+    {
+      "name": "terminal-size",
+      "language": "node",
+      "binary": "shims/node/terminal-size/shim.mjs",
+      "build": "cd tools/conformance/shims/node/terminal-size && npm install"
     }
   ]
 }
