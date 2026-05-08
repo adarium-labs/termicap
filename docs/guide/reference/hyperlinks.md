@@ -197,15 +197,15 @@ Refine the passive hyperlink classification using the XTVERSION result.
 |-----------|--------|
 | `Passive.Support = Unsupported` and `Provenance = Env_Excluded` | Return `Passive` unchanged ("Unsupported is terminal" invariant) |
 | `XTV.Status /= Success` | `(Passive.Support, XTVERSION_Unresolved, Passive.Terminal_Version_Known)` |
-| Terminal name found in table, "any" minimum | `(Supported, XTVERSION_Confirmed, True)` |
-| Terminal name found, version ≥ minimum | `(Supported, XTVERSION_Confirmed, True)` |
-| Terminal name found, version < minimum | `(Unsupported, XTVERSION_Rejected, True)` |
-| Terminal name found, version unparseable | `(Passive.Support, Env_Known_Good, True)` |
 | Terminal name not found in table | `(Passive.Support, XTVERSION_Unresolved, False)` |
+| Terminal name found, "any" minimum (`Treat_Any`) | `(Supported, XTVERSION_Confirmed, True)` — promotes even when the reported version is unparseable |
+| Terminal name found, strict entry, version ≥ minimum | `(Supported, XTVERSION_Confirmed, True)` |
+| Terminal name found, strict entry, version < minimum | `(Unsupported, XTVERSION_Rejected, True)` |
+| Terminal name found, strict entry, version unparseable | `(Passive.Support, Env_Known_Good, True)` |
 
 **Exception safety:** An outer `when others => return Passive` handler guarantees no exception propagation (defence in depth; the body performs no I/O and `Termicap.Version.Compare` is total).
 
-**Known-good version table (body-private):**
+**Known-good version table (body-private, 13 entries):**
 
 | Terminal name token (case-insensitive) | Minimum version | "Any" |
 |----------------------------------------|-----------------|-------|
@@ -221,6 +221,9 @@ Refine the passive hyperlink classification using the XTVERSION result.
 | VSCode | 1.72.0 | No |
 | Ghostty | — | Yes |
 | Konsole | — | Yes |
+| Warp | — | Yes |
+
+The promotion logic checks the `Treat_Any` flag **before** parsing the reported version string, so `Treat_Any` entries (foot, WezTerm, Ghostty, Konsole, Warp) promote to `Supported / XTVERSION_Confirmed` on a name match alone — even when the XTVERSION-reported version is unparseable. This matters in practice for Warp, whose version string format (e.g. `v0.2026.04.29.08.57.stable_01`) does not parse as a dotted-numeric version under `Termicap.Version.Parse`.
 
 **SPARK contract:** `SPARK_Mode => Off` — signature references `XTVERSION_Result` which contains `Ada.Strings.Unbounded.Unbounded_String`.
 

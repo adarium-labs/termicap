@@ -48,12 +48,11 @@ with Ada.Strings.Unbounded;
 with Interfaces.C;
 with Termicap.DA1;
 with Termicap.DA1.IO;
-with Termicap.Environment;
 with Termicap.Environment.Capture;
 with Termicap.OSC;
 with Termicap.TTY;
+with Termicap.Version;
 with Termicap.Win32_VT;
-with Termicap.XTVERSION;
 with Termicap.XTVERSION.IO;
 with Win32;
 with Win32.Winbase;
@@ -129,25 +128,25 @@ package body Termicap.Graphics.IO is
    function Has_Sixel_From_Env
      (Env : Termicap.Environment.Environment) return Boolean
    is
+      MLTERM_256COLOR : constant String := "mlterm-256color";
+
       T  : constant String := Termicap.Environment.Value (Env, "TERM");
       TP : constant String := Termicap.Environment.Value (Env, "TERM_PROGRAM");
    begin
+      --  Step 1: TERM_PROGRAM = WezTerm (case-insensitive).
       if Termicap.Environment.Equal_Case_Insensitive (TP, TERM_PROGRAM_WEZTERM) then
          return True;
       end if;
 
-      if Termicap.Environment.Equal_Case_Insensitive (T, TERM_XTERM_KITTY)  or else
-         Termicap.Environment.Equal_Case_Insensitive (T, TERM_FOOT)         or else
+      --  Step 2: TERM exact matches for known Sixel-capable terminals.
+      --  TERM_XTERM_KITTY removed in B2a (kitty has its own graphics protocol,
+      --  no sixel) and the legacy "TERM prefix xterm" rule was removed because
+      --  every modern terminal advertises TERM=xterm-256color.
+      if Termicap.Environment.Equal_Case_Insensitive (T, TERM_FOOT)         or else
          Termicap.Environment.Equal_Case_Insensitive (T, TERM_FOOT_EXTRA)   or else
          Termicap.Environment.Equal_Case_Insensitive (T, TERM_MLTERM)       or else
+         Termicap.Environment.Equal_Case_Insensitive (T, MLTERM_256COLOR)   or else
          Termicap.Environment.Equal_Case_Insensitive (T, TERM_YAFT)
-      then
-         return True;
-      end if;
-
-      if T'Length >= TERM_XTERM'Length
-         and then Ada.Characters.Handling.To_Lower
-                    (T (T'First .. T'First + TERM_XTERM'Length - 1)) = TERM_XTERM
       then
          return True;
       end if;
@@ -271,14 +270,21 @@ package body Termicap.Graphics.IO is
             Caps.Sixel_Via_DA1   := True;
             Caps.Probed          := True;
          elsif DA1_Caps.Supported then
-            Caps.Probed := True;
+            --  DA1 returned a valid response without Ps=4: authoritative
+            --  negative.  Override any over-eager passive heuristic so the
+            --  terminal's own answer wins (B2b, FUNC-SXL-005/006).
+            Caps.Sixel_Supported := False;
+            Caps.Sixel_Via_DA1   := False;
+            Caps.Probed          := True;
          else
             null;
          end if;
       end;
 
       --  Step 4: XTVERSION name-substring fallback (FUNC-SXL-007).
-      if not Caps.Sixel_Via_DA1 then
+      --  Skip when DA1 already confirmed Sixel (authoritative); also skip
+      --  when DA1 authoritatively negated Sixel (B2c).
+      if not Caps.Sixel_Via_DA1 and then not (Caps.Probed and then not Caps.Sixel_Supported) then
          declare
             XTV : constant Termicap.XTVERSION.XTVERSION_Result :=
               Termicap.XTVERSION.IO.Query_And_Identify
@@ -303,6 +309,19 @@ package body Termicap.Graphics.IO is
                Caps.Kitty_Via_Active_Probe   := True;
                Caps.Probed                   := True;
             end if;
+         end;
+      end if;
+
+      --  Step 6: XTVERSION-driven Kitty graphics refinement (B3a).
+      --  When the APC probe did not establish Kitty support, query XTVERSION
+      --  and check the curated known-good name+version table.
+      if not Caps.Kitty_Graphics_Supported then
+         declare
+            XTV : constant Termicap.XTVERSION.XTVERSION_Result :=
+              Termicap.XTVERSION.IO.Query_And_Identify
+                (Timeout_Ms => GRAPHICS_PROBE_TIMEOUT_MS);
+         begin
+            Caps := Refine_Kitty_With_XTVERSION (Caps, XTV);
          end;
       end if;
 
@@ -347,5 +366,89 @@ package body Termicap.Graphics.IO is
       when others =>
          return NO_GRAPHICS_CAPABILITIES;
    end Detect_Graphics_Uncached;
+
+   ---------------------------------------------------------------------------
+   --  Known-good Kitty graphics XTVERSION table (B3a, FUNC-SXL-010)
+   ---------------------------------------------------------------------------
+
+   type Known_Good_Kitty_Entry is record
+      Name        : access constant String;
+      Min_Version : Termicap.Version.Version;
+      Treat_Any   : Boolean;
+   end record;
+
+   ITERM2_KITTY_NAME  : aliased constant String := "iterm2";
+   KITTY_KITTY_NAME   : aliased constant String := "kitty";
+   WEZTERM_KITTY_NAME : aliased constant String := "wezterm";
+   GHOSTTY_KITTY_NAME : aliased constant String := "ghostty";
+   KONSOLE_KITTY_NAME : aliased constant String := "konsole";
+
+   KNOWN_GOOD_KITTY : constant array (1 .. 5) of Known_Good_Kitty_Entry :=
+     [1 => (Name => ITERM2_KITTY_NAME'Access, Min_Version => Termicap.Version.Make (3, 6, 0), Treat_Any => False),
+      2 => (Name => KITTY_KITTY_NAME'Access, Min_Version => Termicap.Version.Make (0, 20, 0), Treat_Any => False),
+      3 => (Name => WEZTERM_KITTY_NAME'Access, Min_Version => Termicap.Version.ZERO_VERSION, Treat_Any => True),
+      4 => (Name => GHOSTTY_KITTY_NAME'Access, Min_Version => Termicap.Version.ZERO_VERSION, Treat_Any => True),
+      5 => (Name => KONSOLE_KITTY_NAME'Access, Min_Version => Termicap.Version.Make (22, 4, 0), Treat_Any => False)];
+
+   ---------------------------------------------------------------------------
+   --  Refine_Kitty_With_XTVERSION (B3a, FUNC-SXL-010)
+   ---------------------------------------------------------------------------
+
+   function Refine_Kitty_With_XTVERSION
+     (Passive : Graphics_Capabilities; XTV : Termicap.XTVERSION.XTVERSION_Result) return Graphics_Capabilities
+   is
+      Promoted : Graphics_Capabilities := Passive;
+   begin
+      Promoted.Kitty_Graphics_Supported := True;
+      Promoted.Kitty_Via_Active_Probe   := False;
+
+      if XTV.Status /= Termicap.XTVERSION.Success then
+         return Passive;
+      end if;
+
+      declare
+         use Ada.Strings.Unbounded;
+         Name_Lower  : constant String := Ada.Characters.Handling.To_Lower (To_String (XTV.Terminal_Name));
+         Entry_Found : Boolean := False;
+         Entry_Idx   : Positive := 1;
+      begin
+         for I in KNOWN_GOOD_KITTY'Range loop
+            if Name_Lower = KNOWN_GOOD_KITTY (I).Name.all then
+               Entry_Found := True;
+               Entry_Idx := I;
+               exit;
+            end if;
+         end loop;
+
+         if not Entry_Found then
+            return Passive;
+         end if;
+
+         if KNOWN_GOOD_KITTY (Entry_Idx).Treat_Any then
+            return Promoted;
+         end if;
+
+         declare
+            Reported : Termicap.Version.Version;
+            Ok       : Boolean;
+         begin
+            Termicap.Version.Parse (To_String (XTV.Terminal_Version), Reported, Ok);
+            if not Ok then
+               return Passive;
+            end if;
+
+            case Termicap.Version.Compare (Reported, KNOWN_GOOD_KITTY (Entry_Idx).Min_Version) is
+               when Termicap.Version.Less_Than =>
+                  return Passive;
+
+               when Termicap.Version.Equal | Termicap.Version.Greater_Than =>
+                  return Promoted;
+            end case;
+         end;
+      end;
+   exception
+      when others =>
+         return Passive;
+   end Refine_Kitty_With_XTVERSION;
 
 end Termicap.Graphics.IO;

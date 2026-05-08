@@ -621,7 +621,6 @@ package body Test_Capabilities is
          "Omitted Hyperlinks: Terminal_Version_Known should default to False");
    end Test_Hyperlinks_Default_When_Omitted;
 
-
    procedure Test_Hyperlinks_Explicit_Preserved (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       --  Pass a non-default Hyperlinks value and verify it survives Assemble.
@@ -652,7 +651,6 @@ package body Test_Capabilities is
          "Explicit Hyperlinks: Terminal_Version_Known should be False as supplied");
    end Test_Hyperlinks_Explicit_Preserved;
 
-
    procedure Test_Hyperlinks_Other_Fields_Unchanged (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       --  Verify that adding the Hyperlinks parameter does not change other fields.
@@ -673,18 +671,13 @@ package body Test_Capabilities is
            Hyperlinks => Custom_HL);
    begin
       --  Verify other fields are populated correctly (regression guard).
-      Assert (Caps.TTY_Stdin,  "Hyperlinks present: TTY_Stdin should still be True");
+      Assert (Caps.TTY_Stdin, "Hyperlinks present: TTY_Stdin should still be True");
       Assert (Caps.TTY_Stdout, "Hyperlinks present: TTY_Stdout should still be True");
       Assert (not Caps.TTY_Stderr, "Hyperlinks present: TTY_Stderr should still be False");
+      Assert (Caps.Color = Termicap.Color.True_Color, "Hyperlinks present: Color should still be True_Color");
       Assert
-        (Caps.Color = Termicap.Color.True_Color,
-         "Hyperlinks present: Color should still be True_Color");
-      Assert
-        (Caps.Downsampling_Available,
-         "Hyperlinks present: Downsampling_Available should still be True for True_Color");
-      Assert
-        (Caps.Unicode = Termicap.Unicode.Extended,
-         "Hyperlinks present: Unicode should still be Extended");
+        (Caps.Downsampling_Available, "Hyperlinks present: Downsampling_Available should still be True for True_Color");
+      Assert (Caps.Unicode = Termicap.Unicode.Extended, "Hyperlinks present: Unicode should still be Extended");
       --  And the Hyperlinks field carries our custom value.
       Assert
         (Caps.Hyperlinks.Support = Termicap.Hyperlinks.Supported,

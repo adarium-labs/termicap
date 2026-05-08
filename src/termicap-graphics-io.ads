@@ -84,6 +84,9 @@
 
 pragma SPARK_Mode (Off);
 
+with Termicap.Environment;
+with Termicap.XTVERSION;
+
 package Termicap.Graphics.IO is
 
    ---------------------------------------------------------------------------
@@ -144,5 +147,53 @@ package Termicap.Graphics.IO is
    --  @relation(FUNC-SXL-017): Cache-bypass detection for test use
    --  @relation(FUNC-SXL-016): No-exception guarantee
    function Detect_Graphics_Uncached return Graphics_Capabilities;
+
+   ---------------------------------------------------------------------------
+   --  Pure passive-harvest helpers (FUNC-SXL-008, conformance B2)
+   ---------------------------------------------------------------------------
+
+   --  @summary Return True when env-var heuristics indicate Sixel support.
+   --  @description Pure inspection of a captured Environment snapshot using
+   --  the post-B2a allowlist:
+   --    Step 1: TERM_PROGRAM = WezTerm (case-insensitive)
+   --    Step 2: TERM in {foot, foot-extra, mlterm, mlterm-256color, yaft}
+   --      (case-insensitive)
+   --  No fallback "TERM prefix xterm" rule (removed in B2a) and no
+   --  TERM=xterm-kitty (removed because kitty does not implement sixel).
+   --  Used by the cascade as the passive prelude to the DA1 active probe;
+   --  exposed publicly to support deterministic regression tests.
+   --  @param Env Captured environment snapshot.
+   --  @return True when one of the high-signal env-var heuristics fires.
+   --  @relation(FUNC-SXL-008): Passive Sixel env-var heuristics
+   function Has_Sixel_From_Env (Env : Termicap.Environment.Environment) return Boolean;
+
+   ---------------------------------------------------------------------------
+   --  XTVERSION-driven Kitty graphics refinement (conformance B3a)
+   ---------------------------------------------------------------------------
+
+   --  @summary Refine a passive Graphics_Capabilities result using XTVERSION.
+   --  @description Mirrors Termicap.Hyperlinks.Refine_With_XTVERSION
+   --  (FUNC-HYP-011): when the XTVERSION query succeeded and the reported
+   --  terminal name is in the curated Kitty graphics known-good table, the
+   --  result is promoted to Kitty_Graphics_Supported = True.  Strict-version
+   --  entries (iterm2 >= 3.6.0, kitty >= 0.20.0, konsole >= 22.4.0) require a
+   --  parseable version that meets the minimum; "any" entries (wezterm,
+   --  ghostty) promote on a name match alone.  When XTVERSION did not
+   --  succeed, when the name is unknown, or when the parsed version is below
+   --  the minimum, Passive is returned unchanged.
+   --
+   --  This function does NOT downgrade a passive positive: a name absent from
+   --  the table or a strict-version entry with a too-low version simply
+   --  leaves the existing Kitty support flag (typically False on entry) in
+   --  place, since the active APC probe is the only authority that downgrades
+   --  Kitty graphics support.
+   --
+   --  @param Passive  The passive (env + APC-probe) Graphics_Capabilities.
+   --  @param XTV      The XTVERSION query result.
+   --  @return A copy of Passive with Kitty_Graphics_Supported = True when the
+   --          known-good check passes; Passive unchanged otherwise.
+   --  @relation(FUNC-SXL-010): Kitty graphics refinement via XTVERSION
+   function Refine_Kitty_With_XTVERSION
+     (Passive : Graphics_Capabilities; XTV : Termicap.XTVERSION.XTVERSION_Result) return Graphics_Capabilities;
 
 end Termicap.Graphics.IO;

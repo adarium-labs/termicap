@@ -10,10 +10,10 @@ with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 
 with Interfaces.C;
 
-with Termicap.Clipboard;     use Termicap.Clipboard;
+with Termicap.Clipboard;   use Termicap.Clipboard;
 with Termicap.Clipboard.IO;
-with Termicap.DA1;           use Termicap.DA1;
-with Termicap.OSC.Parsing;   use Termicap.OSC.Parsing;
+with Termicap.DA1;         use Termicap.DA1;
+with Termicap.OSC.Parsing; use Termicap.OSC.Parsing;
 
 use type Interfaces.C.unsigned_char;
 
@@ -21,7 +21,7 @@ package body Test_Clipboard is
 
    ---------------------------------------------------------------------------
    --  Local aliases to avoid potential hiding between Termicap child packages.
-   subtype C_Byte       is Termicap.Byte;
+   subtype C_Byte is Termicap.Byte;
    subtype C_Byte_Array is Termicap.Byte_Array;
 
    ---------------------------------------------------------------------------
@@ -34,20 +34,20 @@ package body Test_Clipboard is
    --  ESC  = 0x1B, ] = 0x5D, BEL = 0x07, ST  = ESC \ = 0x1B 0x5C
    ---------------------------------------------------------------------------
 
-   ESC_BYTE  : constant C_Byte := 16#1B#;  --  ESC  (0x1B)
-   OSC_BYTE  : constant C_Byte := 16#5D#;  --  ]    (0x5D, OSC introducer)
-   BEL_BYTE  : constant C_Byte := 16#07#;  --  BEL  (0x07, OSC terminator)
-   ST_BYTE   : constant C_Byte := 16#5C#;  --  \    (0x5C, ST second byte)
-   SEMI_BYTE : constant C_Byte := 16#3B#;  --  ;    (0x3B, delimiter)
-   CSI_BYTE  : constant C_Byte := 16#5B#;  --  [    (0x5B, CSI introducer)
-   QUES_BYTE : constant C_Byte := 16#3F#;  --  ?    (0x3F)
+   ESC_BYTE   : constant C_Byte := 16#1B#;  --  ESC  (0x1B)
+   OSC_BYTE   : constant C_Byte := 16#5D#;  --  ]    (0x5D, OSC introducer)
+   BEL_BYTE   : constant C_Byte := 16#07#;  --  BEL  (0x07, OSC terminator)
+   ST_BYTE    : constant C_Byte := 16#5C#;  --  \    (0x5C, ST second byte)
+   SEMI_BYTE  : constant C_Byte := 16#3B#;  --  ;    (0x3B, delimiter)
+   CSI_BYTE   : constant C_Byte := 16#5B#;  --  [    (0x5B, CSI introducer)
+   QUES_BYTE  : constant C_Byte := 16#3F#;  --  ?    (0x3F)
    DA1_C_BYTE : constant C_Byte := Character'Pos ('c');  --  'c' (0x63, DA1 final byte)
-   FIVE_BYTE : constant C_Byte := Character'Pos ('5');  --  '5' (0x35)
-   TWO_BYTE  : constant C_Byte := Character'Pos ('2');  --  '2' (0x32)
-   SEL_BYTE  : constant C_Byte := Character'Pos ('c');  --  'c' (selection)
-   SEL_P     : constant C_Byte := Character'Pos ('p');  --  'p' (primary selection)
-   B64_BYTE  : constant C_Byte := Character'Pos ('A');  --  'A' (base64 char)
-   SPACE     : constant C_Byte := 16#20#;  --  space (noise / filler)
+   FIVE_BYTE  : constant C_Byte := Character'Pos ('5');  --  '5' (0x35)
+   TWO_BYTE   : constant C_Byte := Character'Pos ('2');  --  '2' (0x32)
+   SEL_BYTE   : constant C_Byte := Character'Pos ('c');  --  'c' (selection)
+   SEL_P      : constant C_Byte := Character'Pos ('p');  --  'p' (primary selection)
+   B64_BYTE   : constant C_Byte := Character'Pos ('A');  --  'A' (base64 char)
+   SPACE      : constant C_Byte := 16#20#;  --  space (noise / filler)
 
    overriding
    function Name (T : Test_Case) return AUnit.Message_String is
@@ -60,24 +60,17 @@ package body Test_Clipboard is
    procedure Register_Tests (T : in out Test_Case) is
    begin
       --  FUNC-C52-001: Clipboard_Support enumeration ordering
-      Register_Routine
-        (T, Test_Support_None_Is_First'Access, "FUNC-C52-001: None is Clipboard_Support'First");
+      Register_Routine (T, Test_Support_None_Is_First'Access, "FUNC-C52-001: None is Clipboard_Support'First");
       Register_Routine
         (T, Test_Support_Read_Write_Is_Last'Access, "FUNC-C52-001: Read_Write is Clipboard_Support'Last");
+      Register_Routine (T, Test_Support_Ordering'Access, "FUNC-C52-001: ordering None < Write_Only < Read_Write");
+      Register_Routine (T, Test_Support_Ge_Write_Only_Self'Access, "FUNC-C52-001: Write_Only >= Write_Only is True");
       Register_Routine
-        (T, Test_Support_Ordering'Access, "FUNC-C52-001: ordering None < Write_Only < Read_Write");
-      Register_Routine
-        (T, Test_Support_Ge_Write_Only_Self'Access, "FUNC-C52-001: Write_Only >= Write_Only is True");
-      Register_Routine
-        (T,
-         Test_Support_Ge_Read_Write_Vs_Write_Only'Access,
-         "FUNC-C52-001: Read_Write >= Write_Only is True");
-      Register_Routine
-        (T, Test_Support_None_Not_Ge_Write_Only'Access, "FUNC-C52-001: None >= Write_Only is False");
+        (T, Test_Support_Ge_Read_Write_Vs_Write_Only'Access, "FUNC-C52-001: Read_Write >= Write_Only is True");
+      Register_Routine (T, Test_Support_None_Not_Ge_Write_Only'Access, "FUNC-C52-001: None >= Write_Only is False");
 
       --  FUNC-C52-002: Clipboard_Capabilities record / NO_CLIPBOARD_CAPABILITIES
-      Register_Routine
-        (T, Test_No_Caps_Support_None'Access, "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Support = None");
+      Register_Routine (T, Test_No_Caps_Support_None'Access, "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Support = None");
       Register_Routine
         (T, Test_No_Caps_Via_DA1_False'Access, "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Via_DA1 = False");
       Register_Routine
@@ -88,8 +81,7 @@ package body Test_Clipboard is
         (T,
          Test_No_Caps_Via_Env_Heuristic_False'Access,
          "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Via_Env_Heuristic = False");
-      Register_Routine
-        (T, Test_No_Caps_Probed_False'Access, "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Probed = False");
+      Register_Routine (T, Test_No_Caps_Probed_False'Access, "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Probed = False");
       Register_Routine
         (T,
          Test_Default_Equals_No_Clipboard_Capabilities'Access,
@@ -116,8 +108,7 @@ package body Test_Clipboard is
          "FUNC-C52-003: Has_Capability=False for Clipboard_Access when Ps=52 absent");
 
       --  FUNC-C52-004: DA1_PS_CLIPBOARD_ACCESS constant
-      Register_Routine
-        (T, Test_DA1_Ps_Clipboard_Access_Value'Access, "FUNC-C52-004: DA1_PS_CLIPBOARD_ACCESS = 52");
+      Register_Routine (T, Test_DA1_Ps_Clipboard_Access_Value'Access, "FUNC-C52-004: DA1_PS_CLIPBOARD_ACCESS = 52");
       Register_Routine
         (T,
          Test_DA1_Ps_Clipboard_Access_Positive'Access,
@@ -125,35 +116,24 @@ package body Test_Clipboard is
 
       --  FUNC-C52-005: Named terminal identifier constants
       Register_Routine
-        (T,
-         Test_Constant_Term_Program_Wezterm'Access,
-         "FUNC-C52-005: TERM_PROGRAM_WEZTERM = ""WezTerm""");
+        (T, Test_Constant_Term_Program_Wezterm'Access, "FUNC-C52-005: TERM_PROGRAM_WEZTERM = ""WezTerm""");
       Register_Routine
         (T, Test_Constant_Term_Program_Iterm2'Access, "FUNC-C52-005: TERM_PROGRAM_ITERM2 = ""iTerm.app""");
-      Register_Routine
-        (T, Test_Constant_Term_Program_Vscode'Access, "FUNC-C52-005: TERM_PROGRAM_VSCODE = ""vscode""");
-      Register_Routine
-        (T, Test_Constant_Env_Wt_Session'Access, "FUNC-C52-005: ENV_WT_SESSION = ""WT_SESSION""");
+      Register_Routine (T, Test_Constant_Term_Program_Vscode'Access, "FUNC-C52-005: TERM_PROGRAM_VSCODE = ""vscode""");
+      Register_Routine (T, Test_Constant_Env_Wt_Session'Access, "FUNC-C52-005: ENV_WT_SESSION = ""WT_SESSION""");
       Register_Routine (T, Test_Constant_Env_Tmux'Access, "FUNC-C52-005: ENV_TMUX = ""TMUX""");
       Register_Routine (T, Test_Constant_Env_Sty'Access, "FUNC-C52-005: ENV_STY = ""STY""");
-      Register_Routine
-        (T, Test_Constant_Term_Xterm_Kitty'Access, "FUNC-C52-005: TERM_XTERM_KITTY = ""xterm-kitty""");
+      Register_Routine (T, Test_Constant_Term_Xterm_Kitty'Access, "FUNC-C52-005: TERM_XTERM_KITTY = ""xterm-kitty""");
       Register_Routine (T, Test_Constant_Term_Xterm'Access, "FUNC-C52-005: TERM_XTERM = ""xterm""");
-      Register_Routine
-        (T, Test_Constants_Non_Empty'Access, "FUNC-C52-005: all named constants are non-empty strings");
+      Register_Routine (T, Test_Constants_Non_Empty'Access, "FUNC-C52-005: all named constants are non-empty strings");
 
       --  FUNC-C52-007: OSC52_QUERY byte constant
       Register_Routine (T, Test_Query_Length'Access, "FUNC-C52-007: OSC52_QUERY has length 9");
       Register_Routine
-        (T,
-         Test_Query_Starts_With_ESC_Bracket'Access,
-         "FUNC-C52-007: OSC52_QUERY starts with ESC ] (0x1B 0x5D)");
+        (T, Test_Query_Starts_With_ESC_Bracket'Access, "FUNC-C52-007: OSC52_QUERY starts with ESC ] (0x1B 0x5D)");
+      Register_Routine (T, Test_Query_Ends_With_BEL'Access, "FUNC-C52-007: OSC52_QUERY ends with BEL (0x07)");
       Register_Routine
-        (T, Test_Query_Ends_With_BEL'Access, "FUNC-C52-007: OSC52_QUERY ends with BEL (0x07)");
-      Register_Routine
-        (T,
-         Test_Query_Payload_Content'Access,
-         "FUNC-C52-007: OSC52_QUERY payload contains ""52;c;?"" as ASCII bytes");
+        (T, Test_Query_Payload_Content'Access, "FUNC-C52-007: OSC52_QUERY payload contains ""52;c;?"" as ASCII bytes");
 
       --  FUNC-C52-008: OSC52_Parse_Result enumeration distinctness
       Register_Routine
@@ -170,8 +150,7 @@ package body Test_Clipboard is
          "FUNC-C52-008: OSC52_Parse_Result Not_Present /= Malformed");
 
       --  FUNC-C52-008: Parse_OSC52_Response — Not_Present cases
-      Register_Routine
-        (T, Test_Parse_Empty_Buffer'Access, "FUNC-C52-008: empty buffer (Length=0) -> Not_Present");
+      Register_Routine (T, Test_Parse_Empty_Buffer'Access, "FUNC-C52-008: empty buffer (Length=0) -> Not_Present");
       Register_Routine
         (T, Test_Parse_No_OSC52_Introducer'Access, "FUNC-C52-008: noise bytes only, no ESC ] 52 -> Not_Present");
       Register_Routine
@@ -185,21 +164,13 @@ package body Test_Clipboard is
 
       --  FUNC-C52-008: Parse_OSC52_Response — Valid_Response cases
       Register_Routine
-        (T,
-         Test_Parse_Valid_BEL_Terminated'Access,
-         "FUNC-C52-008: ESC ] 52;c;<base64> BEL -> Valid_Response");
+        (T, Test_Parse_Valid_BEL_Terminated'Access, "FUNC-C52-008: ESC ] 52;c;<base64> BEL -> Valid_Response");
       Register_Routine
-        (T,
-         Test_Parse_Valid_ST_Terminated'Access,
-         "FUNC-C52-008: ESC ] 52;c;<base64> ESC \\ -> Valid_Response");
+        (T, Test_Parse_Valid_ST_Terminated'Access, "FUNC-C52-008: ESC ] 52;c;<base64> ESC \\ -> Valid_Response");
       Register_Routine
-        (T,
-         Test_Parse_Valid_Empty_Payload'Access,
-         "FUNC-C52-008: ESC ] 52;c; BEL (empty payload) -> Valid_Response");
+        (T, Test_Parse_Valid_Empty_Payload'Access, "FUNC-C52-008: ESC ] 52;c; BEL (empty payload) -> Valid_Response");
       Register_Routine
-        (T,
-         Test_Parse_Valid_Primary_Selection'Access,
-         "FUNC-C52-008: response with ""p"" selection -> Valid_Response");
+        (T, Test_Parse_Valid_Primary_Selection'Access, "FUNC-C52-008: response with ""p"" selection -> Valid_Response");
       Register_Routine
         (T,
          Test_Parse_Valid_With_Leading_Noise'Access,
@@ -222,18 +193,13 @@ package body Test_Clipboard is
          "FUNC-C52-008: OSC 52 introducer with fewer than 2 semicolons before BEL -> Malformed");
 
       --  FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS constant
-      Register_Routine
-        (T, Test_Timeout_Value'Access, "FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS = 1000");
-      Register_Routine
-        (T, Test_Timeout_At_Least_100'Access, "FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS >= 100");
+      Register_Routine (T, Test_Timeout_Value'Access, "FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS = 1000");
+      Register_Routine (T, Test_Timeout_At_Least_100'Access, "FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS >= 100");
 
       --  FUNC-C52-016 / FUNC-C52-017: IO smoke tests
+      Register_Routine (T, Test_Detect_No_Exception'Access, "FUNC-C52-016: Detect_Clipboard returns without exception");
       Register_Routine
-        (T, Test_Detect_No_Exception'Access, "FUNC-C52-016: Detect_Clipboard returns without exception");
-      Register_Routine
-        (T,
-         Test_Detect_Cache_Consistency'Access,
-         "FUNC-C52-017: Detect_Clipboard called twice -> same Probed flag");
+        (T, Test_Detect_Cache_Consistency'Access, "FUNC-C52-017: Detect_Clipboard called twice -> same Probed flag");
    end Register_Tests;
 
 
@@ -269,8 +235,7 @@ package body Test_Clipboard is
       pragma Unreferenced (T);
    begin
       Assert
-        (Write_Only >= Write_Only,
-         "FUNC-C52-001: Write_Only >= Write_Only must be True (at-least-write-only gate)");
+        (Write_Only >= Write_Only, "FUNC-C52-001: Write_Only >= Write_Only must be True (at-least-write-only gate)");
    end Test_Support_Ge_Write_Only_Self;
 
    procedure Test_Support_Ge_Read_Write_Vs_Write_Only (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -298,16 +263,13 @@ package body Test_Clipboard is
       pragma Unreferenced (T);
    begin
       Assert
-        (NO_CLIPBOARD_CAPABILITIES.Support = None,
-         "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Support should be None");
+        (NO_CLIPBOARD_CAPABILITIES.Support = None, "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Support should be None");
    end Test_No_Caps_Support_None;
 
    procedure Test_No_Caps_Via_DA1_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (not NO_CLIPBOARD_CAPABILITIES.Via_DA1,
-         "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Via_DA1 should be False");
+      Assert (not NO_CLIPBOARD_CAPABILITIES.Via_DA1, "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Via_DA1 should be False");
    end Test_No_Caps_Via_DA1_False;
 
    procedure Test_No_Caps_Via_Active_Probe_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -329,9 +291,7 @@ package body Test_Clipboard is
    procedure Test_No_Caps_Probed_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (not NO_CLIPBOARD_CAPABILITIES.Probed,
-         "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Probed should be False");
+      Assert (not NO_CLIPBOARD_CAPABILITIES.Probed, "FUNC-C52-002: NO_CLIPBOARD_CAPABILITIES.Probed should be False");
    end Test_No_Caps_Probed_False;
 
    procedure Test_Default_Equals_No_Clipboard_Capabilities (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -410,15 +370,11 @@ package body Test_Clipboard is
    begin
       Assert (Caps.Supported, "FUNC-C52-003: Interpret_DA1 with [64,52]: Supported should be True");
       Assert
-        (Caps.Flags (Clipboard_Access),
-         "FUNC-C52-003: Interpret_DA1 with Ps=52 must set Flags(Clipboard_Access)=True");
+        (Caps.Flags (Clipboard_Access), "FUNC-C52-003: Interpret_DA1 with Ps=52 must set Flags(Clipboard_Access)=True");
       --  Verify that unrelated flags are not spuriously set.
       Assert
-        (not Caps.Flags (Sixel_Graphics),
-         "FUNC-C52-003: Interpret_DA1 with Ps=52 must not set Flags(Sixel_Graphics)");
-      Assert
-        (not Caps.Flags (ANSI_Color),
-         "FUNC-C52-003: Interpret_DA1 with Ps=52 must not set Flags(ANSI_Color)");
+        (not Caps.Flags (Sixel_Graphics), "FUNC-C52-003: Interpret_DA1 with Ps=52 must not set Flags(Sixel_Graphics)");
+      Assert (not Caps.Flags (ANSI_Color), "FUNC-C52-003: Interpret_DA1 with Ps=52 must not set Flags(ANSI_Color)");
    end Test_DA1_Interpret_Ps52_Sets_Clipboard_Access;
 
    procedure Test_DA1_Has_Capability_Clipboard_Access_True (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -441,9 +397,7 @@ package body Test_Clipboard is
         (not Has_Capability (Caps, Clipboard_Access),
          "FUNC-C52-003: Has_Capability must return False for Clipboard_Access when Ps=52 absent");
       --  Verify that the other flags are unaffected.
-      Assert
-        (Has_Capability (Caps, Sixel_Graphics),
-         "FUNC-C52-003: Sixel_Graphics should still be True (sanity)");
+      Assert (Has_Capability (Caps, Sixel_Graphics), "FUNC-C52-003: Sixel_Graphics should still be True (sanity)");
    end Test_DA1_Has_Capability_Clipboard_Access_False;
 
 
@@ -454,17 +408,13 @@ package body Test_Clipboard is
    procedure Test_DA1_Ps_Clipboard_Access_Value (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (DA1_PS_CLIPBOARD_ACCESS = 52,
-         "FUNC-C52-004: DA1_PS_CLIPBOARD_ACCESS should equal 52");
+      Assert (DA1_PS_CLIPBOARD_ACCESS = 52, "FUNC-C52-004: DA1_PS_CLIPBOARD_ACCESS should equal 52");
    end Test_DA1_Ps_Clipboard_Access_Value;
 
    procedure Test_DA1_Ps_Clipboard_Access_Positive (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (DA1_PS_CLIPBOARD_ACCESS > 0,
-         "FUNC-C52-004: DA1_PS_CLIPBOARD_ACCESS must be a positive integer constant");
+      Assert (DA1_PS_CLIPBOARD_ACCESS > 0, "FUNC-C52-004: DA1_PS_CLIPBOARD_ACCESS must be a positive integer constant");
    end Test_DA1_Ps_Clipboard_Access_Positive;
 
 
@@ -475,33 +425,25 @@ package body Test_Clipboard is
    procedure Test_Constant_Term_Program_Wezterm (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (TERM_PROGRAM_WEZTERM = "WezTerm",
-         "FUNC-C52-005: TERM_PROGRAM_WEZTERM should equal ""WezTerm""");
+      Assert (TERM_PROGRAM_WEZTERM = "WezTerm", "FUNC-C52-005: TERM_PROGRAM_WEZTERM should equal ""WezTerm""");
    end Test_Constant_Term_Program_Wezterm;
 
    procedure Test_Constant_Term_Program_Iterm2 (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (TERM_PROGRAM_ITERM2 = "iTerm.app",
-         "FUNC-C52-005: TERM_PROGRAM_ITERM2 should equal ""iTerm.app""");
+      Assert (TERM_PROGRAM_ITERM2 = "iTerm.app", "FUNC-C52-005: TERM_PROGRAM_ITERM2 should equal ""iTerm.app""");
    end Test_Constant_Term_Program_Iterm2;
 
    procedure Test_Constant_Term_Program_Vscode (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (TERM_PROGRAM_VSCODE = "vscode",
-         "FUNC-C52-005: TERM_PROGRAM_VSCODE should equal ""vscode""");
+      Assert (TERM_PROGRAM_VSCODE = "vscode", "FUNC-C52-005: TERM_PROGRAM_VSCODE should equal ""vscode""");
    end Test_Constant_Term_Program_Vscode;
 
    procedure Test_Constant_Env_Wt_Session (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (ENV_WT_SESSION = "WT_SESSION",
-         "FUNC-C52-005: ENV_WT_SESSION should equal ""WT_SESSION""");
+      Assert (ENV_WT_SESSION = "WT_SESSION", "FUNC-C52-005: ENV_WT_SESSION should equal ""WT_SESSION""");
    end Test_Constant_Env_Wt_Session;
 
    procedure Test_Constant_Env_Tmux (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -519,9 +461,7 @@ package body Test_Clipboard is
    procedure Test_Constant_Term_Xterm_Kitty (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (TERM_XTERM_KITTY = "xterm-kitty",
-         "FUNC-C52-005: TERM_XTERM_KITTY should equal ""xterm-kitty""");
+      Assert (TERM_XTERM_KITTY = "xterm-kitty", "FUNC-C52-005: TERM_XTERM_KITTY should equal ""xterm-kitty""");
    end Test_Constant_Term_Xterm_Kitty;
 
    procedure Test_Constant_Term_Xterm (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -571,8 +511,7 @@ package body Test_Clipboard is
    begin
       Assert (OSC52_QUERY (First) = 16#1B#, "FUNC-C52-007: OSC52_QUERY byte 1 should be ESC (0x1B)");
       Assert
-        (OSC52_QUERY (First + 1) = 16#5D#,
-         "FUNC-C52-007: OSC52_QUERY byte 2 should be ']' (0x5D, OSC introducer)");
+        (OSC52_QUERY (First + 1) = 16#5D#, "FUNC-C52-007: OSC52_QUERY byte 2 should be ']' (0x5D, OSC introducer)");
    end Test_Query_Starts_With_ESC_Bracket;
 
    procedure Test_Query_Ends_With_BEL (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -603,25 +542,19 @@ package body Test_Clipboard is
    procedure Test_Parse_Result_Not_Present_Neq_Valid (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (Not_Present /= Valid_Response,
-         "FUNC-C52-008: Not_Present and Valid_Response must be distinct literals");
+      Assert (Not_Present /= Valid_Response, "FUNC-C52-008: Not_Present and Valid_Response must be distinct literals");
    end Test_Parse_Result_Not_Present_Neq_Valid;
 
    procedure Test_Parse_Result_Valid_Neq_Malformed (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (Valid_Response /= Malformed,
-         "FUNC-C52-008: Valid_Response and Malformed must be distinct literals");
+      Assert (Valid_Response /= Malformed, "FUNC-C52-008: Valid_Response and Malformed must be distinct literals");
    end Test_Parse_Result_Valid_Neq_Malformed;
 
    procedure Test_Parse_Result_Not_Present_Neq_Malformed (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (Not_Present /= Malformed,
-         "FUNC-C52-008: Not_Present and Malformed must be distinct literals");
+      Assert (Not_Present /= Malformed, "FUNC-C52-008: Not_Present and Malformed must be distinct literals");
    end Test_Parse_Result_Not_Present_Neq_Malformed;
 
 
@@ -641,8 +574,7 @@ package body Test_Clipboard is
    procedure Test_Parse_No_OSC52_Introducer (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       --  Buffer contains only noise bytes, no ESC ] 52 introducer.
-      Buf    : constant C_Byte_Array (1 .. 8) :=
-        [SPACE, SPACE, SPACE, SPACE, SPACE, SPACE, SPACE, SPACE];
+      Buf    : constant C_Byte_Array (1 .. 8) := [SPACE, SPACE, SPACE, SPACE, SPACE, SPACE, SPACE, SPACE];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 8);
    begin
       Assert (Result = Not_Present, "FUNC-C52-008: noise bytes only -> Not_Present");
@@ -663,14 +595,22 @@ package body Test_Clipboard is
       --  Buffer contains a valid OSC 52 response but Length = 0.
       --  The function must scan only bytes 1..0, i.e., nothing.
       --  Well-formed frame: ESC ] 52;c;AAAA BEL  (12 bytes)
-      Buf : constant C_Byte_Array (1 .. 12) :=
-        [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, SEL_BYTE,
-         SEMI_BYTE, B64_BYTE, B64_BYTE, B64_BYTE, B64_BYTE, BEL_BYTE];
+      Buf    : constant C_Byte_Array (1 .. 12) :=
+        [ESC_BYTE,
+         OSC_BYTE,
+         FIVE_BYTE,
+         TWO_BYTE,
+         SEMI_BYTE,
+         SEL_BYTE,
+         SEMI_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         BEL_BYTE];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 0);
    begin
-      Assert
-        (Result = Not_Present,
-         "FUNC-C52-008: Length=0 on non-empty buffer -> Not_Present (nothing scanned)");
+      Assert (Result = Not_Present, "FUNC-C52-008: Length=0 on non-empty buffer -> Not_Present (nothing scanned)");
    end Test_Parse_Length_Zero_Non_Empty_Buffer;
 
    procedure Test_Parse_Too_Short (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -705,8 +645,18 @@ package body Test_Clipboard is
       --  ESC ] 52;c;AAAA BEL  (well-formed BEL-terminated response)
       --  12 bytes: ESC ] 5 2 ; c ; A A A A BEL
       Buf    : constant C_Byte_Array (1 .. 12) :=
-        [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, SEL_BYTE,
-         SEMI_BYTE, B64_BYTE, B64_BYTE, B64_BYTE, B64_BYTE, BEL_BYTE];
+        [ESC_BYTE,
+         OSC_BYTE,
+         FIVE_BYTE,
+         TWO_BYTE,
+         SEMI_BYTE,
+         SEL_BYTE,
+         SEMI_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         BEL_BYTE];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 12);
    begin
       Assert (Result = Valid_Response, "FUNC-C52-008: ESC ] 52;c;AAAA BEL -> Valid_Response");
@@ -717,8 +667,19 @@ package body Test_Clipboard is
       --  ESC ] 52;c;AAAA ESC \  (well-formed ST-terminated response)
       --  13 bytes: ESC ] 5 2 ; c ; A A A A ESC \
       Buf    : constant C_Byte_Array (1 .. 13) :=
-        [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, SEL_BYTE,
-         SEMI_BYTE, B64_BYTE, B64_BYTE, B64_BYTE, B64_BYTE, ESC_BYTE, ST_BYTE];
+        [ESC_BYTE,
+         OSC_BYTE,
+         FIVE_BYTE,
+         TWO_BYTE,
+         SEMI_BYTE,
+         SEL_BYTE,
+         SEMI_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         ESC_BYTE,
+         ST_BYTE];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 13);
    begin
       Assert (Result = Valid_Response, "FUNC-C52-008: ESC ] 52;c;AAAA ESC \\ -> Valid_Response");
@@ -733,21 +694,28 @@ package body Test_Clipboard is
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 8);
    begin
       Assert
-        (Result = Valid_Response,
-         "FUNC-C52-008: ESC ] 52;c; BEL (empty payload, clipboard empty) -> Valid_Response");
+        (Result = Valid_Response, "FUNC-C52-008: ESC ] 52;c; BEL (empty payload, clipboard empty) -> Valid_Response");
    end Test_Parse_Valid_Empty_Payload;
 
    procedure Test_Parse_Valid_Primary_Selection (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       --  Response with "p" (primary) selection: ESC ] 52;p;AAAA BEL  (12 bytes)
       Buf    : constant C_Byte_Array (1 .. 12) :=
-        [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, SEL_P,
-         SEMI_BYTE, B64_BYTE, B64_BYTE, B64_BYTE, B64_BYTE, BEL_BYTE];
+        [ESC_BYTE,
+         OSC_BYTE,
+         FIVE_BYTE,
+         TWO_BYTE,
+         SEMI_BYTE,
+         SEL_P,
+         SEMI_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         BEL_BYTE];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 12);
    begin
-      Assert
-        (Result = Valid_Response,
-         "FUNC-C52-008: response with ""p"" (primary) selection -> Valid_Response");
+      Assert (Result = Valid_Response, "FUNC-C52-008: response with ""p"" (primary) selection -> Valid_Response");
    end Test_Parse_Valid_Primary_Selection;
 
    procedure Test_Parse_Valid_With_Leading_Noise (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -755,8 +723,7 @@ package body Test_Clipboard is
       --  Some noise bytes before the OSC 52 response.
       --  Structure: SPACE SPACE ESC ] 52;c;AA BEL  (10 bytes total)
       Buf    : constant C_Byte_Array (1 .. 10) :=
-        [SPACE, SPACE, ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE,
-         SEMI_BYTE, SEL_BYTE, SEMI_BYTE, BEL_BYTE];
+        [SPACE, SPACE, ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, SEL_BYTE, SEMI_BYTE, BEL_BYTE];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 10);
    begin
       Assert
@@ -771,9 +738,21 @@ package body Test_Clipboard is
       --  Frame 2: ESC [ ? 6 4 c      (6 bytes)
       --  Total: 15 bytes
       Buf    : constant C_Byte_Array (1 .. 15) :=
-        [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, SEL_BYTE,
-         SEMI_BYTE, B64_BYTE, B64_BYTE, BEL_BYTE,
-         ESC_BYTE, CSI_BYTE, QUES_BYTE, Character'Pos ('6'), Character'Pos ('4')];
+        [ESC_BYTE,
+         OSC_BYTE,
+         FIVE_BYTE,
+         TWO_BYTE,
+         SEMI_BYTE,
+         SEL_BYTE,
+         SEMI_BYTE,
+         B64_BYTE,
+         B64_BYTE,
+         BEL_BYTE,
+         ESC_BYTE,
+         CSI_BYTE,
+         QUES_BYTE,
+         Character'Pos ('6'),
+         Character'Pos ('4')];
       --  Note: actual DA1 final byte 'c' is not included (15 bytes enough to test the logic).
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 15);
    begin
@@ -788,8 +767,22 @@ package body Test_Clipboard is
       --  Buffer is larger than actual data.  Length = 8 covers ESC ] 52;c; BEL;
       --  the rest of the buffer beyond byte 8 is noise (all 0xFF).
       Buf    : constant C_Byte_Array (1 .. 16) :=
-        [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, SEL_BYTE, SEMI_BYTE, BEL_BYTE,
-         16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#, 16#FF#];
+        [ESC_BYTE,
+         OSC_BYTE,
+         FIVE_BYTE,
+         TWO_BYTE,
+         SEMI_BYTE,
+         SEL_BYTE,
+         SEMI_BYTE,
+         BEL_BYTE,
+         16#FF#,
+         16#FF#,
+         16#FF#,
+         16#FF#,
+         16#FF#,
+         16#FF#,
+         16#FF#,
+         16#FF#];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 8);
    begin
       Assert
@@ -810,22 +803,17 @@ package body Test_Clipboard is
         [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, SEL_BYTE, SEMI_BYTE];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 7);
    begin
-      Assert
-        (Result = Malformed,
-         "FUNC-C52-008: OSC 52 introducer found but no BEL or ST terminator -> Malformed");
+      Assert (Result = Malformed, "FUNC-C52-008: OSC 52 introducer found but no BEL or ST terminator -> Malformed");
    end Test_Parse_Malformed_No_Terminator;
 
    procedure Test_Parse_Malformed_Too_Few_Semicolons (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       --  OSC 52 introducer found but only one semicolon before BEL (malformed structure).
       --  6 bytes: ESC ] 5 2 ; BEL  (only one ';' after "52"; fewer than 2 semicolons)
-      Buf    : constant C_Byte_Array (1 .. 6) :=
-        [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, BEL_BYTE];
+      Buf    : constant C_Byte_Array (1 .. 6) := [ESC_BYTE, OSC_BYTE, FIVE_BYTE, TWO_BYTE, SEMI_BYTE, BEL_BYTE];
       Result : constant OSC52_Parse_Result := Parse_OSC52_Response (Buf, 6);
    begin
-      Assert
-        (Result = Malformed,
-         "FUNC-C52-008: OSC 52 introducer with only one semicolon before BEL -> Malformed");
+      Assert (Result = Malformed, "FUNC-C52-008: OSC 52 introducer with only one semicolon before BEL -> Malformed");
    end Test_Parse_Malformed_Too_Few_Semicolons;
 
 
@@ -836,17 +824,14 @@ package body Test_Clipboard is
    procedure Test_Timeout_Value (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert
-        (CLIPBOARD_PROBE_TIMEOUT_MS = 1_000,
-         "FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS should equal 1000 ms");
+      Assert (CLIPBOARD_PROBE_TIMEOUT_MS = 1_000, "FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS should equal 1000 ms");
    end Test_Timeout_Value;
 
    procedure Test_Timeout_At_Least_100 (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
       Assert
-        (CLIPBOARD_PROBE_TIMEOUT_MS >= 100,
-         "FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS must be >= 100 (spec minimum)");
+        (CLIPBOARD_PROBE_TIMEOUT_MS >= 100, "FUNC-C52-015: CLIPBOARD_PROBE_TIMEOUT_MS must be >= 100 (spec minimum)");
    end Test_Timeout_At_Least_100;
 
 
@@ -867,8 +852,7 @@ package body Test_Clipboard is
       if not Result.Probed then
          Assert (not Result.Via_DA1, "FUNC-C52-016: Probed=False implies Via_DA1=False (invariant I4)");
          Assert
-           (not Result.Via_Active_Probe,
-            "FUNC-C52-016: Probed=False implies Via_Active_Probe=False (invariant I4)");
+           (not Result.Via_Active_Probe, "FUNC-C52-016: Probed=False implies Via_Active_Probe=False (invariant I4)");
       end if;
       --  I3: Via_Env_Heuristic=True implies Via_DA1=False and Via_Active_Probe=False.
       if Result.Via_Env_Heuristic then

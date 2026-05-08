@@ -8,8 +8,7 @@
 with AUnit.Assertions;              use AUnit.Assertions;
 with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 
-with Termicap.DECRPM;
-use Termicap.DECRPM;
+with Termicap.DECRPM; use Termicap.DECRPM;
 use Termicap;
 
 --  Bring equality operator into scope for Byte (Interfaces.C.unsigned_char) comparisons.

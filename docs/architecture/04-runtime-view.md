@@ -334,18 +334,25 @@ Termicap.Unicode.Detect_Unicode_Level (Env)   [SPARK Silver, Global => null]
   │    LANG present and contains "UTF-8"?
   │      Yes → Level := Extended
   │
-  │  Step 2: TERM=linux exclusion (FUNC-UNI-004)
-  │    Equal_Case_Insensitive (Value (Env, "TERM"), "linux")?
-  │      Yes → return None   (Linux kernel console has no Unicode rendering)
-  │
-  │  Step 3: CI environment awareness (FUNC-UNI-006)
+  │  Step 2: CI environment awareness (FUNC-UNI-006)
   │    GITHUB_ACTIONS / GITEA_ACTIONS / CIRCLECI present?
   │      Yes → Level := Unicode_Level'Max (Level, Basic)
+  │            (CI runners may not export a UTF-8 locale even when the
+  │             renderer supports full Unicode; floor stays at Basic to
+  │             avoid over-promoting headless runs.)
+  │
+  │  Step 3: TERM=linux exclusion (FUNC-UNI-004)
+  │    Equal_Case_Insensitive (Value (Env, "TERM"), "linux")?
+  │      Yes → return None   (authoritative; overrides locale and CI floors)
   │
   │  Step 4: Windows terminal heuristics (FUNC-UNI-005)
   │    WT_SESSION present → Level := Unicode_Level'Max (Level, Extended)
   │    TERM_PROGRAM = "vscode" → Level := Unicode_Level'Max (Level, Extended)
-  │    TERMINAL_EMULATOR contains "JetBrains" → Level := Unicode_Level'Max (Level, Extended)
+  │    TERMINAL_EMULATOR = "JetBrains-JediTerm" → Level := Unicode_Level'Max (Level, Extended)
+  │    TERM in {xterm-256color, alacritty, rxvt-unicode, rxvt-unicode-256color}
+  │            → Level := Unicode_Level'Max (Level, Basic)
+  │            (legacy code-page path is BMP-only unless a UTF-8 LC_*
+  │             already raised the floor in Step 1.)
   │
   │  Step 5: Default
   │    return Level   (None if no heuristic matched)
@@ -357,7 +364,8 @@ Termicap.Unicode.Detect_Unicode_Level (Env)   [SPARK Silver, Global => null]
 
 - `Detect_Unicode_Level` takes only `Env` — no `Is_TTY` parameter. Unicode capability is a property of the terminal emulator and locale, not of stream connectivity (FUNC-UNI-002). This makes it the only detection function callable without first invoking `Is_TTY`.
 - Both the spec and the body carry `SPARK_Mode => On`, making `Termicap.Unicode` the only detection package that is fully SPARK Silver provable end-to-end (FUNC-UNI-007).
-- The `TERM=linux` exclusion (step 2) takes priority over locale detection: a UTF-8 locale set by a wrapper script does not grant Unicode capability to the raw Linux kernel console.
+- A UTF-8 locale promotes the floor to `Extended` (Step 1), aligning with the cross-language reference panel (`is-unicode-supported`, `rich`, `prompt_toolkit`, `spectre-console`). Earlier behaviour that capped at `Basic` is no longer in effect.
+- The `TERM=linux` exclusion (Step 3) is **authoritative**: it returns `None` unconditionally and beats both the locale floor and the CI floor. A UTF-8 locale set by a wrapper script does not grant Unicode capability to the raw Linux kernel console.
 - Integration test pattern (no OS, no TTY):
 
 ```ada
@@ -2221,7 +2229,7 @@ Termicap.Mouse.IO.Detect_Mouse_Protocols      [SPARK_Mode => Off]
 
 ## Scenario 28: Sixel / Kitty Graphics Detection
 
-End-to-end scenario for `Detect_Graphics`. Shows the Win32 Console gate (Windows only), the non-TTY guard, passive Kitty and Sixel env-var harvests, the DA1 active probe for Sixel Ps=4 (reusing `Termicap.DA1.IO.Detect_DA1`), the XTVERSION name-substring Sixel fallback, the optional Kitty APC active probe (independent session), and the per-process cache. Unlike the MOUSE batched-sentinel approach, each active probe (DA1, APC) runs as an **independent session** with its own 1 000 ms budget (ADR-0028). Worst-case cold-start latency is 2 s (both probes time out). Cached calls return in < 1 µs.
+End-to-end scenario for `Detect_Graphics`. Shows the Win32 Console gate (Windows only), the non-TTY guard, passive Kitty and Sixel env-var harvests, the DA1 active probe for Sixel Ps=4 (reusing `Termicap.DA1.IO.Detect_DA1`), the XTVERSION name-substring Sixel fallback, the optional Kitty APC active probe (independent session), the XTVERSION-driven Kitty graphics refinement (FUNC-SXL-010, mirrors `Termicap.Hyperlinks.Refine_With_XTVERSION`), and the per-process cache. Unlike the MOUSE batched-sentinel approach, each active probe (DA1, APC) runs as an **independent session** with its own 1 000 ms budget (ADR-0028). Worst-case cold-start latency is 2 s (both probes time out); the XTVERSION query reuses any cached result. Cached calls return in < 1 µs.
 
 ### Phase A — Cache Check and Platform Gate
 
@@ -2267,14 +2275,14 @@ Termicap.Graphics.IO.Detect_Graphics      [SPARK_Mode => Off]
   │    [Termicap.Environment — SPARK Silver, Global => null]
   │    Value_Matches (Env, "TERM_PROGRAM", "WezTerm", Case_Insensitive)?
   │      → Sixel_Supported := True
-  │    Value (Env, "TERM_PROGRAM") = "iTerm.app"?
+  │    Value (Env, "TERM") in {"foot", "foot-extra", "mlterm",
+  │                             "mlterm-256color", "yaft"} (case-insensitive)?
   │      → Sixel_Supported := True
-  │    Value (Env, "TERM") in {"xterm-kitty", "foot", "foot-extra",
-  │                             "mlterm", "yaft"}?
-  │      → Sixel_Supported := True
-  │    Starts_With (Value (Env, "TERM"), "xterm")?
-  │      → Sixel_Supported := True  (heuristic; DA1 probe provides authoritative answer)
   │    (Passive only — no I/O; runs regardless of TTY status)
+  │    NOTE: the legacy "TERM prefix xterm" rule and the "TERM = xterm-kitty"
+  │    exact match were removed (kitty does not implement sixel and the xterm
+  │    prefix matches every modern terminal that ships with TERM=xterm-256color).
+  │    DA1 (FUNC-SXL-005) is the authoritative source for everything else.
   │
   │  Step 5: Non-TTY guard
   │    Is_TTY (Stdout) = False?          [Termicap.TTY — SPARK_Mode => Off]
@@ -2304,8 +2312,13 @@ Termicap.Graphics.IO.Detect_Graphics      [SPARK_Mode => Off]
   │        Yes → Caps.Sixel_Supported := True
   │              Caps.Sixel_Via_DA1    := True
   │              Caps.Probed           := True
-  │        No  → (Sixel_Supported remains as set by passive harvest)
-  │              Caps.Probed           := True
+  │        No, but DA1_Result.Supported (valid response without Ps=4)?
+  │              → AUTHORITATIVE NEGATIVE — clear any over-eager passive flag:
+  │                Caps.Sixel_Supported := False
+  │                Caps.Sixel_Via_DA1   := False
+  │                Caps.Probed          := True
+  │        No DA1 response (timeout / session failure)?
+  │              → keep whatever passive set; Probed unchanged.
   │
   │  Session 1 closed:
   │    Probe_Session.Finalize (unconditional RAII)
@@ -2321,8 +2334,11 @@ Termicap.Graphics.IO.Detect_Graphics      [SPARK_Mode => Off]
   │  Step 8: XTVERSION Sixel fallback  (FUNC-SXL-007)
   │    Skipped when Caps.Sixel_Via_DA1 = True
   │    (DA1 result is authoritative; XTVERSION fallback is unnecessary)
+  │    Also skipped when Caps.Probed = True and Caps.Sixel_Supported = False
+  │    (DA1 returned an authoritative-negative response; an XTVERSION-name
+  │     substring match must not re-promote a terminal that DA1 just cleared).
   │
-  │    When Sixel_Via_DA1 = False:
+  │    When Sixel_Via_DA1 = False and not authoritatively-negated:
   │      Termicap.XTVERSION.IO.Query_And_Identify
   │        [SPARK_Mode => Off — opens its own internal session]
   │      Name_Contains (XTVERSION_Result, "kitty", Case_Insensitive)?
@@ -2379,6 +2395,41 @@ Termicap.Graphics.IO.Detect_Graphics      [SPARK_Mode => Off]
   │        Probe_Session.Finalize (unconditional RAII)
   │          → Restore_Termios, close /dev/tty, release single-session guard
   │
+  └──► Proceed to Phase E2
+```
+
+### Phase E2 — XTVERSION-Driven Kitty Refinement (FUNC-SXL-009, FUNC-SXL-010)
+
+```
+  │
+  │  Step 12b: XTVERSION-driven Kitty graphics refinement (B3a)
+  │    Skipped when Caps.Kitty_Graphics_Supported = True
+  │    (passive harvest or APC probe already established support).
+  │
+  │    When Kitty_Graphics_Supported = False:
+  │      Termicap.XTVERSION.IO.Query_And_Identify
+  │        [SPARK_Mode => Off — opens its own internal session]
+  │      Caps := Refine_Kitty_With_XTVERSION (Caps, XTV)
+  │
+  │      Refine_Kitty_With_XTVERSION  [Termicap.Graphics.IO, SPARK_Mode => Off]
+  │        XTV.Status /= Success?
+  │          → return Passive unchanged
+  │        Lookup XTV.Terminal_Name (case-insensitive) in KNOWN_GOOD_KITTY:
+  │          | iterm2  | Min_Version 3.6.0   | strict |
+  │          | kitty   | Min_Version 0.20.0  | strict |
+  │          | wezterm | (any)               | Treat_Any |
+  │          | ghostty | (any)               | Treat_Any |
+  │          | konsole | Min_Version 22.4.0  | strict |
+  │        Name not in table?
+  │          → return Passive unchanged
+  │        Treat_Any entry, name match?
+  │          → Caps.Kitty_Graphics_Supported := True
+  │            (Caps.Kitty_Via_Active_Probe stays False — provenance is XTVERSION)
+  │        Strict entry, parsed version >= Min_Version?
+  │          → Caps.Kitty_Graphics_Supported := True
+  │        Strict entry, parsed version < Min_Version OR unparseable?
+  │          → return Passive unchanged
+  │
   └──► Proceed to Phase F
 ```
 
@@ -2400,7 +2451,10 @@ Termicap.Graphics.IO.Detect_Graphics      [SPARK_Mode => Off]
 - **DA1 reuse (ADR-0027):** The Sixel DA1 probe calls `Termicap.DA1.IO.Detect_DA1` directly rather than issuing a new low-level probe. This reuses the existing timeout-only loop, parsing, and interpretation logic and ensures the DA1 result is consistent with what `Termicap.Capabilities` would obtain independently.
 - **Passive-first ordering:** Env-var harvests (Steps 3–4) run before any TTY guard, so callers that set `KITTY_WINDOW_ID` or `TERM=xterm-kitty` in non-TTY contexts still receive a useful result.
 - **APC skip condition:** If the passive harvest already set `Kitty_Graphics_Supported = True`, the APC probe session is never opened (zero I/O overhead). This is the common case for kitty, WezTerm, and any terminal with `KITTY_WINDOW_ID` set.
-- **XTVERSION skip condition:** If the DA1 probe already set `Sixel_Via_DA1 = True`, the XTVERSION query is skipped (DA1 is the authoritative source for Sixel support).
+- **XTVERSION skip condition (Sixel fallback, Step 8):** Skipped both when `Sixel_Via_DA1 = True` (DA1 is authoritative) and when DA1 returned an authoritative-negative response (`Probed = True` and `Sixel_Supported = False`). This prevents an XTVERSION-name substring match (e.g. an iTerm2-named clone) from re-promoting a terminal that DA1 just cleared.
+- **DA1 authoritative-negative semantics (Step 7):** When DA1 returns a valid response that does **not** advertise Ps=4, the cascade clears any over-eager passive `Sixel_Supported = True` flag. The terminal's own DA1 reply is the source of truth; passive heuristics only act as a fallback for "no DA1 answer received" (timeout, non-TTY, foreground-guard failure).
+- **Passive Sixel allowlist (Step 4):** narrowed to `TERM_PROGRAM = WezTerm` plus `TERM in {foot, foot-extra, mlterm, mlterm-256color, yaft}`. The legacy `TERM` prefix `xterm` rule was removed (it has no positive predictive value because every modern terminal sets `TERM=xterm-256color`); `TERM = xterm-kitty` was removed because kitty intentionally rejects sixel and uses its own APC-based protocol.
+- **Kitty XTVERSION refinement (Phase E2, Step 12b):** When the APC probe is inconclusive (timeout, Apple Terminal skip, or `Error` reply), `Refine_Kitty_With_XTVERSION` consults the curated `KNOWN_GOOD_KITTY` table (iterm2 ≥ 3.6.0, kitty ≥ 0.20.0, wezterm any, ghostty any, konsole ≥ 22.4.0). A match promotes `Kitty_Graphics_Supported` to `True` while leaving `Kitty_Via_Active_Probe = False` (provenance is XTVERSION, not the APC probe). The function is upgrade-only — it never demotes a passive positive.
 - **Cached calls:** The protected-object cache is populated on the first call. All subsequent calls return the cached `Graphics_Capabilities` without entering the probe cascade. Latency < 1 µs.
 - **Windows fast path:** `GetConsoleMode (STD_OUTPUT_HANDLE)` is checked before any active probe. A native Windows console returns passive env-var results only (`Probed = False`).
 - **Graceful degradation:** On any error — non-TTY, background process, `Probe_Session` open failure, total timeout — the function returns passive env-var results or `NO_GRAPHICS_CAPABILITIES` without raising an exception (FUNC-SXL-016).
@@ -3059,20 +3113,25 @@ Termicap.Hyperlinks.Refine_With_XTVERSION    [SPARK_Mode => Off]
   │
   │  Terminal name in known-good table?
   │
-  │    Name found, "any" minimum (foot, WezTerm, Ghostty, Konsole):
+  │    Name not found:
+  │      → return (Passive.Support, XTVERSION_Unresolved, False)
+  │
+  │    Name found, "any" minimum (foot, WezTerm, Ghostty, Konsole, Warp):
+  │      → return (Supported, XTVERSION_Confirmed, True)
+  │      (Treat_Any entries promote on a name match alone — the version
+  │       string is not parsed.  This means a Warp build whose XTVERSION
+  │       reports an unparseable version still promotes to Supported.)
+  │
+  │    Name found, strict-version entry, version string parseable,
+  │      version >= minimum:
   │      → return (Supported, XTVERSION_Confirmed, True)
   │
-  │    Name found, version string parseable, version >= minimum:
-  │      → return (Supported, XTVERSION_Confirmed, True)
-  │
-  │    Name found, version string parseable, version < minimum:
+  │    Name found, strict-version entry, version string parseable,
+  │      version < minimum:
   │      → return (Unsupported, XTVERSION_Rejected, True)
   │
-  │    Name found, version string unparseable:
+  │    Name found, strict-version entry, version string unparseable:
   │      → return (Passive.Support, Env_Known_Good, True)
-  │
-  │    Name not found in table:
-  │      → return (Passive.Support, XTVERSION_Unresolved, False)
   │
   │  [outer exception handler: when others => return Passive]
   │

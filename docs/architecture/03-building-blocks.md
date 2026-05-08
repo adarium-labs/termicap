@@ -475,10 +475,10 @@ The detection algorithm is a single pure function implementing a 5-step priority
 | Step | Check | Effect |
 |------|-------|--------|
 | 1 | Locale variables (`LC_ALL`, `LC_CTYPE`, `LANG`) | Value contains `"UTF-8"` (case-insensitive) → Extended |
-| 2 | `TERM=linux` | Linux kernel console exclusion → None (overrides locale) |
-| 3 | CI environment (`GITHUB_ACTIONS`, `GITEA_ACTIONS`, `CIRCLECI`) | Known Unicode-capable CI → Basic |
-| 4 | Windows terminal heuristics (`WT_SESSION`, `TERM_PROGRAM=vscode`, `TERMINAL_EMULATOR`) | Windows Terminal / vscode / JetBrains → Extended |
-| 5 | Default | Return `None` |
+| 2 | CI environment (`GITHUB_ACTIONS`, `GITEA_ACTIONS`, `CIRCLECI`) | Known Unicode-capable CI runner → floor at Basic (CI runners may not export a UTF-8 locale even when the renderer supports full Unicode) |
+| 3 | `TERM=linux` (FUNC-UNI-004) | Linux kernel console exclusion — authoritative `None`; overrides both the locale floor and the CI floor |
+| 4 | Windows terminal heuristics (`WT_SESSION`, `TERM_PROGRAM=vscode`, `TERMINAL_EMULATOR=JetBrains-JediTerm`) | Windows Terminal / VS Code / JetBrains JediTerm → Extended; TERM allowlist (`xterm-256color`, `alacritty`, `rxvt-unicode*`) → Basic |
+| 5 | Default | Return accumulated `Floor` (`None` if no heuristic matched) |
 
 #### Relationship to Other Packages
 
@@ -1361,13 +1361,13 @@ State-transition rules (FUNC-HYP-012):
 |-----------|--------|
 | Passive support = `Unsupported` and provenance = `Env_Excluded` | Return Passive unchanged ("Unsupported is terminal" invariant) |
 | XTV status ≠ `Success` | `(Passive.Support, XTVERSION_Unresolved, Passive.Terminal_Version_Known)` |
-| Terminal name found, version ≥ minimum | `(Supported, XTVERSION_Confirmed, True)` |
-| Terminal name found, version < minimum | `(Unsupported, XTVERSION_Rejected, True)` |
-| Terminal name found, version unparseable | `(Passive.Support, Env_Known_Good, True)` |
-| Terminal name found, "any" minimum | `(Supported, XTVERSION_Confirmed, True)` |
-| Terminal name not found | `(Passive.Support, XTVERSION_Unresolved, False)` |
+| Terminal name not found in table | `(Passive.Support, XTVERSION_Unresolved, False)` |
+| Terminal name found, "any" minimum (`Treat_Any`) | `(Supported, XTVERSION_Confirmed, True)` — promotes even when the reported version is unparseable |
+| Terminal name found, strict entry, version ≥ minimum | `(Supported, XTVERSION_Confirmed, True)` |
+| Terminal name found, strict entry, version < minimum | `(Unsupported, XTVERSION_Rejected, True)` |
+| Terminal name found, strict entry, version unparseable | `(Passive.Support, Env_Known_Good, True)` |
 
-Known-good terminal table (body-private constants): iTerm2 (≥ 3.1.0), kitty (≥ 0.19.0), WezTerm (any), VTE (≥ 0.50.0), foot (any), Alacritty (≥ 0.11.0), mintty (≥ 3.4.0), xterm (≥ 357), Windows_Terminal (≥ 1.4.0), VSCode (≥ 1.72.0), Ghostty (any), Konsole (any).
+Known-good terminal table (body-private constants, 13 entries): iTerm2 (≥ 3.1.0), kitty (≥ 0.19.0), WezTerm (any), VTE (≥ 0.50.0), foot (any), Alacritty (≥ 0.11.0), mintty (≥ 3.4.0), xterm (≥ 357), Windows_Terminal (≥ 1.4.0), VSCode (≥ 1.72.0), Ghostty (any), Konsole (any), Warp (any). The promotion logic checks `Treat_Any` before parsing the version string, so `Treat_Any` entries (foot, WezTerm, Ghostty, Konsole, Warp) promote to `Supported / XTVERSION_Confirmed` even when the reported version is unparseable.
 
 #### Relationship to Other Packages
 
@@ -1403,14 +1403,14 @@ Re-declares `Byte` and `Byte_Array` independently of `Termicap.OSC` (which is `S
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `NO_GRAPHICS_CAPABILITIES` | All fields default-initialised | Canonical "no result" value; used as the cache initial value and on every error path of `Detect_Graphics`. |
-| `TERM_XTERM_KITTY` | `"xterm-kitty"` | Exact TERM value for the kitty GPU terminal (Sixel + Kitty graphics, FUNC-SXL-004). |
+| `TERM_XTERM_KITTY` | `"xterm-kitty"` | Exact TERM value for the kitty GPU terminal (Kitty graphics passive harvest, FUNC-SXL-004 / FUNC-SXL-009). Note: kitty does **not** implement Sixel; the Sixel passive harvest no longer consults this constant (conformance B2a). |
 | `TERM_FOOT` | `"foot"` | Exact TERM value for the foot Wayland terminal (Sixel, FUNC-SXL-004). |
 | `TERM_FOOT_EXTRA` | `"foot-extra"` | Exact TERM value for foot with extra capabilities (Sixel, FUNC-SXL-004). |
-| `TERM_XTERM` | `"xterm"` | TERM prefix for xterm-family terminals (Sixel when compiled with `--enable-sixel`, FUNC-SXL-004). |
+| `TERM_XTERM` | `"xterm"` | TERM prefix for xterm-family terminals (FUNC-SXL-004). The legacy "TERM prefix xterm" rule was removed from the passive Sixel harvest in conformance B2a (the prefix matches every modern terminal that ships with `TERM=xterm-256color` and has no positive predictive value); DA1 is the authoritative source. |
 | `TERM_MLTERM` | `"mlterm"` | Exact TERM value for MLterm (Sixel, FUNC-SXL-004). |
 | `TERM_YAFT` | `"yaft"` | Exact TERM value for the yaft framebuffer terminal (Sixel, FUNC-SXL-004). |
 | `TERM_PROGRAM_WEZTERM` | `"WezTerm"` | Case-insensitive TERM_PROGRAM match for WezTerm (Sixel + Kitty graphics, FUNC-SXL-004). |
-| `TERM_PROGRAM_ITERM2` | `"iTerm.app"` | Exact TERM_PROGRAM match for iTerm2 macOS (Sixel, FUNC-SXL-004). |
+| `TERM_PROGRAM_ITERM2` | `"iTerm.app"` | Exact TERM_PROGRAM match for iTerm2 macOS (FUNC-SXL-004). Reserved for future use; the passive Sixel harvest no longer consults this constant in conformance B2a — DA1 is the authoritative source for iTerm2 Sixel support. |
 | `ENV_KITTY_WINDOW_ID` | `"KITTY_WINDOW_ID"` | Env-var set by kitty for every window it manages; highest-confidence passive Kitty indicator (FUNC-SXL-004). |
 | `XTVERSION_NAME_KITTY` | `"kitty"` | Case-insensitive XTVERSION name token for kitty (FUNC-SXL-004). |
 | `XTVERSION_NAME_WEZTERM` | `"WezTerm"` | Case-insensitive XTVERSION name token for WezTerm (FUNC-SXL-004). |
@@ -1431,7 +1431,7 @@ Re-declares `Byte` and `Byte_Array` independently of `Termicap.OSC` (which is `S
 
 ### `Termicap.Graphics.IO`
 
-**Responsibility:** Platform-dispatched I/O orchestration for Sixel and Kitty graphics protocol detection. Implements the detection cascade (FUNC-SXL-012): passive Kitty env-var harvest (KITTY_WINDOW_ID, TERM=xterm-kitty, TERM_PROGRAM=WezTerm) → passive Sixel env-var harvest (TERM_PROGRAM=WezTerm, known TERM values, xterm prefix) → TTY guard → DA1 active probe for Sixel Ps=4 (reusing `Termicap.DA1.IO.Detect_DA1`) → XTVERSION name-substring fallback for Sixel → optional Kitty APC active probe (`ESC _ G i=1,a=q ESC \` + DA1 sentinel). Each active probe runs as an **independent session** with its own 1 000 ms budget (ADR-0028), in contrast to the batched single-sentinel approach used by `Termicap.Mouse.IO`. Exposes `Detect_Graphics` (result cached per process) and `Detect_Graphics_Uncached` (cache-bypass, for test harnesses).
+**Responsibility:** Platform-dispatched I/O orchestration for Sixel and Kitty graphics protocol detection. Implements the detection cascade (FUNC-SXL-012): passive Kitty env-var harvest (KITTY_WINDOW_ID, TERM=xterm-kitty, TERM_PROGRAM=WezTerm) → passive Sixel env-var harvest (TERM_PROGRAM=WezTerm, TERM ∈ {foot, foot-extra, mlterm, mlterm-256color, yaft}; the legacy `xterm` prefix and `xterm-kitty` rules were removed in B2a) → TTY guard → DA1 active probe for Sixel Ps=4 (reusing `Termicap.DA1.IO.Detect_DA1`; a valid DA1 response without Ps=4 is **authoritative-negative** and clears any over-eager passive Sixel flag) → XTVERSION name-substring fallback for Sixel (gated against authoritative-negative DA1, B2c) → optional Kitty APC active probe (`ESC _ G i=1,a=q ESC \` + DA1 sentinel) → XTVERSION-driven Kitty graphics refinement via `Refine_Kitty_With_XTVERSION` (B3a — `KNOWN_GOOD_KITTY` allowlist, mirrors `Termicap.Hyperlinks.Refine_With_XTVERSION`). Each active probe runs as an **independent session** with its own 1 000 ms budget (ADR-0028), in contrast to the batched single-sentinel approach used by `Termicap.Mouse.IO`. Exposes `Detect_Graphics` (result cached per process), `Detect_Graphics_Uncached` (cache-bypass, for test harnesses), `Has_Sixel_From_Env` (passive harvest helper, public for regression tests), and `Refine_Kitty_With_XTVERSION` (XTVERSION-driven Kitty refinement, public for unit tests).
 
 Has `SPARK_Mode => Off` because it manages `Probe_Session` (`Limited_Controlled`) objects, performs terminal I/O, and holds a package-level protected-object cache — all outside the SPARK 2014 subset. All parsing and constant definitions remain in the provable parent package `Termicap.Graphics`.
 
@@ -1449,8 +1449,10 @@ Platform dispatch via GPR `Source_Dirs` (ADR-0018):
 
 | Subprogram | Kind | Description | Requirements |
 |-----------|------|-------------|--------------|
-| `Detect_Graphics` | Function | Returns `Graphics_Capabilities`. On first call: runs the full cascade (passive harvests + DA1 probe + XTVERSION fallback + optional APC probe); caches result in a package-level protected object. On subsequent calls: returns cached value directly (< 1 µs). Never raises. | FUNC-SXL-012, FUNC-SXL-016, FUNC-SXL-017 |
+| `Detect_Graphics` | Function | Returns `Graphics_Capabilities`. On first call: runs the full cascade (passive harvests + DA1 probe + XTVERSION fallback + optional APC probe + XTVERSION-driven Kitty refinement); caches result in a package-level protected object. On subsequent calls: returns cached value directly (< 1 µs). Never raises. | FUNC-SXL-012, FUNC-SXL-016, FUNC-SXL-017 |
 | `Detect_Graphics_Uncached` | Function | Cache-bypass variant. Runs the full cascade on every call without consulting or updating the protected-object cache. Intended for test harnesses and edge cases where a fresh probe is needed. Never raises. | FUNC-SXL-016, FUNC-SXL-017 |
+| `Has_Sixel_From_Env` | Function | Pure inspection of a captured `Environment` snapshot returning the passive Sixel verdict. Allowlist (post-B2a): `TERM_PROGRAM = WezTerm` plus `TERM in {foot, foot-extra, mlterm, mlterm-256color, yaft}`. The legacy `TERM` prefix `xterm` rule and `TERM = xterm-kitty` exact match are intentionally absent. Exposed publicly to support deterministic regression tests of the passive harvest. | FUNC-SXL-008 |
+| `Refine_Kitty_With_XTVERSION` | Function | Value-to-value promoter for Kitty graphics support. Mirrors `Termicap.Hyperlinks.Refine_With_XTVERSION` (FUNC-HYP-011): consults a body-private `KNOWN_GOOD_KITTY` table (iterm2 ≥ 3.6.0, kitty ≥ 0.20.0, wezterm any, ghostty any, konsole ≥ 22.4.0) and promotes `Kitty_Graphics_Supported` to `True` when the XTVERSION name matches and the version meets the minimum (or the entry is `Treat_Any`). Upgrade-only — never demotes a passive positive. Used as cascade Step 6 when the APC probe is inconclusive. | FUNC-SXL-009, FUNC-SXL-010 |
 
 **See also:** ADR-0027 (`docs/adr/0027-da1-reuse-vs-fresh-probe.md`) — rationale for reusing `Termicap.DA1.IO.Detect_DA1` rather than issuing a fresh DA1 probe from within `Termicap.Graphics.IO`; ADR-0028 (`docs/adr/0028-graphics-independent-probe-sessions.md`) — rationale for independent sessions (one per probe) vs. the batched approach used for mouse; ADR-0029 (`docs/adr/0029-graphics-package-naming.md`) — rationale for the `Termicap.Graphics` / `Termicap.Graphics.IO` naming and the deferred integration into `Terminal_Capabilities`.
 

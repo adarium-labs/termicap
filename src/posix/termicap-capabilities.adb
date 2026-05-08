@@ -180,8 +180,7 @@ is
       Mouse      : Termicap.Mouse.Mouse_Capabilities;
       Graphics   : Termicap.Graphics.Graphics_Capabilities;
       Clipboard  : Termicap.Clipboard.Clipboard_Capabilities;
-      Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result :=
-                     Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
+      Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result := Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
       return Full_Terminal_Capabilities is
    begin
       return

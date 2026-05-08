@@ -23,6 +23,11 @@
 --  Linux kernel console exclusion (TERM=linux), and Windows terminal
 --  heuristics (WT_SESSION, TERM_PROGRAM, TERMINAL_EMULATOR).
 --
+--  Step 1 outcome is Extended (not Basic): a UTF-8 locale is a strong
+--  positive signal that the terminal renders the full Unicode plane.  The CI
+--  heuristic remains capped at Basic since CI runners frequently do not
+--  export a UTF-8 locale even when their renderer supports full Unicode.
+--
 --  Requirements Coverage:
 --    - @relation(FUNC-UNI-001): Unicode_Level enumeration type
 --    - @relation(FUNC-UNI-002): Pure detection function signature

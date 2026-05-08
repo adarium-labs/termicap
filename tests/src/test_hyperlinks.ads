@@ -250,4 +250,28 @@ package Test_Hyperlinks is
    --  VSCode: 1.71.0 < min -> Unsupported
    procedure Test_Refine_VSCode_Below_Min (T : in out AUnit.Test_Cases.Test_Case'Class);
 
+   ---------------------------------------------------------------------------
+   --  B4 — Conformance Divergence Regression Tests (FUNC-HYP-009)
+   --
+   --  Source: reference-frameworks/analysis/divergence/
+   --          2026-05-08-conformance-divergences.md §B4
+   --
+   --  Warp Terminal supports OSC 8 and reports XTVERSION name = "Warp".
+   --  After the fix, Warp must be added to the KNOWN_GOOD table with
+   --  Treat_Any => True (mirroring WezTerm / foot / Ghostty / Konsole).
+   --  These tests are expected to FAIL until that table entry is added.
+   ---------------------------------------------------------------------------
+
+   --  B4: Likely_Supported + XTVERSION = {Warp, "v0.2026.04.29.08.57.stable_01"}
+   --  -> Supported, XTVERSION_Confirmed, Terminal_Version_Known=True
+   procedure Test_Refine_B4_Warp_Confirmed (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B4 edge: Likely_Supported + XTVERSION = {Warp, "garbage"}
+   --  -> Supported because of Treat_Any => True (mirrors WezTerm any-version)
+   procedure Test_Refine_B4_Warp_Unparseable_Still_Supported (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B4 regression: iTerm2 3.0.0 must still be demoted to Unsupported
+   --  (the Warp addition must not affect existing min-version logic).
+   procedure Test_Refine_B4_iTerm2_Below_Min_Regression (T : in out AUnit.Test_Cases.Test_Case'Class);
+
 end Test_Hyperlinks;

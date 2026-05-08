@@ -5,13 +5,17 @@
 --  SPDX-License-Identifier: Apache-2.0
 -------------------------------------------------------------------------------
 
+with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
+
 with AUnit.Assertions;              use AUnit.Assertions;
 with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
 
 with Interfaces.C;
 
-with Termicap.Graphics; use Termicap.Graphics;
+with Termicap.Environment;
+with Termicap.Graphics;  use Termicap.Graphics;
 with Termicap.Graphics.IO;
+with Termicap.XTVERSION; use Termicap.XTVERSION;
 use Termicap;
 
 package body Test_Graphics is
@@ -162,6 +166,78 @@ package body Test_Graphics is
       Register_Routine (T, Test_Detect_No_Exception'Access, "FUNC-SXL-016: Detect_Graphics returns without exception");
       Register_Routine
         (T, Test_Detect_Cache_Consistency'Access, "FUNC-SXL-017: Detect_Graphics called twice -> same Probed flag");
+
+      --  B3 — Conformance Divergence regression (APC parser variants)
+      Register_Routine
+        (T,
+         Test_B3_Parse_Apc_iTerm2_OK_With_Id'Access,
+         "B3 (FUNC-SXL-011): ESC _ G i=31;OK ESC \\ -> OK (iTerm2 form)");
+      Register_Routine
+        (T, Test_B3_Parse_Apc_OK_BEL_Terminator'Access, "B3 (FUNC-SXL-011): ESC _ G OK BEL -> OK (BEL terminator)");
+      Register_Routine
+        (T,
+         Test_B3_Parse_Apc_iTerm2_EINVAL'Access,
+         "B3 (FUNC-SXL-011): ESC _ G i=31;EINVAL: bad image ESC \\ -> Error");
+      Register_Routine
+        (T,
+         Test_B3_Parse_Apc_No_G_Introducer'Access,
+         "B3 (FUNC-SXL-011): APC envelope without 'G' introducer -> Not_Present");
+
+      --  B2 — Has_Sixel_From_Env passive harvest regression
+      Register_Routine
+        (T,
+         Test_B2_Sixel_Env_Xterm256_False'Access,
+         "B2 (FUNC-SXL-008): TERM=xterm-256color, no TERM_PROGRAM -> False");
+      Register_Routine
+        (T,
+         Test_B2_Sixel_Env_Xterm_Kitty_False'Access,
+         "B2 (FUNC-SXL-008): TERM=xterm-kitty -> False (kitty has no sixel)");
+      Register_Routine (T, Test_B2_Sixel_Env_Mlterm_True'Access, "B2 (FUNC-SXL-008): TERM=mlterm -> True");
+      Register_Routine (T, Test_B2_Sixel_Env_Foot_True'Access, "B2 (FUNC-SXL-008): TERM=foot -> True");
+      Register_Routine (T, Test_B2_Sixel_Env_Wezterm_True'Access, "B2 (FUNC-SXL-008): TERM_PROGRAM=WezTerm -> True");
+      Register_Routine
+        (T,
+         Test_B2_Sixel_Env_AppleTerminal_False'Access,
+         "B2 (FUNC-SXL-008): TERM=xterm-256color + TERM_PROGRAM=Apple_Terminal -> False");
+      Register_Routine (T, Test_B2_Sixel_Env_Empty_False'Access, "B2 (FUNC-SXL-008): empty env -> False");
+
+      --  B3 — Refine_Kitty_With_XTVERSION refinement regression
+      Register_Routine
+        (T,
+         Test_B3_Refine_iTerm2_3_6_Promotes'Access,
+         "B3 (FUNC-SXL-010): XTVERSION iTerm2 3.6.10 -> Kitty_Graphics_Supported = True");
+      Register_Routine
+        (T,
+         Test_B3_Refine_iTerm2_3_5_Stays_False'Access,
+         "B3 (FUNC-SXL-010): XTVERSION iTerm2 3.5.0 -> Kitty_Graphics_Supported = False");
+      Register_Routine
+        (T, Test_B3_Refine_Kitty_0_21_Promotes'Access, "B3 (FUNC-SXL-010): XTVERSION kitty 0.21.0 -> True");
+      Register_Routine
+        (T,
+         Test_B3_Refine_Kitty_0_19_Stays_False'Access,
+         "B3 (FUNC-SXL-010): XTVERSION kitty 0.19.0 -> False (below 0.20.0)");
+      Register_Routine
+        (T,
+         Test_B3_Refine_WezTerm_Any_Promotes'Access,
+         "B3 (FUNC-SXL-010): XTVERSION WezTerm any version -> True (Treat_Any)");
+      Register_Routine
+        (T,
+         Test_B3_Refine_Ghostty_Any_Promotes'Access,
+         "B3 (FUNC-SXL-010): XTVERSION Ghostty any version -> True (Treat_Any)");
+      Register_Routine
+        (T, Test_B3_Refine_Konsole_22_4_Promotes'Access, "B3 (FUNC-SXL-010): XTVERSION Konsole 22.4.0 -> True");
+      Register_Routine
+        (T,
+         Test_B3_Refine_AppleTerminal_Stays_False'Access,
+         "B3 (FUNC-SXL-010): XTVERSION Apple_Terminal -> False (not in allowlist)");
+      Register_Routine
+        (T,
+         Test_B3_Refine_XTVERSION_Failure_Returns_Passive'Access,
+         "B3 (FUNC-SXL-010): XTVERSION Status=Timeout -> Passive returned unchanged");
+      Register_Routine
+        (T,
+         Test_B3_Refine_Already_Supported_Stays_Supported'Access,
+         "B3 (FUNC-SXL-010): Passive Kitty=True + unknown name -> stays True (no downgrade)");
    end Register_Tests;
 
 
@@ -692,5 +768,331 @@ package body Test_Graphics is
         (First.Kitty_Graphics_Supported = Second.Kitty_Graphics_Supported,
          "FUNC-SXL-017: two calls to Detect_Graphics -> same Kitty_Graphics_Supported");
    end Test_Detect_Cache_Consistency;
+
+
+   ---------------------------------------------------------------------------
+   --  B2/B3 — Conformance Divergence Regression Tests
+   --
+   --  Source: reference-frameworks/analysis/divergence/
+   --          2026-05-08-conformance-divergences.md §B2, §B3
+   --
+   --  These tests exercise the post-fix surface area exposed in
+   --  Termicap.Graphics.IO:
+   --    - Has_Sixel_From_Env (FUNC-SXL-008) — passive Sixel harvest with the
+   --      narrowed allowlist (no xterm-prefix rule, no xterm-kitty entry).
+   --    - Refine_Kitty_With_XTVERSION (FUNC-SXL-010) — XTVERSION-driven Kitty
+   --      graphics promotion mirroring Termicap.Hyperlinks.Refine_With_XTVERSION.
+   --
+   --  The B3 *parser* cases below remain testable through the existing public
+   --  Parse_Kitty_APC_Response surface and are written as concrete vectors.
+   ---------------------------------------------------------------------------
+
+   procedure Test_B3_Parse_Apc_iTerm2_OK_With_Id (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      --  Vector from divergence report §B3 "Tests to add":
+      --    \x1b_Gi=31;OK\x1b\\
+      --  Bytes: ESC _ G i = 3 1 ; O K ESC \\
+      --  i=0x69 ==0x3D 3=0x33 1=0x31 ;=0x3B
+      Buf    : constant Byte_Array (1 .. 13) :=
+        [ESC_BYTE,
+         APC_BYTE,
+         G_BYTE,
+         Character'Pos ('i'),
+         Character'Pos ('='),
+         Character'Pos ('3'),
+         Character'Pos ('1'),
+         Character'Pos (';'),
+         O_BYTE,
+         K_BYTE,
+         ESC_BYTE,
+         ST_BYTE,
+         16#00#];
+      Result : constant APC_Parse_Result := Parse_Kitty_APC_Response (Buf, 12);
+   begin
+      Assert (Result = OK, "B3 (FUNC-SXL-011): ESC _ G i=31;OK ESC \\ should return OK");
+   end Test_B3_Parse_Apc_iTerm2_OK_With_Id;
+
+   procedure Test_B3_Parse_Apc_OK_BEL_Terminator (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      --  Vector from divergence report §B3:
+      --    \x1b_GOK\x07
+      --  ESC _ G O K BEL -- BEL (0x07) is documented as an alternate APC
+      --  terminator (FUNC-SXL-011 doc).
+      BEL_BYTE : constant Byte := 16#07#;
+      Buf      : constant Byte_Array (1 .. 6) := [ESC_BYTE, APC_BYTE, G_BYTE, O_BYTE, K_BYTE, BEL_BYTE];
+      Result   : constant APC_Parse_Result := Parse_Kitty_APC_Response (Buf, 6);
+   begin
+      Assert (Result = OK, "B3 (FUNC-SXL-011): ESC _ G OK BEL should return OK (BEL terminator)");
+   end Test_B3_Parse_Apc_OK_BEL_Terminator;
+
+   procedure Test_B3_Parse_Apc_iTerm2_EINVAL (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      --  Vector from divergence report §B3 "Tests to add":
+      --    \x1b_Gi=31;EINVAL: bad image\x1b\\
+      --  Bytes: ESC _ G i = 3 1 ; E I N V A L : space b a d space i m a g e ESC \\
+      Buf    : constant Byte_Array (1 .. 25) :=
+        [ESC_BYTE,
+         APC_BYTE,
+         G_BYTE,
+         Character'Pos ('i'),
+         Character'Pos ('='),
+         Character'Pos ('3'),
+         Character'Pos ('1'),
+         Character'Pos (';'),
+         E_BYTE,
+         I_BYTE,
+         N_BYTE,
+         V_BYTE,
+         A_BYTE,
+         L_BYTE,
+         Character'Pos (':'),
+         SPACE,
+         Character'Pos ('b'),
+         A_BYTE,
+         Character'Pos ('d'),
+         SPACE,
+         Character'Pos ('i'),
+         Character'Pos ('m'),
+         Character'Pos ('a'),
+         ESC_BYTE,
+         ST_BYTE];
+      Result : constant APC_Parse_Result := Parse_Kitty_APC_Response (Buf, 25);
+   begin
+      Assert (Result = Error, "B3 (FUNC-SXL-011): ESC _ G i=31;EINVAL: bad image ESC \\ should return Error");
+   end Test_B3_Parse_Apc_iTerm2_EINVAL;
+
+   procedure Test_B3_Parse_Apc_No_G_Introducer (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      --  Vector from divergence report §B3 "Tests to add":
+      --    Reply with no 'G' introducer -> Not_Present.
+      --  Bytes: ESC _ X OK ESC \\ — APC opener is present but the byte after
+      --  '_' is 'X', not 'G', so this is not a Kitty graphics response.
+      X_BYTE : constant Byte := Character'Pos ('X');
+      Buf    : constant Byte_Array (1 .. 7) := [ESC_BYTE, APC_BYTE, X_BYTE, O_BYTE, K_BYTE, ESC_BYTE, ST_BYTE];
+      Result : constant APC_Parse_Result := Parse_Kitty_APC_Response (Buf, 7);
+   begin
+      Assert (Result = Not_Present, "B3 (FUNC-SXL-011): APC envelope without 'G' introducer should return Not_Present");
+   end Test_B3_Parse_Apc_No_G_Introducer;
+
+
+   ---------------------------------------------------------------------------
+   --  Local helpers for B3 refinement tests
+   ---------------------------------------------------------------------------
+
+   --  Build an XTVERSION_Result with Status = Success.
+   function XTV_Success (Name : String; Version : String) return XTVERSION_Result is
+   begin
+      return
+        (Status           => Success,
+         Terminal_Name    => To_Unbounded_String (Name),
+         Terminal_Version => To_Unbounded_String (Version));
+   end XTV_Success;
+
+   --  Build an XTVERSION_Result with Status = Timeout.
+   function XTV_Timeout return XTVERSION_Result is
+   begin
+      return (Status => Timeout);
+   end XTV_Timeout;
+
+
+   ---------------------------------------------------------------------------
+   --  B2 — Has_Sixel_From_Env passive harvest tests (FUNC-SXL-008)
+   ---------------------------------------------------------------------------
+
+   procedure Test_B2_Sixel_Env_Xterm256_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Env : Termicap.Environment.Environment := Termicap.Environment.EMPTY_ENVIRONMENT;
+   begin
+      --  Regression: the buggy "TERM prefix xterm" step has been removed
+      --  (B2a in the divergence report).  TERM=xterm-256color alone must
+      --  return False.
+      Termicap.Environment.Insert (Env, "TERM", "xterm-256color");
+      Assert
+        (not Termicap.Graphics.IO.Has_Sixel_From_Env (Env),
+         "B2 (FUNC-SXL-008): TERM=xterm-256color (no TERM_PROGRAM) should return False");
+   end Test_B2_Sixel_Env_Xterm256_False;
+
+   procedure Test_B2_Sixel_Env_Xterm_Kitty_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Env : Termicap.Environment.Environment := Termicap.Environment.EMPTY_ENVIRONMENT;
+   begin
+      --  kitty does NOT implement sixel; xterm-kitty was removed from the
+      --  exact-match allowlist (B2a).
+      Termicap.Environment.Insert (Env, "TERM", "xterm-kitty");
+      Assert
+        (not Termicap.Graphics.IO.Has_Sixel_From_Env (Env),
+         "B2 (FUNC-SXL-008): TERM=xterm-kitty should return False (kitty has no sixel)");
+   end Test_B2_Sixel_Env_Xterm_Kitty_False;
+
+   procedure Test_B2_Sixel_Env_Mlterm_True (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Env : Termicap.Environment.Environment := Termicap.Environment.EMPTY_ENVIRONMENT;
+   begin
+      Termicap.Environment.Insert (Env, "TERM", "mlterm");
+      Assert (Termicap.Graphics.IO.Has_Sixel_From_Env (Env), "B2 (FUNC-SXL-008): TERM=mlterm should return True");
+   end Test_B2_Sixel_Env_Mlterm_True;
+
+   procedure Test_B2_Sixel_Env_Foot_True (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Env : Termicap.Environment.Environment := Termicap.Environment.EMPTY_ENVIRONMENT;
+   begin
+      Termicap.Environment.Insert (Env, "TERM", "foot");
+      Assert (Termicap.Graphics.IO.Has_Sixel_From_Env (Env), "B2 (FUNC-SXL-008): TERM=foot should return True");
+   end Test_B2_Sixel_Env_Foot_True;
+
+   procedure Test_B2_Sixel_Env_Wezterm_True (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Env : Termicap.Environment.Environment := Termicap.Environment.EMPTY_ENVIRONMENT;
+   begin
+      --  TERM_PROGRAM=WezTerm fires Step 1 of the post-B2a allowlist regardless
+      --  of TERM (here we set TERM=xterm-256color to prove the prefix rule no
+      --  longer interferes).
+      Termicap.Environment.Insert (Env, "TERM", "xterm-256color");
+      Termicap.Environment.Insert (Env, "TERM_PROGRAM", "WezTerm");
+      Assert
+        (Termicap.Graphics.IO.Has_Sixel_From_Env (Env), "B2 (FUNC-SXL-008): TERM_PROGRAM=WezTerm should return True");
+   end Test_B2_Sixel_Env_Wezterm_True;
+
+   procedure Test_B2_Sixel_Env_AppleTerminal_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Env : Termicap.Environment.Environment := Termicap.Environment.EMPTY_ENVIRONMENT;
+   begin
+      --  Apple Terminal does not support sixel; the post-B2a allowlist must
+      --  not promote on TERM=xterm-256color, regardless of TERM_PROGRAM.
+      Termicap.Environment.Insert (Env, "TERM", "xterm-256color");
+      Termicap.Environment.Insert (Env, "TERM_PROGRAM", "Apple_Terminal");
+      Assert
+        (not Termicap.Graphics.IO.Has_Sixel_From_Env (Env),
+         "B2 (FUNC-SXL-008): TERM=xterm-256color + TERM_PROGRAM=Apple_Terminal should return False");
+   end Test_B2_Sixel_Env_AppleTerminal_False;
+
+   procedure Test_B2_Sixel_Env_Empty_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Env : constant Termicap.Environment.Environment := Termicap.Environment.EMPTY_ENVIRONMENT;
+   begin
+      Assert (not Termicap.Graphics.IO.Has_Sixel_From_Env (Env), "B2 (FUNC-SXL-008): empty env should return False");
+   end Test_B2_Sixel_Env_Empty_False;
+
+
+   ---------------------------------------------------------------------------
+   --  B3 — Refine_Kitty_With_XTVERSION refinement tests (FUNC-SXL-010)
+   ---------------------------------------------------------------------------
+
+   --  Common starting point: Kitty_Graphics_Supported = False (the case the
+   --  XTVERSION refinement is designed to promote).
+   PASSIVE_NO_KITTY : constant Graphics_Capabilities := NO_GRAPHICS_CAPABILITIES;
+
+   procedure Test_B3_Refine_iTerm2_3_6_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION (PASSIVE_NO_KITTY, XTV_Success ("iTerm2", "3.6.10"));
+   begin
+      Assert
+        (Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION iTerm2 3.6.10 should promote Kitty_Graphics_Supported to True");
+   end Test_B3_Refine_iTerm2_3_6_Promotes;
+
+   procedure Test_B3_Refine_iTerm2_3_5_Stays_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION (PASSIVE_NO_KITTY, XTV_Success ("iTerm2", "3.5.0"));
+   begin
+      Assert
+        (not Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION iTerm2 3.5.0 (below 3.6.0) should leave Kitty_Graphics_Supported = False");
+   end Test_B3_Refine_iTerm2_3_5_Stays_False;
+
+   procedure Test_B3_Refine_Kitty_0_21_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION (PASSIVE_NO_KITTY, XTV_Success ("kitty", "0.21.0"));
+   begin
+      Assert
+        (Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION kitty 0.21.0 should promote Kitty_Graphics_Supported to True");
+   end Test_B3_Refine_Kitty_0_21_Promotes;
+
+   procedure Test_B3_Refine_Kitty_0_19_Stays_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION (PASSIVE_NO_KITTY, XTV_Success ("kitty", "0.19.0"));
+   begin
+      Assert
+        (not Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION kitty 0.19.0 (below 0.20.0) should leave Kitty_Graphics_Supported = False");
+   end Test_B3_Refine_Kitty_0_19_Stays_False;
+
+   procedure Test_B3_Refine_WezTerm_Any_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION
+          (PASSIVE_NO_KITTY, XTV_Success ("WezTerm", "20240101-000000-aaaaaaaa"));
+   begin
+      Assert
+        (Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION WezTerm any version should promote (Treat_Any => True)");
+   end Test_B3_Refine_WezTerm_Any_Promotes;
+
+   procedure Test_B3_Refine_Ghostty_Any_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION (PASSIVE_NO_KITTY, XTV_Success ("Ghostty", "1.0.0"));
+   begin
+      Assert
+        (Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION Ghostty any version should promote (Treat_Any => True)");
+   end Test_B3_Refine_Ghostty_Any_Promotes;
+
+   procedure Test_B3_Refine_Konsole_22_4_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION (PASSIVE_NO_KITTY, XTV_Success ("Konsole", "22.4.0"));
+   begin
+      Assert
+        (Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION Konsole 22.4.0 should promote Kitty_Graphics_Supported to True");
+   end Test_B3_Refine_Konsole_22_4_Promotes;
+
+   procedure Test_B3_Refine_AppleTerminal_Stays_False (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION (PASSIVE_NO_KITTY, XTV_Success ("Apple_Terminal", "455.1"));
+   begin
+      Assert
+        (not Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION Apple_Terminal not in allowlist; must leave Kitty_Graphics_Supported = False");
+   end Test_B3_Refine_AppleTerminal_Stays_False;
+
+   procedure Test_B3_Refine_XTVERSION_Failure_Returns_Passive (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Refined : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION (PASSIVE_NO_KITTY, XTV_Timeout);
+   begin
+      Assert
+        (not Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION Status=Timeout must return Passive unchanged");
+      Assert
+        (Refined.Sixel_Supported = PASSIVE_NO_KITTY.Sixel_Supported,
+         "B3 (FUNC-SXL-010): XTVERSION Status=Timeout must preserve all Passive fields");
+   end Test_B3_Refine_XTVERSION_Failure_Returns_Passive;
+
+   procedure Test_B3_Refine_Already_Supported_Stays_Supported (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Passive_With_Kitty : constant Graphics_Capabilities :=
+        (Sixel_Supported          => False,
+         Kitty_Graphics_Supported => True,
+         Sixel_Via_DA1            => False,
+         Kitty_Via_Active_Probe   => False,
+         Probed                   => False,
+         Sixel_Color_Registers    => 0,
+         Kitty_Graphics_Version   => 0);
+      Refined            : constant Graphics_Capabilities :=
+        Termicap.Graphics.IO.Refine_Kitty_With_XTVERSION
+          (Passive_With_Kitty, XTV_Success ("SomeUnknownTerminal", "1.0.0"));
+   begin
+      Assert
+        (Refined.Kitty_Graphics_Supported,
+         "B3 (FUNC-SXL-010): unknown XTVERSION name must NOT downgrade an existing Kitty_Graphics_Supported = True");
+   end Test_B3_Refine_Already_Supported_Stays_Supported;
 
 end Test_Graphics;

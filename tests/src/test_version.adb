@@ -48,60 +48,63 @@ package body Test_Version is
    procedure Register_Tests (T : in out Test_Case) is
    begin
       --  Parse — valid
-      Register_Routine (T, Test_Parse_Single_Zero'Access,    "FUNC-HYP-013: Parse(0) -> Count=1, Parts(1)=0");
-      Register_Routine (T, Test_Parse_Zero_Dot_Zero'Access,  "FUNC-HYP-013: Parse(0.0) -> Count=2");
-      Register_Routine (T, Test_Parse_Zero_Dot_50'Access,    "FUNC-HYP-013: Parse(0.50) -> Count=2, Parts(2)=50");
+      Register_Routine (T, Test_Parse_Single_Zero'Access, "FUNC-HYP-013: Parse(0) -> Count=1, Parts(1)=0");
+      Register_Routine (T, Test_Parse_Zero_Dot_Zero'Access, "FUNC-HYP-013: Parse(0.0) -> Count=2");
+      Register_Routine (T, Test_Parse_Zero_Dot_50'Access, "FUNC-HYP-013: Parse(0.50) -> Count=2, Parts(2)=50");
       Register_Routine (T, Test_Parse_Zero_Dot_50_Dot_0'Access, "FUNC-HYP-013: Parse(0.50.0) -> Count=3");
       Register_Routine (T, Test_Parse_Three_One_Zero'Access, "FUNC-HYP-013: Parse(3.1.0) -> Count=3");
       Register_Routine (T, Test_Parse_Single_Integer'Access, "FUNC-HYP-013: Parse(357) -> Count=1, Parts(1)=357");
       Register_Routine (T, Test_Parse_Four_Components'Access, "FUNC-HYP-013: Parse(1.2.3.4) -> Count=4");
-      Register_Routine (T, Test_Parse_Eight_Components'Access, "FUNC-HYP-013: Parse(8-component) -> Count=8 (MAX boundary)");
+      Register_Routine
+        (T, Test_Parse_Eight_Components'Access, "FUNC-HYP-013: Parse(8-component) -> Count=8 (MAX boundary)");
 
       --  Parse — invalid
-      Register_Routine (T, Test_Parse_Empty_String'Access,    "FUNC-HYP-013: Parse("""") -> Failure");
-      Register_Routine (T, Test_Parse_Trailing_Dot'Access,    "FUNC-HYP-013: Parse(1.) -> Failure");
-      Register_Routine (T, Test_Parse_Leading_Dot'Access,     "FUNC-HYP-013: Parse(.1) -> Failure");
-      Register_Routine (T, Test_Parse_Double_Dot'Access,      "FUNC-HYP-013: Parse(1..2) -> Failure");
+      Register_Routine (T, Test_Parse_Empty_String'Access, "FUNC-HYP-013: Parse("""") -> Failure");
+      Register_Routine (T, Test_Parse_Trailing_Dot'Access, "FUNC-HYP-013: Parse(1.) -> Failure");
+      Register_Routine (T, Test_Parse_Leading_Dot'Access, "FUNC-HYP-013: Parse(.1) -> Failure");
+      Register_Routine (T, Test_Parse_Double_Dot'Access, "FUNC-HYP-013: Parse(1..2) -> Failure");
       Register_Routine (T, Test_Parse_Alpha_Component'Access, "FUNC-HYP-013: Parse(1.a) -> Failure");
-      Register_Routine (T, Test_Parse_All_Alpha'Access,       "FUNC-HYP-013: Parse(abc) -> Failure");
+      Register_Routine (T, Test_Parse_All_Alpha'Access, "FUNC-HYP-013: Parse(abc) -> Failure");
       Register_Routine (T, Test_Parse_Nine_Components'Access, "FUNC-HYP-013: Parse(9 components) -> Failure (>MAX)");
       Register_Routine (T, Test_Parse_Space_Separator'Access, "FUNC-HYP-013: Parse(1 2) -> Failure");
-      Register_Routine (T, Test_Parse_Leading_Space'Access,   "FUNC-HYP-013: Parse( 1.2) -> Failure");
-      Register_Routine (T, Test_Parse_Trailing_Space'Access,  "FUNC-HYP-013: Parse(1.2 ) -> Failure");
-      Register_Routine (T, Test_Parse_Negative'Access,        "FUNC-HYP-013: Parse(-1) -> Failure");
+      Register_Routine (T, Test_Parse_Leading_Space'Access, "FUNC-HYP-013: Parse( 1.2) -> Failure");
+      Register_Routine (T, Test_Parse_Trailing_Space'Access, "FUNC-HYP-013: Parse(1.2 ) -> Failure");
+      Register_Routine (T, Test_Parse_Negative'Access, "FUNC-HYP-013: Parse(-1) -> Failure");
       Register_Routine (T, Test_Parse_Explicit_Positive'Access, "FUNC-HYP-013: Parse(+1) -> Failure");
 
       --  Parse — overflow
-      Register_Routine (T, Test_Parse_Overflow_Component'Access,
-                        "FUNC-HYP-013: Parse(Natural_Last+1) -> Failure (overflow)");
+      Register_Routine
+        (T, Test_Parse_Overflow_Component'Access, "FUNC-HYP-013: Parse(Natural_Last+1) -> Failure (overflow)");
 
       --  Parse — SPARK postcondition coverage
-      Register_Routine (T, Test_Parse_Success_Count_Bounds'Access,
-                        "FUNC-HYP-013: Parse success => Count in 1..MAX_VERSION_COMPONENTS");
-      Register_Routine (T, Test_Parse_Failure_Yields_Zero_Version'Access,
-                        "FUNC-HYP-013: Parse failure => Count = 0 (ZERO_VERSION)");
+      Register_Routine
+        (T,
+         Test_Parse_Success_Count_Bounds'Access,
+         "FUNC-HYP-013: Parse success => Count in 1..MAX_VERSION_COMPONENTS");
+      Register_Routine
+        (T, Test_Parse_Failure_Yields_Zero_Version'Access, "FUNC-HYP-013: Parse failure => Count = 0 (ZERO_VERSION)");
 
       --  Compare
-      Register_Routine (T, Test_Compare_Equal'Access,               "FUNC-HYP-013: Compare(3.1.0, 3.1.0) = Equal");
-      Register_Routine (T, Test_Compare_Equal_Single'Access,         "FUNC-HYP-013: Compare(357, 357) = Equal");
-      Register_Routine (T, Test_Compare_Less'Access,                 "FUNC-HYP-013: Compare(3.0.0, 3.1.0) = Less_Than");
-      Register_Routine (T, Test_Compare_Greater'Access,              "FUNC-HYP-013: Compare(3.1.0, 3.0.0) = Greater_Than");
-      Register_Routine (T, Test_Compare_Prefix_Rule_Less'Access,     "FUNC-HYP-013: Compare(0.50, 0.50.0) = Less_Than");
-      Register_Routine (T, Test_Compare_Prefix_Rule_Greater'Access,  "FUNC-HYP-013: Compare(0.50.0, 0.50) = Greater_Than");
-      Register_Routine (T, Test_Compare_Single_Integer_Less'Access,  "FUNC-HYP-013: Compare(357, 380) = Less_Than");
-      Register_Routine (T, Test_Compare_Zero_Version_Less'Access,    "FUNC-HYP-013: Compare(ZERO, 0.1) = Less_Than");
-      Register_Routine (T, Test_Compare_Zero_Version_Equal'Access,   "FUNC-HYP-013: Compare(ZERO, ZERO) = Equal");
-      Register_Routine (T, Test_Compare_Mixed_Length_Leading_Differs'Access,
-                        "FUNC-HYP-013: Compare(1.0, 0.50) = Greater_Than");
-      Register_Routine (T, Test_Compare_Antisymmetry'Access,
-                        "FUNC-HYP-013: antisymmetry: Less_Than <-> Greater_Than");
+      Register_Routine (T, Test_Compare_Equal'Access, "FUNC-HYP-013: Compare(3.1.0, 3.1.0) = Equal");
+      Register_Routine (T, Test_Compare_Equal_Single'Access, "FUNC-HYP-013: Compare(357, 357) = Equal");
+      Register_Routine (T, Test_Compare_Less'Access, "FUNC-HYP-013: Compare(3.0.0, 3.1.0) = Less_Than");
+      Register_Routine (T, Test_Compare_Greater'Access, "FUNC-HYP-013: Compare(3.1.0, 3.0.0) = Greater_Than");
+      Register_Routine (T, Test_Compare_Prefix_Rule_Less'Access, "FUNC-HYP-013: Compare(0.50, 0.50.0) = Less_Than");
+      Register_Routine
+        (T, Test_Compare_Prefix_Rule_Greater'Access, "FUNC-HYP-013: Compare(0.50.0, 0.50) = Greater_Than");
+      Register_Routine (T, Test_Compare_Single_Integer_Less'Access, "FUNC-HYP-013: Compare(357, 380) = Less_Than");
+      Register_Routine (T, Test_Compare_Zero_Version_Less'Access, "FUNC-HYP-013: Compare(ZERO, 0.1) = Less_Than");
+      Register_Routine (T, Test_Compare_Zero_Version_Equal'Access, "FUNC-HYP-013: Compare(ZERO, ZERO) = Equal");
+      Register_Routine
+        (T, Test_Compare_Mixed_Length_Leading_Differs'Access, "FUNC-HYP-013: Compare(1.0, 0.50) = Greater_Than");
+      Register_Routine (T, Test_Compare_Antisymmetry'Access, "FUNC-HYP-013: antisymmetry: Less_Than <-> Greater_Than");
 
       --  Make
-      Register_Routine (T, Test_Make_One_Component'Access,    "FUNC-HYP-013: Make(3) -> Count=1");
-      Register_Routine (T, Test_Make_Two_Components'Access,   "FUNC-HYP-013: Make(0,50) -> Count=2, Parts(2)=50");
+      Register_Routine (T, Test_Make_One_Component'Access, "FUNC-HYP-013: Make(3) -> Count=1");
+      Register_Routine (T, Test_Make_Two_Components'Access, "FUNC-HYP-013: Make(0,50) -> Count=2, Parts(2)=50");
       Register_Routine (T, Test_Make_Three_Components'Access, "FUNC-HYP-013: Make(3,1,0) -> Count=3");
-      Register_Routine (T, Test_Make_No_Patch'Access,         "FUNC-HYP-013: Make(Has_Patch=>False) -> Count=2");
-      Register_Routine (T, Test_Make_No_Minor'Access,         "FUNC-HYP-013: Make(Has_Minor=>False) -> Count=1");
+      Register_Routine (T, Test_Make_No_Patch'Access, "FUNC-HYP-013: Make(Has_Patch=>False) -> Count=2");
+      Register_Routine (T, Test_Make_No_Minor'Access, "FUNC-HYP-013: Make(Has_Minor=>False) -> Count=1");
    end Register_Tests;
 
 
@@ -337,8 +340,7 @@ package body Test_Version is
       V1 : constant Version := Parse_OK ("0.50");
       V2 : constant Version := Parse_OK ("0.50.0");
    begin
-      Assert (Compare (V1, V2) = Less_Than,
-              "Compare(0.50, 0.50.0) should be Less_Than (prefix rule: shorter is less)");
+      Assert (Compare (V1, V2) = Less_Than, "Compare(0.50, 0.50.0) should be Less_Than (prefix rule: shorter is less)");
    end Test_Compare_Prefix_Rule_Less;
 
    procedure Test_Compare_Prefix_Rule_Greater (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -346,8 +348,9 @@ package body Test_Version is
       V1 : constant Version := Parse_OK ("0.50.0");
       V2 : constant Version := Parse_OK ("0.50");
    begin
-      Assert (Compare (V1, V2) = Greater_Than,
-              "Compare(0.50.0, 0.50) should be Greater_Than (prefix rule: longer is greater)");
+      Assert
+        (Compare (V1, V2) = Greater_Than,
+         "Compare(0.50.0, 0.50) should be Greater_Than (prefix rule: longer is greater)");
    end Test_Compare_Prefix_Rule_Greater;
 
    procedure Test_Compare_Single_Integer_Less (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -362,15 +365,15 @@ package body Test_Version is
       pragma Unreferenced (T);
       V : constant Version := Parse_OK ("0.1");
    begin
-      Assert (Compare (ZERO_VERSION, V) = Less_Than,
-              "Compare(ZERO_VERSION, 0.1) should be Less_Than (0-count < any non-zero)");
+      Assert
+        (Compare (ZERO_VERSION, V) = Less_Than,
+         "Compare(ZERO_VERSION, 0.1) should be Less_Than (0-count < any non-zero)");
    end Test_Compare_Zero_Version_Less;
 
    procedure Test_Compare_Zero_Version_Equal (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
    begin
-      Assert (Compare (ZERO_VERSION, ZERO_VERSION) = Equal,
-              "Compare(ZERO_VERSION, ZERO_VERSION) should be Equal");
+      Assert (Compare (ZERO_VERSION, ZERO_VERSION) = Equal, "Compare(ZERO_VERSION, ZERO_VERSION) should be Equal");
    end Test_Compare_Zero_Version_Equal;
 
    procedure Test_Compare_Mixed_Length_Leading_Differs (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -378,8 +381,7 @@ package body Test_Version is
       V1 : constant Version := Parse_OK ("1.0");
       V2 : constant Version := Parse_OK ("0.50");
    begin
-      Assert (Compare (V1, V2) = Greater_Than,
-              "Compare(1.0, 0.50) should be Greater_Than (1 > 0 in first component)");
+      Assert (Compare (V1, V2) = Greater_Than, "Compare(1.0, 0.50) should be Greater_Than (1 > 0 in first component)");
    end Test_Compare_Mixed_Length_Leading_Differs;
 
    procedure Test_Compare_Antisymmetry (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -388,8 +390,7 @@ package body Test_Version is
       Vb : constant Version := Parse_OK ("0.50.0");
    begin
       Assert (Compare (Va, Vb) = Less_Than, "Compare(0.49.99, 0.50.0) should be Less_Than");
-      Assert (Compare (Vb, Va) = Greater_Than,
-              "Compare(0.50.0, 0.49.99) should be Greater_Than (antisymmetry)");
+      Assert (Compare (Vb, Va) = Greater_Than, "Compare(0.50.0, 0.49.99) should be Greater_Than (antisymmetry)");
    end Test_Compare_Antisymmetry;
 
    ---------------------------------------------------------------------------
@@ -409,7 +410,7 @@ package body Test_Version is
       V : constant Version := Make (Major => 0, Minor => 50, Has_Patch => False);
    begin
       Assert (V.Count = 2, "Make(0, 50, Has_Patch=>False): Count should be 2");
-      Assert (V.Parts (1) = 0,  "Make(0, 50, Has_Patch=>False): Parts(1) should be 0");
+      Assert (V.Parts (1) = 0, "Make(0, 50, Has_Patch=>False): Parts(1) should be 0");
       Assert (V.Parts (2) = 50, "Make(0, 50, Has_Patch=>False): Parts(2) should be 50");
    end Test_Make_Two_Components;
 

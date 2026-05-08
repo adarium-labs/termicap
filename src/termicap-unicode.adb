@@ -151,23 +151,25 @@ is
 
    function Detect_Windows_Unicode (Env : Termicap.Environment.Environment) return Unicode_Level is
    begin
-      --  Windows Terminal (WT_SESSION is set by Windows Terminal)
+      --  Windows Terminal renders the full Unicode plane natively.
       if Contains (Env, "WT_SESSION") then
-         return Basic;
+         return Extended;
       end if;
 
-      --  VS Code integrated terminal
+      --  VS Code integrated terminal renders full Unicode (relies on Electron).
       if Equal_Insensitive (Value (Env, "TERM_PROGRAM"), "vscode") then
-         return Basic;
+         return Extended;
       end if;
 
-      --  Known Unicode-capable TERM values on Windows
-      if Value_Matches (Env, "TERM", ["xterm-256color", "alacritty", "rxvt-unicode", "rxvt-unicode-256color"]) then
-         return Basic;
-      end if;
-
-      --  JetBrains IDE terminal
+      --  JetBrains IDE terminal renders full Unicode.
       if Equal_Insensitive (Value (Env, "TERMINAL_EMULATOR"), "JetBrains-JediTerm") then
+         return Extended;
+      end if;
+
+      --  Known Unicode-capable TERM values on Windows: keep Basic because the
+      --  legacy code-page path on Windows is BMP-only unless chcp 65001 is in
+      --  effect (which the locale path already covers via UTF-8 LC_*).
+      if Value_Matches (Env, "TERM", ["xterm-256color", "alacritty", "rxvt-unicode", "rxvt-unicode-256color"]) then
          return Basic;
       end if;
 
@@ -181,22 +183,32 @@ is
    function Detect_Unicode_Level (Env : Termicap.Environment.Environment) return Unicode_Level is
       Floor : Unicode_Level := None;
    begin
-      --  Step 1: Locale inspection (FUNC-UNI-003)
+      --  Step 1: Locale inspection (FUNC-UNI-003).  A UTF-8 locale is a strong
+      --  positive signal that the terminal renders the full Unicode plane;
+      --  align with the reference panel (is-unicode-supported, rich,
+      --  prompt_toolkit, spectre-console) and promote to Extended.
       if Has_UTF8_Locale (Env) then
-         Floor := Basic;
+         Floor := Extended;
       end if;
 
-      --  Step 2: CI heuristics (FUNC-UNI-006)
+      --  Step 2: CI heuristics (FUNC-UNI-006).  CI runners frequently do not
+      --  export a UTF-8 locale even when their renderer supports full Unicode;
+      --  cap the floor at Basic to avoid over-promoting headless runs.
       if Is_CI_Unicode (Env) then
          Floor := Unicode_Level'Max (Floor, Basic);
       end if;
 
-      --  Step 3: TERM=linux exclusion (FUNC-UNI-004)
-      if Equal_Insensitive (Value (Env, "TERM"), "linux") and then Floor = None then
+      --  Step 3: TERM=linux exclusion (FUNC-UNI-004).
+      --  The Linux kernel console renders only a small subset of code points
+      --  regardless of the locale; this exclusion is authoritative and beats
+      --  the locale floor (B1 §"Tests to add").
+      if Equal_Insensitive (Value (Env, "TERM"), "linux") then
          return None;
       end if;
 
-      --  Step 4: Windows heuristics (FUNC-UNI-005)
+      --  Step 4: Windows heuristics (FUNC-UNI-005).  Windows Terminal,
+      --  VS Code, and JetBrains JediTerm all promote to Extended; the TERM
+      --  allowlist on legacy Windows code pages stays at Basic.
       if Equal_Insensitive (Value (Env, "OS_TYPE"), "Windows_NT") then
          Floor := Unicode_Level'Max (Floor, Detect_Windows_Unicode (Env));
       end if;

@@ -28,9 +28,7 @@ package body Test_FGPGRP is
          Test_Session_Not_Foreground_Exists'Access,
          "FUNC-FGP-008: Session_Not_Foreground is a valid Session_Status value");
       Register_Routine
-        (T,
-         Test_Session_Not_Foreground_Ne_OK'Access,
-         "FUNC-FGP-008: Session_Not_Foreground /= Session_OK");
+        (T, Test_Session_Not_Foreground_Ne_OK'Access, "FUNC-FGP-008: Session_Not_Foreground /= Session_OK");
       Register_Routine
         (T,
          Test_Session_Not_Foreground_Ne_No_Terminal'Access,
@@ -81,10 +79,7 @@ package body Test_FGPGRP is
         (T,
          Test_Open_Not_Foreground_Session_Not_Open'Access,
          "FUNC-FGP-008/009: Session_Not_Foreground => Is_Open is False");
-      Register_Routine
-        (T,
-         Test_Open_OK_Session_Is_Open'Access,
-         "FUNC-FGP-008: Session_OK => Is_Open is True");
+      Register_Routine (T, Test_Open_OK_Session_Is_Open'Access, "FUNC-FGP-008: Session_OK => Is_Open is True");
       Register_Routine
         (T,
          Test_Open_Consistent_Across_Calls'Access,
@@ -107,7 +102,8 @@ package body Test_FGPGRP is
             | Session_No_Terminal
             | Session_Save_Failed
             | Session_Raw_Failed
-            | Session_Already_Active =>
+            | Session_Already_Active
+         =>
             return True;
       end case;
    end Is_Valid_Status;
@@ -137,8 +133,7 @@ package body Test_FGPGRP is
       NF : Session_Status := Session_Not_Foreground;
    begin
       Assert
-        (NF /= Session_No_Terminal,
-         "Session_Not_Foreground must be distinct from Session_No_Terminal (FUNC-FGP-008)");
+        (NF /= Session_No_Terminal, "Session_Not_Foreground must be distinct from Session_No_Terminal (FUNC-FGP-008)");
    end Test_Session_Not_Foreground_Ne_No_Terminal;
 
    procedure Test_Session_Not_Foreground_Ne_Save_Failed (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -146,8 +141,7 @@ package body Test_FGPGRP is
       NF : Session_Status := Session_Not_Foreground;
    begin
       Assert
-        (NF /= Session_Save_Failed,
-         "Session_Not_Foreground must be distinct from Session_Save_Failed (FUNC-FGP-008)");
+        (NF /= Session_Save_Failed, "Session_Not_Foreground must be distinct from Session_Save_Failed (FUNC-FGP-008)");
    end Test_Session_Not_Foreground_Ne_Save_Failed;
 
    procedure Test_Session_Not_Foreground_Ne_Raw_Failed (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -155,8 +149,7 @@ package body Test_FGPGRP is
       NF : Session_Status := Session_Not_Foreground;
    begin
       Assert
-        (NF /= Session_Raw_Failed,
-         "Session_Not_Foreground must be distinct from Session_Raw_Failed (FUNC-FGP-008)");
+        (NF /= Session_Raw_Failed, "Session_Not_Foreground must be distinct from Session_Raw_Failed (FUNC-FGP-008)");
    end Test_Session_Not_Foreground_Ne_Raw_Failed;
 
    procedure Test_Session_Not_Foreground_Ne_Already_Active (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -247,8 +240,8 @@ package body Test_FGPGRP is
       Status_2 : Session_Status;
 
       --  Helper to test foreground-related outcome category.
-      function Foreground_Suppressed (S : Session_Status) return Boolean is
-        (S = Session_Not_Foreground or else S = Session_No_Terminal);
+      function Foreground_Suppressed (S : Session_Status) return Boolean
+      is (S = Session_Not_Foreground or else S = Session_No_Terminal);
 
    begin
       declare
@@ -343,8 +336,8 @@ package body Test_FGPGRP is
       Status_1 : Session_Status;
       Status_2 : Session_Status;
 
-      function Is_Foreground_Blocked (S : Session_Status) return Boolean is
-        (S = Session_Not_Foreground);
+      function Is_Foreground_Blocked (S : Session_Status) return Boolean
+      is (S = Session_Not_Foreground);
 
    begin
       declare

@@ -23,7 +23,11 @@
 --    - @relation(FUNC-SXL-002): Sixel_Color_Registers optional field (1 vector)
 --    - @relation(FUNC-SXL-003): Kitty_Graphics_Version optional field (1 vector)
 --    - @relation(FUNC-SXL-004): Named terminal identifier constants (11 vectors)
---    - @relation(FUNC-SXL-010): KITTY_APC_QUERY constant (4 vectors)
+--    - @relation(FUNC-SXL-005): DA1 authoritative-negative clears Sixel (B2 regression vectors)
+--    - @relation(FUNC-SXL-006): DA1 probe semantics (B2 regression vectors)
+--    - @relation(FUNC-SXL-008): Has_Sixel_From_Env passive harvest (B2; 7 vectors)
+--    - @relation(FUNC-SXL-009): Refine_Kitty_With_XTVERSION known-good allowlist (B3; 10 vectors)
+--    - @relation(FUNC-SXL-010): KITTY_APC_QUERY constant + APC parser variants (4+4 vectors)
 --    - @relation(FUNC-SXL-011): APC_Parse_Result / Parse_Kitty_APC_Response (16 vectors)
 --    - @relation(FUNC-SXL-015): GRAPHICS_PROBE_TIMEOUT_MS constant (2 vectors)
 --    - @relation(FUNC-SXL-016): Detect_Graphics no-exception contract (2 vectors)
@@ -216,5 +220,91 @@ package Test_Graphics is
 
    --  FUNC-SXL-017: Calling Detect_Graphics twice returns same Probed flag (cache consistency)
    procedure Test_Detect_Cache_Consistency (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   ---------------------------------------------------------------------------
+   --  B2/B3 — Conformance Divergence Regression Tests
+   --
+   --  Source: reference-frameworks/analysis/divergence/
+   --          2026-05-08-conformance-divergences.md §B2, §B3
+   --
+   --  Most B2/B3 logical cases require injectable env / DA1 / XTVERSION
+   --  hooks that are NOT currently exposed on Termicap.Graphics.IO.  Those
+   --  test cases are marked "TODO Bx:" — see body comments for the missing
+   --  surface area.
+   --
+   --  The Parse_Kitty_APC_Response variants from §B3 ARE testable today
+   --  and are added as new vectors.
+   ---------------------------------------------------------------------------
+
+   --  B3 (APC parser): ESC _ G i=31;OK ESC \\ -> OK
+   procedure Test_B3_Parse_Apc_iTerm2_OK_With_Id (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3 (APC parser): ESC _ G OK BEL -> OK (BEL terminator alongside ESC \\)
+   procedure Test_B3_Parse_Apc_OK_BEL_Terminator (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3 (APC parser): ESC _ G i=31;EINVAL: bad image ESC \\ -> Error
+   procedure Test_B3_Parse_Apc_iTerm2_EINVAL (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3 (APC parser): reply with no 'G' introducer -> Not_Present
+   procedure Test_B3_Parse_Apc_No_G_Introducer (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   ---------------------------------------------------------------------------
+   --  B2 — Has_Sixel_From_Env passive harvest (FUNC-SXL-008)
+   ---------------------------------------------------------------------------
+
+   --  B2: TERM=xterm-256color, no TERM_PROGRAM -> False (no xterm-prefix rule).
+   procedure Test_B2_Sixel_Env_Xterm256_False (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B2: TERM=xterm-kitty -> False (kitty does not implement sixel).
+   procedure Test_B2_Sixel_Env_Xterm_Kitty_False (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B2: TERM=mlterm -> True.
+   procedure Test_B2_Sixel_Env_Mlterm_True (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B2: TERM=foot -> True.
+   procedure Test_B2_Sixel_Env_Foot_True (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B2: TERM_PROGRAM=WezTerm (any TERM) -> True.
+   procedure Test_B2_Sixel_Env_Wezterm_True (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B2: TERM=xterm-256color + TERM_PROGRAM=Apple_Terminal -> False.
+   procedure Test_B2_Sixel_Env_AppleTerminal_False (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B2: empty environment -> False.
+   procedure Test_B2_Sixel_Env_Empty_False (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   ---------------------------------------------------------------------------
+   --  B3 — Refine_Kitty_With_XTVERSION refinement (FUNC-SXL-010)
+   ---------------------------------------------------------------------------
+
+   --  B3: XTVERSION name=iTerm2, version 3.6.10 -> Kitty_Graphics_Supported = True.
+   procedure Test_B3_Refine_iTerm2_3_6_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: XTVERSION name=iTerm2, version 3.5.0 -> stays False (below minimum).
+   procedure Test_B3_Refine_iTerm2_3_5_Stays_False (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: XTVERSION name=kitty, version 0.21.0 -> True.
+   procedure Test_B3_Refine_Kitty_0_21_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: XTVERSION name=kitty, version 0.19.0 -> stays False (below 0.20.0).
+   procedure Test_B3_Refine_Kitty_0_19_Stays_False (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: XTVERSION name=WezTerm (any version) -> True (Treat_Any).
+   procedure Test_B3_Refine_WezTerm_Any_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: XTVERSION name=Ghostty (any version) -> True (Treat_Any).
+   procedure Test_B3_Refine_Ghostty_Any_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: XTVERSION name=Konsole, version 22.4.0 -> True.
+   procedure Test_B3_Refine_Konsole_22_4_Promotes (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: XTVERSION name=Apple_Terminal -> stays False (not in allowlist).
+   procedure Test_B3_Refine_AppleTerminal_Stays_False (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: XTV.Status = Failure (Timeout/Parse_Error) -> Passive returned unchanged.
+   procedure Test_B3_Refine_XTVERSION_Failure_Returns_Passive (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  B3: Passive.Kitty_Graphics_Supported = True, unknown name -> stays True (no downgrade).
+   procedure Test_B3_Refine_Already_Supported_Stays_Supported (T : in out AUnit.Test_Cases.Test_Case'Class);
 
 end Test_Graphics;

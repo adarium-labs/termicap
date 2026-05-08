@@ -167,8 +167,9 @@ is
    VSCODE_NAME           : aliased constant String := "vscode";
    GHOSTTY_NAME          : aliased constant String := "ghostty";
    KONSOLE_NAME          : aliased constant String := "konsole";
+   WARP_NAME             : aliased constant String := "warp";
 
-   KNOWN_GOOD : constant array (1 .. 12) of Known_Good_Entry :=
+   KNOWN_GOOD : constant array (1 .. 13) of Known_Good_Entry :=
      [1  => (Name => ITERM2_NAME'Access, Min_Version => Termicap.Version.Make (3, 1, 0), Treat_Any => False),
       2  => (Name => KITTY_NAME'Access, Min_Version => Termicap.Version.Make (0, 19, 0), Treat_Any => False),
       3  => (Name => WEZTERM_NAME'Access, Min_Version => Termicap.Version.ZERO_VERSION, Treat_Any => True),
@@ -181,7 +182,8 @@ is
       9  => (Name => WINDOWS_TERMINAL_NAME'Access, Min_Version => Termicap.Version.Make (1, 4, 0), Treat_Any => False),
       10 => (Name => VSCODE_NAME'Access, Min_Version => Termicap.Version.Make (1, 72, 0), Treat_Any => False),
       11 => (Name => GHOSTTY_NAME'Access, Min_Version => Termicap.Version.ZERO_VERSION, Treat_Any => True),
-      12 => (Name => KONSOLE_NAME'Access, Min_Version => Termicap.Version.ZERO_VERSION, Treat_Any => True)];
+      12 => (Name => KONSOLE_NAME'Access, Min_Version => Termicap.Version.ZERO_VERSION, Treat_Any => True),
+      13 => (Name => WARP_NAME'Access, Min_Version => Termicap.Version.ZERO_VERSION, Treat_Any => True)];
 
    ---------------------------------------------------------------------------
    --  Refine_With_XTVERSION (FUNC-HYP-011, SPARK_Mode Off)
@@ -225,7 +227,14 @@ is
             return (Support => Passive.Support, Provenance => XTVERSION_Unresolved, Terminal_Version_Known => False);
          end if;
 
-         --  Name matched.  Parse the version string.
+         --  Name matched.  "(any)" entries do not require a parseable version:
+         --  the name itself is the contract for OSC 8 support (e.g. WezTerm,
+         --  foot, Ghostty, Konsole, Warp).  Promote without parsing.
+         if KNOWN_GOOD (Entry_Idx).Treat_Any then
+            return (Support => Supported, Provenance => XTVERSION_Confirmed, Terminal_Version_Known => True);
+         end if;
+
+         --  Strict-version entries: parse the reported version string.
          declare
             Reported : Termicap.Version.Version;
             Ok       : Boolean;
@@ -235,11 +244,6 @@ is
             if not Ok then
                --  Name recognised but version unparseable: stay on passive support.
                return (Support => Passive.Support, Provenance => Env_Known_Good, Terminal_Version_Known => True);
-            end if;
-
-            --  "(any)" entries: any successfully parsed version satisfies the minimum.
-            if KNOWN_GOOD (Entry_Idx).Treat_Any then
-               return (Support => Supported, Provenance => XTVERSION_Confirmed, Terminal_Version_Known => True);
             end if;
 
             --  Compare reported version against the minimum.

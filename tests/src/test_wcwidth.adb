@@ -30,8 +30,7 @@ package body Test_Wcwidth is
       Register_Routine (T, Test_Sentinels_Ordered'Access, "FUNC-WCW-002: sentinels ordered UNI3 < UNI13 < UNI16");
 
       --  FUNC-WCW-004: Wcwidth_Level ordering
-      Register_Routine
-        (T, Test_Wcwidth_Level_Unknown_Is_First'Access, "FUNC-WCW-004: Unknown is Wcwidth_Level'First");
+      Register_Routine (T, Test_Wcwidth_Level_Unknown_Is_First'Access, "FUNC-WCW-004: Unknown is Wcwidth_Level'First");
       Register_Routine
         (T, Test_Wcwidth_Level_Unicode16_Is_Last'Access, "FUNC-WCW-004: Unicode_16 is Wcwidth_Level'Last");
       Register_Routine
@@ -138,12 +137,9 @@ package body Test_Wcwidth is
       Assert (WCW_SENTINEL_UNI13 /= WCW_SENTINEL_UNI16, "WCW_SENTINEL_UNI13 and WCW_SENTINEL_UNI16 must be distinct");
       Assert (WCW_SENTINEL_UNI3 /= WCW_SENTINEL_UNI16, "WCW_SENTINEL_UNI3 and WCW_SENTINEL_UNI16 must be distinct");
       --  UNI3 is smallest; UNI16 is in the middle; UNI13 is largest (different blocks)
+      Assert (WCW_SENTINEL_UNI3 < WCW_SENTINEL_UNI16, "WCW_SENTINEL_UNI3 (16#28FF#) < WCW_SENTINEL_UNI16 (16#1CD00#)");
       Assert
-        (WCW_SENTINEL_UNI3 < WCW_SENTINEL_UNI16,
-         "WCW_SENTINEL_UNI3 (16#28FF#) < WCW_SENTINEL_UNI16 (16#1CD00#)");
-      Assert
-        (WCW_SENTINEL_UNI16 < WCW_SENTINEL_UNI13,
-         "WCW_SENTINEL_UNI16 (16#1CD00#) < WCW_SENTINEL_UNI13 (16#1FB38#)");
+        (WCW_SENTINEL_UNI16 < WCW_SENTINEL_UNI13, "WCW_SENTINEL_UNI16 (16#1CD00#) < WCW_SENTINEL_UNI13 (16#1FB38#)");
    end Test_Sentinels_Ordered;
 
    ---------------------------------------------------------------------------
@@ -295,18 +291,15 @@ package body Test_Wcwidth is
       --  Verify Result >= Env_Level for all 12 combinations
    begin
       --  Env = None
-      Assert
-        (Refine_Unicode_Level (None, Unknown) >= None, "Refine(None, Unknown): result >= None (no downgrade)");
-      Assert
-        (Refine_Unicode_Level (None, Unicode_3) >= None, "Refine(None, Unicode_3): result >= None (no downgrade)");
+      Assert (Refine_Unicode_Level (None, Unknown) >= None, "Refine(None, Unknown): result >= None (no downgrade)");
+      Assert (Refine_Unicode_Level (None, Unicode_3) >= None, "Refine(None, Unicode_3): result >= None (no downgrade)");
       Assert
         (Refine_Unicode_Level (None, Unicode_13) >= None, "Refine(None, Unicode_13): result >= None (no downgrade)");
       Assert
         (Refine_Unicode_Level (None, Unicode_16) >= None, "Refine(None, Unicode_16): result >= None (no downgrade)");
 
       --  Env = Basic
-      Assert
-        (Refine_Unicode_Level (Basic, Unknown) >= Basic, "Refine(Basic, Unknown): result >= Basic (no downgrade)");
+      Assert (Refine_Unicode_Level (Basic, Unknown) >= Basic, "Refine(Basic, Unknown): result >= Basic (no downgrade)");
       Assert
         (Refine_Unicode_Level (Basic, Unicode_3) >= Basic, "Refine(Basic, Unicode_3): result >= Basic (no downgrade)");
       Assert
