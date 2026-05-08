@@ -1,0 +1,19 @@
+[package]
+name = "supports-hyperlinks-rs-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance shim for the supports-hyperlinks Rust crate"
+
+[[bin]]
+name = "supports-hyperlinks-rs-shim"
+path = "src/main.rs"
+
+[dependencies]
+supports-hyperlinks = "3"
+serde_json = "1"
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true

@@ -114,7 +114,7 @@
       "properties": {
         "name":     { "type": "string", "description": "Lib identifier as it appears in the matrix (e.g. 'termicap', 'termenv', 'supports-color-rust')." },
         "version":  { "type": "string", "description": "Lib release version. Required to make results reproducible." },
-        "language": { "enum": ["ada", "rust", "go", "node", "python", "c", "cpp", "swift", "other"] },
+        "language": { "enum": ["ada", "rust", "go", "node", "python", "c", "cpp", "swift", "java", "ruby", "csharp", "haskell", "other"] },
         "tier": {
           "enum": ["passive", "active", "mixed"],
           "description": "passive = env-only; active = sends escape sequences; mixed = configurable."

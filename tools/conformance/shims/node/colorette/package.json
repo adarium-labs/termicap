@@ -1,0 +1,12 @@
+{
+  "name": "colorette-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conformance shim for colorette (Node)",
+  "bin": "./shim.mjs",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "colorette": "^2"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "kleur-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conformance shim for kleur (Node)",
+  "bin": "./shim.mjs",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "kleur": "^4"
+  }
+}

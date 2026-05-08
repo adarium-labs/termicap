@@ -73,6 +73,114 @@
       "language": "rust",
       "binary": "shims/rust/anstyle-query/target/release/anstyle-query-shim",
       "build": "cd tools/conformance/shims/rust/anstyle-query && cargo build --release"
+    },
+    {
+      "name": "blessed",
+      "language": "python",
+      "binary": "shims/python/blessed/run.sh",
+      "build": "cd tools/conformance/shims/python/blessed && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    },
+    {
+      "name": "lipgloss",
+      "language": "go",
+      "binary": "shims/go/lipgloss/bin/lipgloss-shim",
+      "build": "cd tools/conformance/shims/go/lipgloss && GOTOOLCHAIN=auto go build -o bin/lipgloss-shim ."
+    },
+    {
+      "name": "rust-std-isterminal",
+      "language": "rust",
+      "binary": "shims/rust/isatty/target/release/isatty-shim",
+      "build": "cd tools/conformance/shims/rust/isatty && cargo build --release"
+    },
+    {
+      "name": "viuer",
+      "language": "rust",
+      "binary": "shims/rust/viuer/target/release/viuer-shim",
+      "build": "cd tools/conformance/shims/rust/viuer && cargo build --release"
+    },
+    {
+      "name": "xterm-query",
+      "language": "rust",
+      "binary": "shims/rust/xterm-query/target/release/xterm-query-shim",
+      "build": "cd tools/conformance/shims/rust/xterm-query && cargo build --release"
+    },
+    {
+      "name": "supports-hyperlinks-rs",
+      "language": "rust",
+      "binary": "shims/rust/supports-hyperlinks-rs/target/release/supports-hyperlinks-rs-shim",
+      "build": "cd tools/conformance/shims/rust/supports-hyperlinks-rs && cargo build --release"
+    },
+    {
+      "name": "kleur",
+      "language": "node",
+      "binary": "shims/node/kleur/shim.mjs",
+      "build": "cd tools/conformance/shims/node/kleur && npm install"
+    },
+    {
+      "name": "colorette",
+      "language": "node",
+      "binary": "shims/node/colorette/shim.mjs",
+      "build": "cd tools/conformance/shims/node/colorette && npm install"
+    },
+    {
+      "name": "supports-terminal-graphics",
+      "language": "node",
+      "binary": "shims/node/supports-terminal-graphics/shim.mjs",
+      "build": "cd tools/conformance/shims/node/supports-terminal-graphics && npm install"
+    },
+    {
+      "name": "prompt_toolkit",
+      "language": "python",
+      "binary": "shims/python/prompt_toolkit/run.sh",
+      "build": "cd tools/conformance/shims/python/prompt_toolkit && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    },
+    {
+      "name": "colorama",
+      "language": "python",
+      "binary": "shims/python/colorama/run.sh",
+      "build": "cd tools/conformance/shims/python/colorama && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    },
+    {
+      "name": "jline",
+      "language": "java",
+      "binary": "shims/java/jline/run.sh",
+      "build": "cd tools/conformance/shims/java/jline && ./build.sh"
+    },
+    {
+      "name": "console-kit",
+      "language": "swift",
+      "binary": "shims/swift/console-kit-shim/run.sh",
+      "build": "cd tools/conformance/shims/swift/console-kit-shim && swift build -c release"
+    },
+    {
+      "name": "tty-color",
+      "language": "ruby",
+      "binary": "shims/ruby/tty-color/run.sh",
+      "build": "cd tools/conformance/shims/ruby/tty-color && BUNDLE_PATH=vendor/bundle bundle install --path vendor/bundle"
+    },
+    {
+      "name": "pastel",
+      "language": "ruby",
+      "binary": "shims/ruby/pastel/run.sh",
+      "build": "cd tools/conformance/shims/ruby/pastel && BUNDLE_PATH=vendor/bundle bundle install --path vendor/bundle"
+    },
+    {
+      "name": "spectre-console",
+      "language": "csharp",
+      "binary": "shims/csharp/spectre-console/run.sh",
+      "build": "cd tools/conformance/shims/csharp/spectre-console && dotnet publish -c Release -o publish"
+    },
+    {
+      "name": "ansi-terminal",
+      "language": "haskell",
+      "binary": "shims/haskell/ansi-terminal/bin/ansi-terminal-shim",
+      "build": "cd tools/conformance/shims/haskell/ansi-terminal && ./build.sh"
+    },
+    {
+      "name": "chafa",
+      "language": "c",
+      "binary": "shims/c/chafa/build/chafa-shim",
+      "build": "cd tools/conformance/shims/c/chafa && ./build.sh"
     }
   ]
 }

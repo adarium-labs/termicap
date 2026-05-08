@@ -1,0 +1,20 @@
+[package]
+name = "xterm-query-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance shim using xterm-query (Rust): direct CSI > q + CSI c probes"
+
+[[bin]]
+name = "xterm-query-shim"
+path = "src/main.rs"
+
+[dependencies]
+xterm-query = "0.5"
+serde_json = "1"
+termios = "0.3"
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true

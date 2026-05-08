@@ -1,0 +1,12 @@
+{
+  "name": "supports-terminal-graphics-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conformance shim for supports-terminal-graphics (Node) — kitty/iterm2/sixel detection",
+  "bin": "./shim.mjs",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "supports-terminal-graphics": "^0.1"
+  }
+}

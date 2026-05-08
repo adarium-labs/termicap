@@ -1,0 +1,19 @@
+[package]
+name = "isatty-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance shim for std::io::IsTerminal (Rust standard library)"
+rust-version = "1.70"
+
+[[bin]]
+name = "isatty-shim"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true
