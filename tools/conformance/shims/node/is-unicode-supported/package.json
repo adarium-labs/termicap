@@ -1,0 +1,12 @@
+{
+  "name": "is-unicode-supported-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conformance shim for is-unicode-supported (Node.js)",
+  "bin": "./shim.mjs",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "is-unicode-supported": "file:../../../../../reference-frameworks/is-unicode-supported"
+  }
+}

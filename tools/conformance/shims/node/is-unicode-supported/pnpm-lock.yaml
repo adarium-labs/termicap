@@ -1,0 +1,23 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      is-unicode-supported:
+        specifier: file:../../../../../reference-frameworks/is-unicode-supported
+        version: file:../../../../../reference-frameworks/is-unicode-supported
+
+packages:
+
+  is-unicode-supported@file:../../../../../reference-frameworks/is-unicode-supported:
+    resolution: {directory: ../../../../../reference-frameworks/is-unicode-supported, type: directory}
+    engines: {node: '>=18'}
+
+snapshots:
+
+  is-unicode-supported@file:../../../../../reference-frameworks/is-unicode-supported: {}
