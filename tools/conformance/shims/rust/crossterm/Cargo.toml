@@ -1,0 +1,19 @@
+[package]
+name = "crossterm-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance shim for crossterm (Rust)"
+
+[[bin]]
+name = "crossterm-shim"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = { path = "../../../../../reference-frameworks/crossterm" }
+serde_json = "1"
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true

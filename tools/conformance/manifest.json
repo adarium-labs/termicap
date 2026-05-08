@@ -25,6 +25,12 @@
       "language": "rust",
       "binary": "shims/rust/termbg/target/release/termbg-shim",
       "build": "cd tools/conformance/shims/rust/termbg && cargo build --release"
+    },
+    {
+      "name": "crossterm",
+      "language": "rust",
+      "binary": "shims/rust/crossterm/target/release/crossterm-shim",
+      "build": "cd tools/conformance/shims/rust/crossterm && cargo build --release"
     }
   ]
 }
