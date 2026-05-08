@@ -247,6 +247,71 @@ Everything else: `supported: false`.
 
 ---
 
+## supports-hyperlinks (Node)
+
+Driver: `import supportsHyperlinks from 'supports-hyperlinks'`. Default
+export is `{stdout, stderr}` booleans.
+
+| Native value           | Canonical key | Translation |
+|------------------------|---------------|-------------|
+| `.stdout === true`     | `hyperlinks`  | `supported` |
+| `.stdout === false`    | `hyperlinks`  | `unsupported` |
+| `.stderr` (preserved)  | `hyperlinks.raw.stderr` | not in canonical value |
+
+**Lossy notes**:
+- supports-hyperlinks has no equivalent of canonical `likely_supported`
+  or `unknown` — only a definitive yes/no. Comparison vs termicap's
+  four-value enum will frequently surface termicap=`likely_supported` /
+  `unknown` while this lib stays at `unsupported` (its conservative default
+  for unknown emulators), which is the documented vocabulary mismatch.
+
+## go-isatty (Go)
+
+Driver: `isatty.IsTerminal(fd)` and `isatty.IsCygwinTerminal(fd)`.
+The shim probes all three standard fds.
+
+| Native value                    | Canonical key  | Translation     |
+|---------------------------------|----------------|-----------------|
+| `IsTerminal(os.Stdin.Fd())`     | `tty_stdin`    | direct          |
+| `IsTerminal(os.Stdout.Fd())`    | `tty_stdout`   | direct          |
+| `IsTerminal(os.Stderr.Fd())`    | `tty_stderr`   | direct          |
+| `IsCygwinTerminal(...)` (any)   | `tty_stdout.raw.is_cygwin_terminal` | only emitted when true |
+
+Everything else: `supported: false`.
+
+## supports-color (Node, chalk)
+
+Driver: `import supportsColorModule from 'supports-color'`. Default export
+is `{stdout, stderr}` where each is `false` or `{level, hasBasic, has256, has16m}`.
+
+| Native value                                  | Canonical key | Translation |
+|-----------------------------------------------|---------------|-------------|
+| `stdout === false`                            | `color_depth` | `none` |
+| `stdout.level === 1`                          | `color_depth` | `ansi16` |
+| `stdout.level === 2`                          | `color_depth` | `ansi256` |
+| `stdout.level === 3`                          | `color_depth` | `truecolor` |
+| stderr per-stream value                       | `color_depth.raw.stderr_*` | preserved for cross-stream divergence |
+
+This shim's results should match supports-color-rust (the Rust port).
+Divergence between the two is a port drift — useful signal.
+
+## anstyle-query (Rust)
+
+Driver: `anstyle_query::*` predicates (no single level function).
+
+| Native predicates                          | Canonical key | Translation |
+|--------------------------------------------|---------------|-------------|
+| `no_color()`                               | `color_depth` | `none` |
+| `!term_supports_color() && !clicolor_force()` | `color_depth` | `none` |
+| `truecolor()`                              | `color_depth` | `truecolor` |
+| `term_supports_ansi_color()`               | `color_depth` | `ansi16` |
+| `is_ci()`                                  | `ci_detected` | direct |
+
+**Lossy notes**:
+- anstyle-query has no 256-color signal, so this shim **never emits
+  `ansi256`**. Real divergence vs supports-color/termenv on a 256-only
+  terminal is therefore expected; the `method` field flags this.
+
 ## Cross-cutting shim responsibilities
 
 Things every shim must do, regardless of lib:

@@ -148,18 +148,50 @@ Saved to `.claude/ada-lessons-learned.md` if relevant; quick recap:
 The harness is complete enough that the maintainer (or any contributor)
 can run it on a real terminal and produce a usable result file.
 
-## Iter 7-11 — five more shims (eight total, five languages)
+## Iter 7-15 — nine more shims (twelve total, five languages)
 
 Same shim contract, mechanically applied. Each commit is a self-contained
 addition of one shim plus its manifest entry.
 
-| Shim                 | Language | Capabilities measured                                        | Notable divergence on no-TTY env                |
-|----------------------|----------|--------------------------------------------------------------|-------------------------------------------------|
-| termbg               | rust     | terminal_kind, multiplexer, theme, background                | _(theme/bg only on real TTY)_                   |
-| crossterm            | rust     | color_depth (binary floor), dimensions, keyboard             | `color_depth=ansi16` while others report `none` |
-| is-unicode-supported | node     | unicode (boolean → extended/none)                            | `unicode=extended` vs termicap's `basic`        |
-| terminal-size        | node     | dimensions                                                   | agrees with termicap (80x24 default)            |
-| rich                 | python   | color_depth + windows_console_color, dimensions, unicode, tty_stdout | dimensions=80x25 (its default) vs others' 80x24 |
+| Shim                  | Language | Capabilities measured                                            | Notes |
+|-----------------------|----------|------------------------------------------------------------------|-------|
+| termbg                | rust     | terminal_kind, multiplexer, theme, background                    | first non-termenv active prober (OSC 11) |
+| crossterm             | rust     | color_depth (binary floor), dimensions, keyboard                 | first DIVERGENCE: ansi16 vs none |
+| is-unicode-supported  | node     | unicode (boolean → extended/none)                                | first Node lib; vocab divergence vs termicap's `basic` |
+| terminal-size         | node     | dimensions                                                       | second dimensions measurer |
+| rich                  | python   | color_depth + windows_console_color, dimensions, unicode, tty_stdout | first Python lib; only `windows_console_color` measurer |
+| supports-hyperlinks   | node     | hyperlinks (binary → supported/unsupported)                      | first non-termicap hyperlinks measurer |
+| go-isatty             | go       | tty_stdin, tty_stdout, tty_stderr (+ Cygwin flag)                | first non-termicap TTY measurer (all three streams) |
+| supports-color-node   | node     | color_depth, ci_detected                                         | Node port of supports-color-rust; cross-port drift detector |
+| anstyle-query         | rust     | color_depth (no 256 signal), ci_detected                         | Cargo's color probe; documented mapping limitation |
+
+## Capability coverage matrix (post-iter 15)
+
+13 of 20 canonical capabilities now have ≥2 measurers; the 7 single-source
+rows are mostly termicap's unique Tier 4 features (which is itself a finding).
+
+| Capability               | # libs | Notes |
+|--------------------------|:-----:|-------|
+| `color_depth`            |   7   | termicap, supports-color-rust, termenv, crossterm, rich, supports-color-node, anstyle-query |
+| `ci_detected`            |   4   | termicap, supports-color-rust, termenv, anstyle-query |
+| `dimensions`             |   4   | termicap, crossterm, terminal-size, rich |
+| `tty_stdout`             |   3   | termicap, rich, go-isatty |
+| `unicode`                |   3   | termicap, is-unicode-supported, rich |
+| `terminal_kind`          |   3   | termicap, termenv, termbg |
+| `multiplexer`            |   2   | termicap, termbg |
+| `theme`                  |   2   | termenv, termbg |
+| `background`             |   2   | termenv, termbg |
+| `hyperlinks`             |   2   | termicap, supports-hyperlinks |
+| `keyboard`               |   2   | termicap, crossterm |
+| `tty_stdin`              |   2   | termicap, go-isatty |
+| `tty_stderr`             |   2   | termicap, go-isatty |
+| `windows_console_color`  |   1   | rich (no other lib in the matrix surfaces this) |
+| `mouse`                  |   1   | **termicap-unique** — no widely-deployed lib does mouse-protocol probing |
+| `clipboard_osc52`        |   1   | **termicap-unique** — DA1 Ps=52 + active OSC 52 |
+| `graphics_sixel`         |   1   | **termicap-unique** — DA1 Ps=4 + heuristic |
+| `graphics_kitty`         |   1   | **termicap-unique** — active probe + XTVERSION |
+| `xtversion`              |   1   | **termicap-unique** — active CSI > q |
+| `da1_attributes`         |   1   | **termicap-unique** — active CSI c |
 
 In the no-TTY sandbox where this harness was developed, `python3 run.py`
 on the eight installed shims surfaces three real divergences automatically:
