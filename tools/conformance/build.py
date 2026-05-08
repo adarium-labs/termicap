@@ -99,6 +99,57 @@ def print_row(status: str, name: str, message: str = "") -> None:
     print(f"  {status:<5} {name:<24}{suffix}", flush=True)
 
 
+def _python_can_import(python: Path | str, module: str) -> bool:
+    rc = subprocess.run(
+        [str(python), "-c", f"import {module}"],
+        capture_output=True,
+    )
+    return rc.returncode == 0
+
+
+def ensure_validator() -> Path | None:
+    """Ensure jsonschema is importable for the validator step.
+
+    Strategy:
+      1. If the current python (sys.executable) can import jsonschema, use it.
+      2. Else, if a project-local venv at tools/conformance/.venv/ already
+         has jsonschema, use it.
+      3. Else, create that venv and install jsonschema into it. This is the
+         path we land on under PEP 668 (Homebrew Python on macOS, system
+         Python on recent Debian, etc.) where `pip install --user` is
+         refused.
+    Returns the python path that can run validate.py, or None on failure.
+    """
+    print(">>> ensuring validator (jsonschema)")
+    if _python_can_import(sys.executable, "jsonschema"):
+        print_row(OK, "validator", f"system python has jsonschema ({sys.executable})")
+        return Path(sys.executable)
+
+    venv_dir = HERE / ".venv"
+    venv_py = venv_dir / "bin" / "python"
+    if venv_py.exists() and _python_can_import(venv_py, "jsonschema"):
+        print_row(OK, "validator", f"project venv has jsonschema ({venv_dir})")
+        return venv_py
+
+    print_row(BUILD, "validator", f"creating venv at {venv_dir} and installing jsonschema")
+    rc = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)])
+    if rc.returncode != 0:
+        print_row(FAIL, "validator", f"venv creation failed (exit {rc.returncode})")
+        return None
+    rc = subprocess.run(
+        [str(venv_py), "-m", "pip", "install", "--quiet", "jsonschema"],
+        capture_output=False,
+    )
+    if rc.returncode != 0:
+        print_row(FAIL, "validator", f"pip install failed (exit {rc.returncode})")
+        return None
+    if not _python_can_import(venv_py, "jsonschema"):
+        print_row(FAIL, "validator", "jsonschema installed but still not importable")
+        return None
+    print_row(OK, "validator", f"jsonschema installed into {venv_dir}")
+    return venv_py
+
+
 def build_one(shim: dict, *, force: bool) -> bool:
     """Returns True iff the shim is built (or successfully skipped)."""
     name = shim["name"]
@@ -153,6 +204,8 @@ def main(argv: list[str]) -> int:
                    help="Rebuild even if the shim's binary is already present.")
     p.add_argument("--list", action="store_true",
                    help="List shims and their build state; do not build.")
+    p.add_argument("--no-validator", action="store_true",
+                   help="Skip the jsonschema validator setup.")
     args = p.parse_args(argv)
 
     manifest = json.loads((HERE / "manifest.json").read_text())
@@ -164,6 +217,10 @@ def main(argv: list[str]) -> int:
 
     if args.list:
         return cmd_list(shims)
+
+    if not args.no_validator:
+        ensure_validator()
+        print()
 
     print(f">>> building {len(shims)} shim(s)")
     print()

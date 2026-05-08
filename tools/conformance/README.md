@@ -55,15 +55,18 @@ tools/conformance/
 ## Quick start
 
 ```bash
-# 1. (one-time) install Python validator dep
-pip install --user jsonschema
-
-# 2. build every shim (skips ones already built; needs alr/cargo/go/npm/python3)
+# 1. build every shim (also sets up the validator venv)
 python3 tools/conformance/build.py
 
-# 3. run the harness against your current terminal
+# 2. run the harness against your current terminal
 ./tools/conformance/run.py --emulator iTerm2 --emulator-version 3.5.0
 ```
+
+`build.py` discovers the validator path: if `python3 -c "import jsonschema"`
+works on your system Python, it uses that; otherwise it creates a project-local
+venv at `tools/conformance/.venv/` and installs `jsonschema` into it. `run.py`
+prefers the project venv when present. This avoids the PEP 668 friction on
+Homebrew / system Python where `pip install --user jsonschema` is refused.
 
 `build.py` discovers shims from `manifest.json`, checks each toolchain
 is on PATH (printing an install hint if not), skips already-built
@@ -193,22 +196,19 @@ This shows which capabilities both libs measured, in their canonical form.
 ## Python dependencies
 
 The pipeline uses one Python package, `jsonschema`, for the validator.
-Install once:
+You should not need to install it by hand — `build.py` handles this:
 
-```bash
-# system-wide via pipx (recommended)
-pipx install jsonschema
+- if your system Python can already import `jsonschema`, it's used;
+- otherwise `build.py` creates a project-local venv at
+  `tools/conformance/.venv/` and installs `jsonschema` there.
 
-# or per-user
-pip install --user jsonschema
+If you'd rather install jsonschema yourself, any of the standard
+mechanisms work (`pipx install jsonschema`, an existing venv, etc.). On
+Homebrew / system Python, `pip install --user` may be refused under
+PEP 668; that's why `build.py` falls back to a project-local venv.
 
-# or in a venv
-python3 -m venv .venv && .venv/bin/pip install -r tools/conformance/requirements.txt
-```
-
-If `jsonschema` is missing, `run.py` falls back to running each shim and
-emitting the report unvalidated, with a warning. The shims themselves don't
-need it.
+If `jsonschema` is missing entirely, `run.py` still produces the report
+but marks each result as `(unvalidated)`.
 
 ## Status
 

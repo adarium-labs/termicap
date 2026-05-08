@@ -26,6 +26,24 @@ from pathlib import Path
 HERE = Path(__file__).parent
 
 
+def _validator_python() -> str:
+    """Pick the python interpreter that can import jsonschema.
+
+    Prefers the project-local .venv/ created by build.py (used when the
+    system Python is externally managed under PEP 668). Falls back to
+    sys.executable, which is what run.py was started with.
+    """
+    venv_py = HERE / ".venv" / "bin" / "python"
+    if venv_py.exists():
+        rc = subprocess.run(
+            [str(venv_py), "-c", "import jsonschema"],
+            capture_output=True,
+        )
+        if rc.returncode == 0:
+            return str(venv_py)
+    return sys.executable
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Run all built shims and compare results.")
     p.add_argument("--emulator")
@@ -59,6 +77,7 @@ def main() -> int:
     repo_root = HERE.parent.parent  # tools/conformance/run.py -> tools -> repo root
     valid_results: list[Path] = []
     validator_warned = False
+    validator_py = _validator_python()
 
     for shim in manifest["shims"]:
         binary = HERE / shim["binary"]
@@ -74,7 +93,7 @@ def main() -> int:
             continue
 
         v = subprocess.run(
-            [sys.executable, str(HERE / "validate.py"), str(out)],
+            [validator_py, str(HERE / "validate.py"), str(out)],
             capture_output=True, text=True
         )
         if v.returncode == 0:

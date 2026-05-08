@@ -2,6 +2,9 @@
 envelope.json
 results/
 
+# Auto-created venv when system Python can't install jsonschema (PEP 668)
+.venv/
+
 # Per-shim build artifacts (each shim has its own .gitignore for these)
 shims/*/*/target/
 shims/*/*/bin/
