@@ -1,0 +1,12 @@
+{
+  "name": "supports-hyperlinks-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conformance shim for supports-hyperlinks (Node.js)",
+  "bin": "./shim.mjs",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "supports-hyperlinks": "^4"
+  }
+}

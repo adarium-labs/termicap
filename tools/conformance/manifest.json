@@ -49,6 +49,12 @@
       "language": "python",
       "binary": "shims/python/rich/run.sh",
       "build": "cd tools/conformance/shims/python/rich && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    },
+    {
+      "name": "supports-hyperlinks",
+      "language": "node",
+      "binary": "shims/node/supports-hyperlinks/shim.mjs",
+      "build": "cd tools/conformance/shims/node/supports-hyperlinks && npm install"
     }
   ]
 }
