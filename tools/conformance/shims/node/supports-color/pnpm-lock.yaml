@@ -1,0 +1,23 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      supports-color:
+        specifier: file:../../../../../reference-frameworks/supports-color
+        version: file:../../../../../reference-frameworks/supports-color
+
+packages:
+
+  supports-color@file:../../../../../reference-frameworks/supports-color:
+    resolution: {directory: ../../../../../reference-frameworks/supports-color, type: directory}
+    engines: {node: '>=18'}
+
+snapshots:
+
+  supports-color@file:../../../../../reference-frameworks/supports-color: {}

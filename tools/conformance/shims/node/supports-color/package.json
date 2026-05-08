@@ -1,0 +1,12 @@
+{
+  "name": "supports-color-node-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conformance shim for chalk's supports-color (Node.js)",
+  "bin": "./shim.mjs",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "supports-color": "file:../../../../../reference-frameworks/supports-color"
+  }
+}

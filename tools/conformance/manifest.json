@@ -61,6 +61,12 @@
       "language": "go",
       "binary": "shims/go/go-isatty/bin/go-isatty-shim",
       "build": "cd tools/conformance/shims/go/go-isatty && go build -o bin/go-isatty-shim ."
+    },
+    {
+      "name": "supports-color-node",
+      "language": "node",
+      "binary": "shims/node/supports-color/shim.mjs",
+      "build": "cd tools/conformance/shims/node/supports-color && npm install"
     }
   ]
 }
