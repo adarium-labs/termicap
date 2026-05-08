@@ -226,7 +226,7 @@ begin
                then
                   Put_Line ("Live OSC 8 hyperlink (visual check — click the link below):");
                   Put (ASCII.ESC & "]8;;"
-                       & "https://github.com/Heziode/termicap"
+                       & "https://github.com/adarium-labs/termicap"
                        & ASCII.ESC & "\");
                   Put ("Termicap on GitHub");
                   Put (ASCII.ESC & "]8;;" & ASCII.ESC & "\");
