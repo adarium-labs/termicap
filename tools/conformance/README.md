@@ -30,17 +30,50 @@ producing a per-terminal divergence report.
 ```
 tools/conformance/
 ├── README.md                          ← you are here
+├── manifest.json                      ← shim registry (name + binary + build cmd)
+├── build.py                           ← build every shim listed in manifest
+├── run.py                             ← end-to-end driver (envelope + dispatch + report)
+├── runner.py                          ← envelope generator only
+├── validate.py                        ← validate one or more results against schema
+├── compare.py                         ← per-capability divergence report
 ├── notes/
 │   ├── 01-discovery.md                ← what each lib measures + vocabulary
 │   ├── 02-schema-design.md            ← canonical schema design decisions
-│   └── 03-mapping.md                  ← how each native lib maps to canonical
+│   ├── 03-mapping.md                  ← how each native lib maps to canonical
+│   ├── 04-pipeline.md                 ← validator/runner/comparator design
+│   └── 05-shims-and-runner.md         ← shim coverage matrix + iter notes
 ├── schema/
 │   ├── canonical.schema.json          ← JSON Schema 2020-12 for result files
 │   └── examples/
-│       ├── termicap-iterm2-darwin.json
-│       ├── termenv-iterm2-darwin.json
-│       └── supports-color-rust-iterm2-darwin.json
-└── shims/                             ← (placeholder — per-lib drivers)
+│       └── *.json                     ← four hand-crafted example results
+└── shims/
+    ├── README.md                      ← shim contract
+    ├── ada/, rust/, go/, node/, python/   ← one subdir per shim
+    └── ...
+```
+
+## Quick start
+
+```bash
+# 1. (one-time) install Python validator dep
+pip install --user jsonschema
+
+# 2. build every shim (skips ones already built; needs alr/cargo/go/npm/python3)
+python3 tools/conformance/build.py
+
+# 3. run the harness against your current terminal
+./tools/conformance/run.py --emulator iTerm2 --emulator-version 3.5.0
+```
+
+`build.py` discovers shims from `manifest.json`, checks each toolchain
+is on PATH (printing an install hint if not), skips already-built
+shims, and reports per-shim status. Filter with positional args:
+
+```bash
+python3 build.py rust              # only build rust shims
+python3 build.py termicap rich     # only build named shims
+python3 build.py --list            # show shim states without building
+python3 build.py --force           # rebuild everything
 ```
 
 ## Concept: one JSON per (lib, run)
