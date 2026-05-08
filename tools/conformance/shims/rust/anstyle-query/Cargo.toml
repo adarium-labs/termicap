@@ -1,0 +1,19 @@
+[package]
+name = "anstyle-query-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance shim for anstyle-query (Rust)"
+
+[[bin]]
+name = "anstyle-query-shim"
+path = "src/main.rs"
+
+[dependencies]
+anstyle-query = "1"
+serde_json = "1"
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true

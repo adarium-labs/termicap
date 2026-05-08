@@ -67,6 +67,12 @@
       "language": "node",
       "binary": "shims/node/supports-color/shim.mjs",
       "build": "cd tools/conformance/shims/node/supports-color && npm install"
+    },
+    {
+      "name": "anstyle-query",
+      "language": "rust",
+      "binary": "shims/rust/anstyle-query/target/release/anstyle-query-shim",
+      "build": "cd tools/conformance/shims/rust/anstyle-query && cargo build --release"
     }
   ]
 }
