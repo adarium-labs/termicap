@@ -43,6 +43,12 @@
       "language": "node",
       "binary": "shims/node/terminal-size/shim.mjs",
       "build": "cd tools/conformance/shims/node/terminal-size && npm install"
+    },
+    {
+      "name": "rich",
+      "language": "python",
+      "binary": "shims/python/rich/run.sh",
+      "build": "cd tools/conformance/shims/python/rich && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
     }
   ]
 }
