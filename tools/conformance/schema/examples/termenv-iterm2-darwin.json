@@ -1,0 +1,105 @@
+{
+  "schema_version": "0.1.0",
+  "run": {
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "timestamp": "2026-05-08T01:30:00Z",
+    "host": {
+      "os": "darwin",
+      "os_version": "24.6.0",
+      "arch": "arm64"
+    },
+    "terminal": {
+      "emulator": "iTerm2",
+      "emulator_version": "3.5.0",
+      "shell": "zsh",
+      "multiplexer": null
+    },
+    "tty": {
+      "stdin": true,
+      "stdout": true,
+      "stderr": true
+    },
+    "env": {
+      "TERM": "xterm-256color",
+      "COLORTERM": "truecolor",
+      "NO_COLOR": null,
+      "FORCE_COLOR": null,
+      "CLICOLOR": null,
+      "CLICOLOR_FORCE": null,
+      "TTY_COMPATIBLE": null,
+      "IGNORE_IS_TERMINAL": null,
+      "TERM_PROGRAM": "iTerm.app",
+      "TERM_PROGRAM_VERSION": "3.5.0",
+      "TERMINAL_EMULATOR": null,
+      "WT_SESSION": null,
+      "KONSOLE_VERSION": null,
+      "VTE_VERSION": null,
+      "TMUX": null,
+      "STY": null,
+      "INSIDE_EMACS": null,
+      "COLORFGBG": "15;0",
+      "LANG": "en_US.UTF-8",
+      "LC_ALL": null,
+      "LC_CTYPE": null,
+      "CI": null,
+      "GITHUB_ACTIONS": null,
+      "GITEA_ACTIONS": null,
+      "GITLAB_CI": null,
+      "CIRCLECI": null,
+      "TRAVIS": null,
+      "BUILDKITE": null,
+      "APPVEYOR": null,
+      "TF_BUILD": null,
+      "SHELL": "/bin/zsh",
+      "OSTYPE": "darwin24.0"
+    }
+  },
+  "lib": {
+    "name": "termenv",
+    "version": "0.15.2",
+    "language": "go",
+    "tier": "mixed"
+  },
+  "capabilities": {
+    "tty_stdin":  { "supported": false },
+    "tty_stdout": { "supported": true, "value": true, "method": "isatty" },
+    "tty_stderr": { "supported": false },
+    "color_depth": {
+      "supported": true,
+      "value": "truecolor",
+      "method": "EnvColorProfile: COLORTERM=truecolor",
+      "raw": "TrueColor"
+    },
+    "windows_console_color": { "supported": false },
+    "dimensions": { "supported": false },
+    "unicode": { "supported": false },
+    "terminal_kind": {
+      "supported": true,
+      "value": "iterm2",
+      "method": "TermProgram == 'iTerm.app'",
+      "raw": "iTerm.app"
+    },
+    "multiplexer": { "supported": false },
+    "theme": {
+      "supported": true,
+      "value": "dark",
+      "method": "OSC 11 + ITU-R BT.601 luminance threshold",
+      "raw": { "has_dark_background": true }
+    },
+    "background": {
+      "supported": true,
+      "value": { "rgb": [39, 40, 34] },
+      "method": "active OSC 11 probe",
+      "raw": "#272822"
+    },
+    "hyperlinks":      { "supported": false },
+    "mouse":           { "supported": false },
+    "keyboard":        { "supported": false },
+    "clipboard_osc52": { "supported": false },
+    "graphics_sixel":  { "supported": false },
+    "graphics_kitty":  { "supported": false },
+    "xtversion":       { "supported": false },
+    "da1_attributes":  { "supported": false },
+    "ci_detected":     { "supported": false }
+  }
+}

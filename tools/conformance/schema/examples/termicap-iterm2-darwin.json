@@ -1,0 +1,150 @@
+{
+  "schema_version": "0.1.0",
+  "run": {
+    "run_id": "550e8400-e29b-41d4-a716-446655440000",
+    "timestamp": "2026-05-08T01:30:00Z",
+    "host": {
+      "os": "darwin",
+      "os_version": "24.6.0",
+      "arch": "arm64"
+    },
+    "terminal": {
+      "emulator": "iTerm2",
+      "emulator_version": "3.5.0",
+      "shell": "zsh",
+      "multiplexer": null
+    },
+    "tty": {
+      "stdin": true,
+      "stdout": true,
+      "stderr": true
+    },
+    "env": {
+      "TERM": "xterm-256color",
+      "COLORTERM": "truecolor",
+      "NO_COLOR": null,
+      "FORCE_COLOR": null,
+      "CLICOLOR": null,
+      "CLICOLOR_FORCE": null,
+      "TTY_COMPATIBLE": null,
+      "IGNORE_IS_TERMINAL": null,
+      "TERM_PROGRAM": "iTerm.app",
+      "TERM_PROGRAM_VERSION": "3.5.0",
+      "TERMINAL_EMULATOR": null,
+      "WT_SESSION": null,
+      "KONSOLE_VERSION": null,
+      "VTE_VERSION": null,
+      "TMUX": null,
+      "STY": null,
+      "INSIDE_EMACS": null,
+      "COLORFGBG": "15;0",
+      "LANG": "en_US.UTF-8",
+      "LC_ALL": null,
+      "LC_CTYPE": null,
+      "CI": null,
+      "GITHUB_ACTIONS": null,
+      "GITEA_ACTIONS": null,
+      "GITLAB_CI": null,
+      "CIRCLECI": null,
+      "TRAVIS": null,
+      "BUILDKITE": null,
+      "APPVEYOR": null,
+      "TF_BUILD": null,
+      "SHELL": "/bin/zsh",
+      "OSTYPE": "darwin24.0"
+    }
+  },
+  "lib": {
+    "name": "termicap",
+    "version": "0.5.0",
+    "language": "ada",
+    "tier": "active",
+    "commit": "ba17591"
+  },
+  "capabilities": {
+    "tty_stdin":  { "supported": true, "value": true,  "method": "ioctl(TIOCGWINSZ) probe" },
+    "tty_stdout": { "supported": true, "value": true,  "method": "ioctl(TIOCGWINSZ) probe" },
+    "tty_stderr": { "supported": true, "value": true,  "method": "ioctl(TIOCGWINSZ) probe" },
+    "color_depth": {
+      "supported": true,
+      "value": "truecolor",
+      "method": "Detect_Color_Level: COLORTERM=truecolor",
+      "raw": "True_Color"
+    },
+    "windows_console_color": { "supported": false },
+    "dimensions": {
+      "supported": true,
+      "value": { "cols": 120, "rows": 40, "pixel_width": 1920, "pixel_height": 960 },
+      "method": "ioctl(TIOCGWINSZ)"
+    },
+    "unicode": {
+      "supported": true,
+      "value": "extended",
+      "method": "locale LANG=en_US.UTF-8",
+      "raw": "Extended"
+    },
+    "terminal_kind": {
+      "supported": true,
+      "value": "iterm2",
+      "method": "passive: TERM_PROGRAM=iTerm.app",
+      "raw": "ITerm2"
+    },
+    "multiplexer": {
+      "supported": true,
+      "value": "none",
+      "method": "TMUX absent, TERM not screen/tmux"
+    },
+    "theme": { "supported": false },
+    "background": { "supported": false },
+    "hyperlinks": {
+      "supported": true,
+      "value": "supported",
+      "method": "passive Env_Known_Good + XTVERSION_Confirmed (iTerm2 >= 3.1.0)",
+      "raw": {
+        "support": "Supported",
+        "provenance": "XTVERSION_Confirmed",
+        "version_known": true
+      }
+    },
+    "mouse": {
+      "supported": true,
+      "value": "sgr_pixels",
+      "method": "active probe DECRPM(?1016) accepted"
+    },
+    "keyboard": {
+      "supported": true,
+      "value": "legacy",
+      "method": "Kitty progressive enhancement query: no response"
+    },
+    "clipboard_osc52": {
+      "supported": true,
+      "value": "read_write",
+      "method": "DA1 Ps=52 + active OSC 52 probe"
+    },
+    "graphics_sixel": {
+      "supported": true,
+      "value": false,
+      "method": "DA1 Ps=4 absent"
+    },
+    "graphics_kitty": {
+      "supported": true,
+      "value": false,
+      "method": "XTVERSION name != kitty; no Kitty graphics probe response"
+    },
+    "xtversion": {
+      "supported": true,
+      "value": { "name": "iTerm2", "version": "3.5.0" },
+      "method": "active XTVERSION (CSI > 0 q)"
+    },
+    "da1_attributes": {
+      "supported": true,
+      "value": [1, 2, 6, 9, 22, 52],
+      "method": "active DA1 (CSI c)"
+    },
+    "ci_detected": {
+      "supported": true,
+      "value": false,
+      "method": "no CI env vars present"
+    }
+  }
+}

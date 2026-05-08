@@ -1,0 +1,150 @@
+# Iterations 3-6 — First three shims + dispatch wrapper
+
+End state of this batch: a runnable harness with three working shims and a
+single-command driver. `python3 run.py` from `tools/conformance/` generates
+an envelope, dispatches every built shim, validates each output against the
+canonical schema, and writes a markdown divergence report.
+
+## What's new
+
+| Path | Lines | Notes |
+|---|---:|---|
+| `shims/ada/termicap/alire.toml`                    |  16 | Alire crate; pinned local termicap |
+| `shims/ada/termicap/termicap_shim.gpr`             |  12 | Ada project file |
+| `shims/ada/termicap/src/termicap_shim.adb`         | 340 | Reads envelope, calls Detect_Full, hand-rolled JSON |
+| `shims/rust/supports-color/Cargo.toml`             |  18 | Path-dep on local crate copy |
+| `shims/rust/supports-color/src/main.rs`            | 110 | serde_json output |
+| `shims/go/termenv/go.mod`                          |  14 | replace-dep on local termenv |
+| `shims/go/termenv/main.go`                         | 175 | encoding/json output |
+| `manifest.json`                                    |  20 | Shim registry (name + binary path + build cmd) |
+| `run.py`                                           | 110 | End-to-end driver |
+
+## Architecture decisions
+
+### One shim per (lib, language). No reuse.
+
+A shim is a tiny program in the lib's host language. It cannot be reused
+across libs, even when libs share semantics, because the lib's API surface
+and idioms are language-specific. The duplication is intentional — a
+shim is *part of* the lib's testimony in the harness, and it should look
+like idiomatic code in its host language.
+
+### Strict rule: `supported: true` only when the lib's PUBLIC API exposes the capability.
+
+Even when termenv internally uses TTY detection, OSC 11 probes, and CI env
+vars, only what its public `Output` exposes is mapped to canonical
+`supported: true`:
+
+| termenv API                       | Canonical key       |
+|-----------------------------------|---------------------|
+| `output.Profile` / `ColorProfile()` | `color_depth`     |
+| `output.BackgroundColor()`        | `background`        |
+| `output.HasDarkBackground()`      | `theme`             |
+
+Everything else (TTY status, terminal kind, CI detection) is `supported: false`.
+Same rule applied to supports-color (`color_depth` only) and termicap (broad
+public surface, so most fields are supported).
+
+The single permitted exception: `ci_detected` is emitted by every shim from a
+shim-side env-var allowlist scan, with `method` flagged accordingly. The
+alternative (only termicap-style libs reporting it) would suppress useful info.
+
+### JSON output: hand-rolled in Ada, serde_json in Rust, encoding/json in Go.
+
+Ada has no canonical lightweight JSON dep that's universally installed.
+Rather than add `gnatcoll-core` just for output, the Ada shim splices the
+envelope file verbatim as the `run` value (the envelope is already valid
+JSON) and emits the rest from a fixed shape with a small string-quote
+helper. ~340 lines total.
+
+Rust uses `serde_json` (universal); the local supports-color path-dep keeps
+the version pinned. Go uses `encoding/json` from std.
+
+### Replace/path deps to the local reference-frameworks copies.
+
+Each shim depends on the lib via a *local-path* dep (Cargo `path = ...`,
+Go `replace`, Alire `[[pins]]`). This pins the lib version to the copy in
+`reference-frameworks/`, so the harness's results are reproducible against
+*that exact copy*, not the latest crate / module on the registry.
+
+Tradeoff: when we want to test a newer version, we update
+`reference-frameworks/`. That's also the right move — any divergence found
+should be reproducible from the same source tree.
+
+### `manifest.json` is the single source of truth for the dispatcher.
+
+`run.py` reads it; users edit it. To add a new shim:
+
+1. Create `shims/<lang>/<lib>/`.
+2. Make a buildable project that produces a binary at the path you'll list
+   in the manifest.
+3. Add an entry to `manifest.json` with `name`, `language`, `binary`, `build`.
+4. Build and run: `python3 run.py`.
+
+Unbuilt shims are skipped with a hint that prints the build command.
+
+## End-to-end demo (no-TTY environment)
+
+Running `python3 run.py --results-dir /tmp/conformance-test` from this
+sandbox (no real terminal, all `tty.*` are false):
+
+```
+>>> generating envelope at /tmp/conformance-test/envelope.json
+  OK      termicap                  -> termicap.json
+  OK      supports-color-rust       -> supports-color-rust.json
+  OK      termenv                   -> termenv.json
+
+>>> 3 valid result(s); report written to /tmp/conformance-test/report.md
+```
+
+Comparator's report excerpt:
+
+```
+### `color_depth`
+**Agreement (3 libs)**: `none`
+- supports-color-rust — supports_color::on(Stream::Stdout) -> level mapping
+- termenv — termenv.NewOutput(stdout).Profile (env+TTY heuristic)
+- termicap — termicap.Color.Detect_Color_Level (env+TTY cascade)
+
+### `ci_detected`
+**Agreement (3 libs)**: `false`
+- (each lib via its env-var allowlist scan)
+```
+
+All three libs agree on `color_depth = none` and `ci_detected = false`.
+Real divergence will only show up on a real terminal — that's the next
+step (run on iTerm2/Terminal/WezTerm/Windows Terminal/etc.).
+
+## Lessons learned (Ada-specific)
+
+Saved to `.claude/ada-lessons-learned.md` if relevant; quick recap:
+
+1. **Alire description fields cap at 72 chars and are TOML strings (UTF-8).**
+   Em-dashes fail UTF-8 validation in some Alire versions.
+2. **Ada `case` choices cannot overlap.** To escape generic control chars
+   while keeping LF/CR/HT/BS/FF as named branches, write the catch-all
+   range as `(0..7) | (11) | (14..31)`.
+3. **`Ada.Text_IO.Create`** wants `Mode => Out_File` or use the named
+   `Name =>` parameter; positional `Create (X, Y, Z)` will try to take
+   `Y` as the Mode.
+4. **`use type T;` clauses are needed** to compare enum values across
+   package boundaries when the operator isn't otherwise visible.
+
+## Status (post-iter 6)
+
+- [x] Schema v0.1.0
+- [x] Validator
+- [x] Envelope runner
+- [x] Comparator
+- [x] Shim contract
+- [x] **Termicap shim (Ada)** — runs against `Detect_Full`
+- [x] **supports-color-rust shim (Rust)**
+- [x] **termenv shim (Go)**
+- [x] Manifest + dispatch wrapper (`run.py`)
+- [ ] Real-terminal runs (iTerm2 / Terminal / WezTerm / Linux / Windows) — operator-driven
+- [ ] Committed `results/` directory + community contributions
+- [ ] Maybe: GitHub Pages renderer of the matrix
+
+The harness is complete enough that the maintainer (or any contributor)
+can run it on a real terminal and produce a usable result file. The next
+iteration is *runs* on actual terminals, not more code.

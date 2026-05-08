@@ -1,0 +1,457 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/adarium-labs/termicap/tools/conformance/schema/canonical.schema.json",
+  "title": "Terminal Capability Conformance Result",
+  "description": "Canonical shape for a single capability-detection library's output, captured for cross-library comparison. One JSON document per (lib, run). Multiple libs sharing a run_id form one row in the comparison matrix.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run", "lib", "capabilities"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semver of this schema. The comparator refuses cross-major comparisons."
+    },
+    "run":          { "$ref": "#/$defs/Run" },
+    "lib":          { "$ref": "#/$defs/Lib" },
+    "capabilities": { "$ref": "#/$defs/Capabilities" }
+  },
+
+  "$defs": {
+
+    "Run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "timestamp", "host", "terminal", "tty", "env"],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "Identifier shared by all libs probing within one harness invocation. Recommended: UUID v4."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp in UTC."
+        },
+        "host": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["os", "os_version", "arch"],
+          "properties": {
+            "os":         { "enum": ["darwin", "linux", "windows", "freebsd", "openbsd", "netbsd", "other"] },
+            "os_version": { "type": "string" },
+            "arch":       { "enum": ["x86_64", "arm64", "i386", "aarch64", "other"] }
+          }
+        },
+        "terminal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["emulator", "shell"],
+          "properties": {
+            "emulator":         { "type": "string", "description": "Ground-truth emulator name from the invocation context (e.g. 'iTerm2'), not from the lib under test." },
+            "emulator_version": { "type": ["string", "null"] },
+            "shell":            { "type": "string" },
+            "multiplexer":      { "enum": [null, "tmux", "screen", "zellij"] }
+          }
+        },
+        "tty": {
+          "type": "object",
+          "description": "Ground-truth isatty() probes by the harness, independent of the lib under test.",
+          "additionalProperties": false,
+          "required": ["stdin", "stdout", "stderr"],
+          "properties": {
+            "stdin":  { "type": "boolean" },
+            "stdout": { "type": "boolean" },
+            "stderr": { "type": "boolean" }
+          }
+        },
+        "env": {
+          "type": "object",
+          "description": "Fixed-key allowlist of env vars that detection libs are known to consult. null = unset; '' = present but empty.",
+          "additionalProperties": false,
+          "properties": {
+            "TERM":                  { "type": ["string", "null"] },
+            "COLORTERM":             { "type": ["string", "null"] },
+            "NO_COLOR":              { "type": ["string", "null"] },
+            "FORCE_COLOR":           { "type": ["string", "null"] },
+            "CLICOLOR":              { "type": ["string", "null"] },
+            "CLICOLOR_FORCE":        { "type": ["string", "null"] },
+            "TTY_COMPATIBLE":        { "type": ["string", "null"] },
+            "IGNORE_IS_TERMINAL":    { "type": ["string", "null"] },
+            "TERM_PROGRAM":          { "type": ["string", "null"] },
+            "TERM_PROGRAM_VERSION":  { "type": ["string", "null"] },
+            "TERMINAL_EMULATOR":     { "type": ["string", "null"] },
+            "WT_SESSION":            { "type": ["string", "null"] },
+            "KONSOLE_VERSION":       { "type": ["string", "null"] },
+            "VTE_VERSION":           { "type": ["string", "null"] },
+            "TMUX":                  { "type": ["string", "null"] },
+            "STY":                   { "type": ["string", "null"] },
+            "INSIDE_EMACS":          { "type": ["string", "null"] },
+            "COLORFGBG":             { "type": ["string", "null"] },
+            "LANG":                  { "type": ["string", "null"] },
+            "LC_ALL":                { "type": ["string", "null"] },
+            "LC_CTYPE":              { "type": ["string", "null"] },
+            "CI":                    { "type": ["string", "null"] },
+            "GITHUB_ACTIONS":        { "type": ["string", "null"] },
+            "GITEA_ACTIONS":         { "type": ["string", "null"] },
+            "GITLAB_CI":             { "type": ["string", "null"] },
+            "CIRCLECI":              { "type": ["string", "null"] },
+            "TRAVIS":                { "type": ["string", "null"] },
+            "BUILDKITE":             { "type": ["string", "null"] },
+            "APPVEYOR":              { "type": ["string", "null"] },
+            "TF_BUILD":              { "type": ["string", "null"] },
+            "SHELL":                 { "type": ["string", "null"] },
+            "OSTYPE":                { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+
+    "Lib": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "language", "tier"],
+      "properties": {
+        "name":     { "type": "string", "description": "Lib identifier as it appears in the matrix (e.g. 'termicap', 'termenv', 'supports-color-rust')." },
+        "version":  { "type": "string", "description": "Lib release version. Required to make results reproducible." },
+        "language": { "enum": ["ada", "rust", "go", "node", "python", "c", "cpp", "swift", "other"] },
+        "tier": {
+          "enum": ["passive", "active", "mixed"],
+          "description": "passive = env-only; active = sends escape sequences; mixed = configurable."
+        },
+        "commit": { "type": ["string", "null"], "description": "Optional source commit hash for unreleased versions." }
+      }
+    },
+
+    "Capabilities": {
+      "type": "object",
+      "description": "Every key listed here MUST be present (use {supported:false} when not measured). Absence indicates shim drift.",
+      "additionalProperties": false,
+      "required": [
+        "tty_stdin", "tty_stdout", "tty_stderr",
+        "color_depth", "windows_console_color",
+        "dimensions",
+        "unicode",
+        "terminal_kind", "multiplexer",
+        "theme", "background",
+        "hyperlinks",
+        "mouse", "keyboard",
+        "clipboard_osc52",
+        "graphics_sixel", "graphics_kitty",
+        "xtversion",
+        "da1_attributes",
+        "ci_detected"
+      ],
+      "properties": {
+        "tty_stdin":              { "$ref": "#/$defs/CapBool" },
+        "tty_stdout":             { "$ref": "#/$defs/CapBool" },
+        "tty_stderr":             { "$ref": "#/$defs/CapBool" },
+        "color_depth":            { "$ref": "#/$defs/CapColorDepth" },
+        "windows_console_color":  { "$ref": "#/$defs/CapBool" },
+        "dimensions":             { "$ref": "#/$defs/CapDimensions" },
+        "unicode":                { "$ref": "#/$defs/CapUnicode" },
+        "terminal_kind":          { "$ref": "#/$defs/CapTerminalKind" },
+        "multiplexer":            { "$ref": "#/$defs/CapMultiplexer" },
+        "theme":                  { "$ref": "#/$defs/CapTheme" },
+        "background":             { "$ref": "#/$defs/CapBackground" },
+        "hyperlinks":             { "$ref": "#/$defs/CapHyperlinks" },
+        "mouse":                  { "$ref": "#/$defs/CapMouse" },
+        "keyboard":               { "$ref": "#/$defs/CapKeyboard" },
+        "clipboard_osc52":        { "$ref": "#/$defs/CapClipboard" },
+        "graphics_sixel":         { "$ref": "#/$defs/CapBool" },
+        "graphics_kitty":         { "$ref": "#/$defs/CapBool" },
+        "xtversion":              { "$ref": "#/$defs/CapXTVersion" },
+        "da1_attributes":         { "$ref": "#/$defs/CapDA1" },
+        "ci_detected":            { "$ref": "#/$defs/CapBool" }
+      }
+    },
+
+    "CapNotMeasured": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported"],
+      "properties": {
+        "supported": { "const": false }
+      }
+    },
+
+    "CapMeasuredBase": {
+      "type": "object",
+      "required": ["supported", "value"],
+      "properties": {
+        "supported": { "const": true },
+        "method":    { "type": "string", "description": "Free-text technique used (e.g. 'env', 'ioctl(TIOCGWINSZ)', 'OSC 11 + heuristic')." },
+        "raw":       { "description": "Optional native-vocabulary representation; comparator ignores this." }
+      }
+    },
+
+    "CapBool": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "type": "boolean" }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapColorDepth": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "enum": ["none", "ansi16", "ansi256", "truecolor"] }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapDimensions": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["cols", "rows"],
+                  "properties": {
+                    "cols":         { "type": "integer", "minimum": 1 },
+                    "rows":         { "type": "integer", "minimum": 1 },
+                    "pixel_width":  { "type": "integer", "minimum": 0, "description": "0 = unknown" },
+                    "pixel_height": { "type": "integer", "minimum": 0, "description": "0 = unknown" }
+                  }
+                }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapUnicode": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "enum": ["none", "basic", "extended"] }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapTerminalKind": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": {
+                  "enum": [
+                    "unknown",
+                    "alacritty", "apple_terminal", "dumb",
+                    "foot", "ghostty", "iterm2", "jediterm",
+                    "kitty", "konsole", "linux_console", "mintty",
+                    "rxvt", "screen", "tmux", "vscode",
+                    "vte", "warp", "wezterm", "windows_terminal", "xterm",
+                    "other"
+                  ]
+                }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapMultiplexer": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "enum": ["none", "tmux", "screen", "zellij"] }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapTheme": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "enum": ["light", "dark"] }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapBackground": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["rgb"],
+                  "properties": {
+                    "rgb": {
+                      "type": "array",
+                      "minItems": 3, "maxItems": 3,
+                      "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                      "description": "[r,g,b] each 0-255. Normalize from 16-bit channels (e.g. termbg) by right-shifting 8."
+                    }
+                  }
+                }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapHyperlinks": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "enum": ["unsupported", "likely_supported", "supported", "unknown"] }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapMouse": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "enum": ["none", "x10", "urxvt", "sgr", "sgr_pixels"] }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapKeyboard": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "enum": ["legacy", "xterm_csi", "kitty", "win32"] }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapClipboard": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": { "enum": ["none", "read_only", "write_only", "read_write"] }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapXTVersion": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name"],
+                  "properties": {
+                    "name":    { "type": "string", "description": "Terminal name token reported by XTVERSION; '' if unknown." },
+                    "version": { "type": "string", "description": "Version string verbatim; '' if unknown." }
+                  }
+                }
+              } }
+          ]
+        }
+      ]
+    },
+
+    "CapDA1": {
+      "oneOf": [
+        { "$ref": "#/$defs/CapNotMeasured" },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/CapMeasuredBase" },
+            { "type": "object", "additionalProperties": false,
+              "properties": {
+                "supported": true, "method": true, "raw": true,
+                "value": {
+                  "type": "array",
+                  "items": { "type": "integer", "minimum": 0 },
+                  "description": "Sorted list of DA1 attribute Ps values (e.g. [4, 22, 52])."
+                }
+              } }
+          ]
+        }
+      ]
+    }
+
+  }
+}

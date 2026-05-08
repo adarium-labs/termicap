@@ -1,0 +1,19 @@
+[package]
+name = "supports-color-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance shim for supports-color (Rust)"
+
+[[bin]]
+name = "supports-color-shim"
+path = "src/main.rs"
+
+[dependencies]
+supports-color = { path = "../../../../../reference-frameworks/rust-supports-color" }
+serde_json = "1"
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true

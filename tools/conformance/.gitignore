@@ -1,0 +1,10 @@
+# Harness run artifacts (regenerated each invocation)
+envelope.json
+results/
+
+# Per-shim build artifacts (each shim has its own .gitignore for these)
+shims/*/*/target/
+shims/*/*/bin/
+shims/*/*/obj/
+shims/*/*/alire/
+shims/*/*/config/

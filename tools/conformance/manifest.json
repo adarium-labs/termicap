@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1.0",
+  "description": "List of shims the harness knows about. Each entry says how to build and where the binary lives. The runner skips unbuilt shims with a hint.",
+  "shims": [
+    {
+      "name": "termicap",
+      "language": "ada",
+      "binary": "shims/ada/termicap/bin/termicap_shim",
+      "build": "cd tools/conformance/shims/ada/termicap && alr -n build"
+    },
+    {
+      "name": "supports-color-rust",
+      "language": "rust",
+      "binary": "shims/rust/supports-color/target/release/supports-color-shim",
+      "build": "cd tools/conformance/shims/rust/supports-color && cargo build --release"
+    },
+    {
+      "name": "termenv",
+      "language": "go",
+      "binary": "shims/go/termenv/bin/termenv-shim",
+      "build": "cd tools/conformance/shims/go/termenv && go build -o bin/termenv-shim ."
+    }
+  ]
+}
