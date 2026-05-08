@@ -146,5 +146,46 @@ Saved to `.claude/ada-lessons-learned.md` if relevant; quick recap:
 - [ ] Maybe: GitHub Pages renderer of the matrix
 
 The harness is complete enough that the maintainer (or any contributor)
-can run it on a real terminal and produce a usable result file. The next
-iteration is *runs* on actual terminals, not more code.
+can run it on a real terminal and produce a usable result file.
+
+## Iter 7-11 — five more shims (eight total, five languages)
+
+Same shim contract, mechanically applied. Each commit is a self-contained
+addition of one shim plus its manifest entry.
+
+| Shim                 | Language | Capabilities measured                                        | Notable divergence on no-TTY env                |
+|----------------------|----------|--------------------------------------------------------------|-------------------------------------------------|
+| termbg               | rust     | terminal_kind, multiplexer, theme, background                | _(theme/bg only on real TTY)_                   |
+| crossterm            | rust     | color_depth (binary floor), dimensions, keyboard             | `color_depth=ansi16` while others report `none` |
+| is-unicode-supported | node     | unicode (boolean → extended/none)                            | `unicode=extended` vs termicap's `basic`        |
+| terminal-size        | node     | dimensions                                                   | agrees with termicap (80x24 default)            |
+| rich                 | python   | color_depth + windows_console_color, dimensions, unicode, tty_stdout | dimensions=80x25 (its default) vs others' 80x24 |
+
+In the no-TTY sandbox where this harness was developed, `python3 run.py`
+on the eight installed shims surfaces three real divergences automatically:
+
+- **`color_depth` divergence**: 4 libs say `none` (TTY-gated), crossterm
+  says `ansi16` (does not gate on TTY on non-Windows).
+- **`dimensions` divergence**: termicap + terminal-size default to 80×24,
+  rich defaults to 80×25.
+- **`unicode` divergence**: is-unicode-supported + rich say `extended`
+  (boolean and encoding paths), termicap says `basic` (three-level
+  locale cascade — vocabulary mismatch).
+
+These are exactly the kind of disagreements the harness exists to surface.
+None are bugs in any single lib; they're consequences of different
+detection contracts. The comparator's `method` field for each lib makes
+the *why* visible at a glance.
+
+## What's left (operational, not code)
+
+The harness is feature-complete for the kinds of comparisons it was
+designed to support. The remaining work is *runs*, not more code:
+
+1. Run on real terminals (iTerm2, Apple Terminal, WezTerm, Ghostty,
+   Windows Terminal, Linux console, tmux, screen, …) and commit the
+   resulting JSONs to a `results/<terminal>/<os>/` tree.
+2. Optional follow-on shims if a specific lib is interesting:
+   chalk's supports-color (Node), termcolor (Rust, intent-style),
+   go-isatty (Go), notcurses (C). Each is mechanical given the contract.
+3. Optional: a GitHub Pages renderer of the matrix.
