@@ -62,6 +62,36 @@ python3 tools/conformance/build.py
 ./tools/conformance/run.py --emulator iTerm2 --emulator-version 3.5.0
 ```
 
+### Results layout
+
+By default each run lands at:
+
+```
+results/<emulator>/<os>[-<arch>][-<multiplexer>]/<timestamp>/
+                                                ├── envelope.json
+                                                ├── <lib>.json    (one per shim)
+                                                └── report.md
+```
+
+Examples:
+
+```
+results/kitty/darwin-x86_64/20260508T114500Z/
+results/wezterm/linux-aarch64-tmux/20260508T114500Z/
+results/iterm-2/darwin-x86_64/20260508T120407Z/
+results/unknown/darwin-x86_64/20260508T114500Z/   # when --emulator omitted
+```
+
+A `latest` symlink at `results/<emulator>/<os-slug>/latest` always points
+at the most recent run for that combination, so `cat
+results/kitty/darwin-x86_64/latest/report.md` always shows the freshest
+report without having to look up the timestamp.
+
+The `--emulator` value is slugified (lowercased, non-alphanumerics
+collapsed to dashes), so `--emulator "iTerm 2"` becomes `iterm-2`. Pass
+`--results-dir PATH` to override the layout entirely (useful for CI or
+when reproducing an old path).
+
 `build.py` discovers the validator path: if `python3 -c "import jsonschema"`
 works on your system Python, it uses that; otherwise it creates a project-local
 venv at `tools/conformance/.venv/` and installs `jsonschema` into it. `run.py`

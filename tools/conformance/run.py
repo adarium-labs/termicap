@@ -10,7 +10,19 @@ Usage:
                    [--multiplexer {none,tmux,screen,zellij}]
                    [--results-dir PATH]
 
-Default results directory: results/<UTC timestamp>/.
+Default results directory:
+    results/<emulator>/<os>[-<arch>][-<multiplexer>]/<timestamp>/
+
+For example:
+    results/kitty/darwin-x86_64/20260508T114500Z/
+    results/wezterm/linux-aarch64-tmux/20260508T114500Z/
+    results/unknown/darwin-x86_64/20260508T114500Z/   (when --emulator is omitted)
+
+A `latest` symlink at results/<emulator>/<os-slug>/latest -> <timestamp>/
+points at the most recent run for each (emulator, os) combination.
+
+Pass --results-dir to override the auto-layout entirely (useful in CI or
+when reproducing an old run path).
 """
 
 from __future__ import annotations
@@ -50,6 +62,69 @@ def _platform_allows(shim: dict, current: str) -> tuple[bool, str]:
     return False, f"not supported on {current} (declared platforms: {', '.join(sorted(declared))})"
 
 
+def _slugify(s: str) -> str:
+    """Lowercase, collapse runs of non-alnum to single dashes, strip dashes.
+
+    Used to turn human-friendly --emulator values like "iTerm 2" or
+    "Apple Terminal" into directory-safe slugs ("iterm-2", "apple-terminal").
+    """
+    if not s:
+        return ""
+    s = s.lower().strip()
+    out: list[str] = []
+    prev_dash = False
+    for c in s:
+        if c.isalnum() or c == "_" or c == ".":
+            out.append(c)
+            prev_dash = False
+        else:
+            if not prev_dash:
+                out.append("-")
+                prev_dash = True
+    return "".join(out).strip("-")
+
+
+def _auto_results_dir(emulator: str | None, multiplexer: str | None) -> Path:
+    """Compute results/<emulator>/<os>[-<arch>][-<multiplexer>]/<timestamp>/.
+
+    The `host` and `terminal` fields used here come from the same sources
+    runner.py uses for the envelope (platform.system() / platform.machine()
+    + the user-supplied --emulator / --multiplexer args), so the auto-path
+    and the envelope agree on what they describe.
+    """
+    timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    emu_slug = _slugify(emulator) if emulator else "unknown"
+
+    os_slug = _current_platform()
+    arch = _slugify(_platform.machine() or "")
+    if arch:
+        os_slug = f"{os_slug}-{arch}"
+    if multiplexer and multiplexer != "none":
+        os_slug = f"{os_slug}-{multiplexer}"
+
+    return HERE / "results" / emu_slug / os_slug / timestamp
+
+
+def _update_latest_symlink(results_dir: Path) -> None:
+    """Maintain a `latest` symlink pointing at the most recent run.
+
+    The link sits at results/<emulator>/<os-slug>/latest and targets the
+    timestamped sibling. Uses a relative target so the link is portable
+    across host paths (works after rsync, in archives, etc.).
+    """
+    parent = results_dir.parent
+    latest = parent / "latest"
+    try:
+        if latest.is_symlink() or latest.exists():
+            latest.unlink()
+        latest.symlink_to(results_dir.name)
+    except OSError as exc:
+        # Filesystem may not support symlinks (e.g. CI on Windows without
+        # admin). Non-fatal: we still wrote the timestamped dir.
+        print(f"  WARN  could not update {latest}: {exc}")
+
+
 def _validator_python() -> str:
     """Pick the python interpreter that can import jsonschema.
 
@@ -79,10 +154,13 @@ def main() -> int:
 
     if args.results_dir:
         results_dir = Path(args.results_dir)
+        is_auto_layout = False
     else:
-        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        results_dir = HERE / "results" / stamp
+        results_dir = _auto_results_dir(args.emulator, args.multiplexer)
+        is_auto_layout = True
     results_dir.mkdir(parents=True, exist_ok=True)
+    if is_auto_layout:
+        _update_latest_symlink(results_dir)
 
     envelope = results_dir / "envelope.json"
 
