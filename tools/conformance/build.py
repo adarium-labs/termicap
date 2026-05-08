@@ -90,9 +90,33 @@ BUILD = "BUILD"
 FAIL  = "FAIL"
 
 
+def shim_field(shim: dict, key: str) -> str:
+    """Return ``shim[<key>_<plat>]`` if present, falling back to ``shim[key]``.
+
+    Used so manifest entries can override ``build`` / ``binary`` for a
+    specific OS without needing a separate top-level shim entry.  Example
+    keys: ``build``, ``binary``.  The platform suffix is whatever
+    :func:`current_platform` returns (``"windows"`` etc.).
+    """
+    plat = current_platform()
+    override = shim.get(f"{key}_{plat}")
+    if override:
+        return override
+    return shim[key]
+
+
+def shim_field_optional(shim: dict, key: str) -> str | None:
+    """Like :func:`shim_field` but returns None when neither the per-OS
+    override nor the plain key is set.  Use for optional manifest fields
+    (``build_marker``, ...).
+    """
+    plat = current_platform()
+    return shim.get(f"{key}_{plat}") or shim.get(key)
+
+
 def shim_dir(shim: dict) -> Path:
     """Directory of the shim itself (the parent of its binary)."""
-    binary = HERE / shim["binary"]
+    binary = HERE / shim_field(shim, "binary")
     # Walk up to the directory immediately under shims/<lang>/<name>/.
     parts = binary.relative_to(HERE).parts
     # parts looks like ("shims", "<lang>", "<name>", ...).
@@ -101,20 +125,113 @@ def shim_dir(shim: dict) -> Path:
     return binary.parent
 
 
+def resolve_binary(path: Path) -> Path:
+    """Return the on-disk path of a shim binary, trying ``.exe`` on Windows.
+
+    Manifest paths are written POSIX-style (no extension); on Windows the
+    same compiled binary lands at ``<name>.exe``.  Returns the existing
+    variant when found, otherwise the original path so the caller can
+    report a useful "missing" error.
+    """
+    if path.exists():
+        return path
+    if current_platform() == "windows":
+        with_exe = path.parent / (path.name + ".exe")
+        if with_exe.exists():
+            return with_exe
+    return path
+
+
+def _python_requirements_satisfied(shim_root: Path) -> bool:
+    """Check whether the shim's venv has the first requirement installed.
+
+    The venv directory is created by `python -m venv` before pip runs, so
+    its mere existence does not prove the install succeeded.  We parse the
+    first non-comment, non-blank line of requirements.txt, extract the
+    package name, and look for a matching site-packages entry (either a
+    plain dir or a `*.dist-info` for the package).  This is enough to
+    catch the common failure mode where venv creation succeeded but
+    `pip install` failed silently in an `&&`-chained build command.
+    """
+    req_file = shim_root / "requirements.txt"
+    venv = shim_root / ".venv"
+    if not req_file.is_file() or not venv.is_dir():
+        return False
+
+    first_pkg: str | None = None
+    for line in req_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Strip extras and version specifiers: "rich[jupyter]>=14" -> "rich".
+        name = line.split(";")[0].split("[")[0]
+        for sep in (">=", "<=", "==", "!=", "~=", ">", "<", " "):
+            if sep in name:
+                name = name.split(sep)[0]
+        first_pkg = name.strip().lower()
+        if first_pkg:
+            break
+    if not first_pkg:
+        # No requirements listed; treat venv as sufficient.
+        return True
+
+    # Site-packages location varies by platform layout.
+    candidates = [venv / "Lib" / "site-packages"]                  # Windows
+    for sub in (venv / "lib").glob("python*/site-packages"):       # POSIX
+        candidates.append(sub)
+    package_dir = first_pkg.replace("-", "_")
+    for sp in candidates:
+        if not sp.is_dir():
+            continue
+        for entry in sp.iterdir():
+            ename = entry.name.lower()
+            if ename == package_dir or ename.startswith(f"{first_pkg.replace('_', '-')}-") or ename.startswith(f"{package_dir}-"):
+                return True
+    return False
+
+
+def _build_marker_satisfied(shim: dict) -> bool:
+    """Return True iff the shim's ``build_marker`` (or per-OS override) exists.
+
+    Supports a glob pattern in the value: when ``*`` is present the path is
+    matched via :py:meth:`Path.glob` against the conformance root.  This is
+    the only way to express SPM's per-triple artifact directory on Windows
+    (e.g. ``.build/x86_64-unknown-windows-msvc/release/Foo.exe``) where the
+    triple varies by host.  Plain paths without ``*`` are checked verbatim.
+    Returns False when no marker is configured for the current OS.
+    """
+    marker = shim_field_optional(shim, "build_marker")
+    if not marker:
+        return False
+    if "*" in marker:
+        return any(HERE.glob(marker))
+    return resolve_binary(HERE / marker).exists()
+
+
 def is_built(shim: dict) -> bool:
     """Best-effort check that the shim has been built.
 
-    For compiled langs (Ada/Rust/Go) we just look for the binary. For Node
-    and Python the manifest's `binary` is a script that always exists in
-    git, so we additionally check for node_modules/ or .venv/.
+    For compiled langs (Ada/Rust/Go) we just look for the binary.  For
+    languages whose `binary` is a wrapper script (node/python/java/ruby/
+    csharp/swift), the wrapper exists in git regardless of whether
+    `pip install` / `bundle install` / `dotnet publish` / etc. succeeded,
+    so we check for an artifact specific to each language.  Manifest
+    entries can also set ``build_marker`` (with optional ``build_marker_<os>``
+    override) to a path that build.py requires after the build step.
     """
-    binary = HERE / shim["binary"]
+    binary = HERE / shim_field(shim, "binary")
     lang = shim.get("language", "")
+
+    if shim_field_optional(shim, "build_marker"):
+        return _build_marker_satisfied(shim)
+
     if lang == "node":
-        return (shim_dir(shim) / "node_modules").is_dir()
+        # node_modules is the proof npm install ran; reject empty dirs.
+        nm = shim_dir(shim) / "node_modules"
+        return nm.is_dir() and any(nm.iterdir())
     if lang == "python":
-        return (shim_dir(shim) / ".venv").is_dir()
-    return binary.exists()
+        return _python_requirements_satisfied(shim_dir(shim))
+    return resolve_binary(binary).exists()
 
 
 def toolchain_ok(language: str) -> tuple[bool, str]:
@@ -170,7 +287,10 @@ def ensure_validator() -> Path | None:
         return Path(sys.executable)
 
     venv_dir = HERE / ".venv"
-    venv_py = venv_dir / "bin" / "python"
+    if current_platform() == "windows":
+        venv_py = venv_dir / "Scripts" / "python.exe"
+    else:
+        venv_py = venv_dir / "bin" / "python"
     if venv_py.exists() and _python_can_import(venv_py, "jsonschema"):
         print_row(OK, "validator", f"project venv has jsonschema ({venv_dir})")
         return venv_py
@@ -213,14 +333,15 @@ def build_one(shim: dict, *, force: bool) -> bool:
         print_row(SKIP, name, hint)
         return True   # not a failure — just skipped, the user can install later
 
-    print_row(BUILD, name, shim["build"])
-    rc = subprocess.run(shim["build"], shell=True, cwd=REPO_ROOT)
+    build_cmd = shim_field(shim, "build")
+    print_row(BUILD, name, build_cmd)
+    rc = subprocess.run(build_cmd, shell=True, cwd=REPO_ROOT)
     if rc.returncode != 0:
         print_row(FAIL, name, f"build command exited {rc.returncode}")
         return False
 
     if not is_built(shim):
-        print_row(FAIL, name, f"build completed but {shim['binary']} is not present")
+        print_row(FAIL, name, f"build completed but {shim_field(shim, 'binary')} is not present")
         return False
 
     print_row(OK, name)

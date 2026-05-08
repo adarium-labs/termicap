@@ -1,6 +1,6 @@
 {
   "schema_version": "0.1.0",
-  "description": "List of shims the harness knows about. Each entry says how to build and where the binary lives. The runner skips unbuilt shims with a hint. Optional `platforms` field is an allowlist of OS names ('darwin', 'linux', 'windows', 'freebsd', 'openbsd', 'netbsd', 'android'); when present, build.py and run.py skip the shim on hosts not in the list. Shims without `platforms` are treated as cross-platform.",
+  "description": "List of shims the harness knows about. Each entry says how to build and where the binary lives. The runner skips unbuilt shims with a hint. Optional `platforms` field is an allowlist of OS names ('darwin', 'linux', 'windows', 'freebsd', 'openbsd', 'netbsd', 'android'); when present, build.py and run.py skip the shim on hosts not in the list. Shims without `platforms` are treated as cross-platform. Optional `build_<os>` / `binary_<os>` keys override `build` / `binary` for a specific host (e.g. `build_windows`, `binary_windows`); the host suffix is the same value used in `platforms`. Optional `build_marker` is a path that must exist after the build step for the shim to count as built — used when `binary` is a wrapper script (run.cmd / run.sh) checked into git, so its mere existence does not prove the build succeeded. Like `build` / `binary`, `build_marker` accepts a per-OS override (`build_marker_<os>`); the value may contain a `*` glob, useful for SPM artifact directories whose triple varies by host (e.g. `.build/*/release/Foo.exe`).",
   "shims": [
     {
       "name": "termicap",
@@ -18,7 +18,7 @@
       "name": "termenv",
       "language": "go",
       "binary": "shims/go/termenv/bin/termenv-shim",
-      "build": "cd tools/conformance/shims/go/termenv && go build -o bin/termenv-shim ."
+      "build": "cd tools/conformance/shims/go/termenv && go mod tidy && go build -o bin/termenv-shim ."
     },
     {
       "name": "termbg",
@@ -36,24 +36,29 @@
       "name": "is-unicode-supported",
       "language": "node",
       "binary": "shims/node/is-unicode-supported/shim.mjs",
+      "binary_windows": "shims/node/is-unicode-supported/run.cmd",
       "build": "cd tools/conformance/shims/node/is-unicode-supported && npm install"
     },
     {
       "name": "terminal-size",
       "language": "node",
       "binary": "shims/node/terminal-size/shim.mjs",
+      "binary_windows": "shims/node/terminal-size/run.cmd",
       "build": "cd tools/conformance/shims/node/terminal-size && npm install"
     },
     {
       "name": "rich",
       "language": "python",
       "binary": "shims/python/rich/run.sh",
-      "build": "cd tools/conformance/shims/python/rich && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+      "build": "cd tools/conformance/shims/python/rich && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+      "binary_windows": "shims/python/rich/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\python\\rich && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt"
     },
     {
       "name": "supports-hyperlinks",
       "language": "node",
       "binary": "shims/node/supports-hyperlinks/shim.mjs",
+      "binary_windows": "shims/node/supports-hyperlinks/run.cmd",
       "build": "cd tools/conformance/shims/node/supports-hyperlinks && npm install"
     },
     {
@@ -66,6 +71,7 @@
       "name": "supports-color-node",
       "language": "node",
       "binary": "shims/node/supports-color/shim.mjs",
+      "binary_windows": "shims/node/supports-color/run.cmd",
       "build": "cd tools/conformance/shims/node/supports-color && npm install"
     },
     {
@@ -78,13 +84,16 @@
       "name": "blessed",
       "language": "python",
       "binary": "shims/python/blessed/run.sh",
-      "build": "cd tools/conformance/shims/python/blessed && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+      "build": "cd tools/conformance/shims/python/blessed && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+      "binary_windows": "shims/python/blessed/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\python\\blessed && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt"
     },
     {
       "name": "lipgloss",
       "language": "go",
       "binary": "shims/go/lipgloss/bin/lipgloss-shim",
-      "build": "cd tools/conformance/shims/go/lipgloss && GOTOOLCHAIN=auto go build -o bin/lipgloss-shim ."
+      "build": "cd tools/conformance/shims/go/lipgloss && GOTOOLCHAIN=auto go build -o bin/lipgloss-shim .",
+      "build_windows": "cd tools\\conformance\\shims\\go\\lipgloss && set \"GOTOOLCHAIN=auto\" && go build -o bin/lipgloss-shim ."
     },
     {
       "name": "rust-std-isterminal",
@@ -115,75 +124,100 @@
       "name": "kleur",
       "language": "node",
       "binary": "shims/node/kleur/shim.mjs",
+      "binary_windows": "shims/node/kleur/run.cmd",
       "build": "cd tools/conformance/shims/node/kleur && npm install"
     },
     {
       "name": "colorette",
       "language": "node",
       "binary": "shims/node/colorette/shim.mjs",
+      "binary_windows": "shims/node/colorette/run.cmd",
       "build": "cd tools/conformance/shims/node/colorette && npm install"
     },
     {
       "name": "supports-terminal-graphics",
       "language": "node",
       "binary": "shims/node/supports-terminal-graphics/shim.mjs",
+      "binary_windows": "shims/node/supports-terminal-graphics/run.cmd",
       "build": "cd tools/conformance/shims/node/supports-terminal-graphics && npm install"
     },
     {
       "name": "prompt_toolkit",
       "language": "python",
       "binary": "shims/python/prompt_toolkit/run.sh",
-      "build": "cd tools/conformance/shims/python/prompt_toolkit && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+      "build": "cd tools/conformance/shims/python/prompt_toolkit && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+      "binary_windows": "shims/python/prompt_toolkit/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\python\\prompt_toolkit && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt"
     },
     {
       "name": "colorama",
       "language": "python",
       "binary": "shims/python/colorama/run.sh",
-      "build": "cd tools/conformance/shims/python/colorama && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+      "build": "cd tools/conformance/shims/python/colorama && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+      "binary_windows": "shims/python/colorama/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\python\\colorama && python -m venv .venv && .venv\\Scripts\\pip install -r requirements.txt"
     },
     {
       "name": "jline",
       "language": "java",
       "binary": "shims/java/jline/run.sh",
-      "build": "cd tools/conformance/shims/java/jline && ./build.sh"
+      "build": "cd tools/conformance/shims/java/jline && ./build.sh",
+      "binary_windows": "shims/java/jline/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\java\\jline && .\\build.cmd",
+      "build_marker": "shims/java/jline/build/JlineShim.class"
     },
     {
       "name": "console-kit",
       "language": "swift",
       "binary": "shims/swift/console-kit-shim/run.sh",
       "build": "cd tools/conformance/shims/swift/console-kit-shim && swift build -c release",
+      "binary_windows": "shims/swift/console-kit-shim/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\swift\\console-kit-shim && set \"GIT_CONFIG_COUNT=1\" && set \"GIT_CONFIG_KEY_0=core.symlinks\" && set \"GIT_CONFIG_VALUE_0=false\" && swift build -c release",
+      "build_marker": "shims/swift/console-kit-shim/.build/release",
+      "build_marker_windows": "shims/swift/console-kit-shim/.build/*/release/ConsoleKitShim.exe",
       "platforms": ["darwin", "linux", "windows", "android"]
     },
     {
       "name": "tty-color",
       "language": "ruby",
       "binary": "shims/ruby/tty-color/run.sh",
-      "build": "cd tools/conformance/shims/ruby/tty-color && BUNDLE_PATH=vendor/bundle bundle install --path vendor/bundle"
+      "build": "cd tools/conformance/shims/ruby/tty-color && BUNDLE_PATH=vendor/bundle bundle install",
+      "binary_windows": "shims/ruby/tty-color/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\ruby\\tty-color && set \"BUNDLE_PATH=vendor/bundle\" && bundle install",
+      "build_marker": "shims/ruby/tty-color/vendor/bundle"
     },
     {
       "name": "pastel",
       "language": "ruby",
       "binary": "shims/ruby/pastel/run.sh",
-      "build": "cd tools/conformance/shims/ruby/pastel && BUNDLE_PATH=vendor/bundle bundle install --path vendor/bundle"
+      "build": "cd tools/conformance/shims/ruby/pastel && BUNDLE_PATH=vendor/bundle bundle install",
+      "binary_windows": "shims/ruby/pastel/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\ruby\\pastel && set \"BUNDLE_PATH=vendor/bundle\" && bundle install",
+      "build_marker": "shims/ruby/pastel/vendor/bundle"
     },
     {
       "name": "spectre-console",
       "language": "csharp",
       "binary": "shims/csharp/spectre-console/run.sh",
       "build": "cd tools/conformance/shims/csharp/spectre-console && dotnet publish -c Release -o publish",
+      "binary_windows": "shims/csharp/spectre-console/run.cmd",
+      "build_windows": "cd tools\\conformance\\shims\\csharp\\spectre-console && dotnet publish -c Release -o publish",
+      "build_marker": "shims/csharp/spectre-console/publish/SpectreConsoleShim.dll",
       "platforms": ["darwin", "linux", "windows"]
     },
     {
       "name": "ansi-terminal",
       "language": "haskell",
       "binary": "shims/haskell/ansi-terminal/bin/ansi-terminal-shim",
-      "build": "cd tools/conformance/shims/haskell/ansi-terminal && ./build.sh"
+      "build": "cd tools/conformance/shims/haskell/ansi-terminal && ./build.sh",
+      "build_windows": "cd tools\\conformance\\shims\\haskell\\ansi-terminal && .\\build.cmd"
     },
     {
       "name": "chafa",
       "language": "c",
       "binary": "shims/c/chafa/build/chafa-shim",
-      "build": "cd tools/conformance/shims/c/chafa && ./build.sh"
+      "build": "cd tools/conformance/shims/c/chafa && ./build.sh",
+      "platforms": ["darwin", "linux", "freebsd", "openbsd", "netbsd"]
     }
   ]
 }
