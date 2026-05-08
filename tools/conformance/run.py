@@ -6,9 +6,13 @@ that has a built binary, validates each output, then runs the comparator
 and writes a markdown report.
 
 Usage:
-    python3 run.py [--emulator NAME] [--emulator-version VER]
-                   [--multiplexer {none,tmux,screen,zellij}]
-                   [--results-dir PATH]
+    python3 run.py EMULATOR [--emulator-version VER]
+                            [--multiplexer {none,tmux,screen,zellij}]
+                            [--results-dir PATH]
+
+EMULATOR is the terminal emulator name (kitty, iTerm2, WezTerm, ...).
+It is required: the harness needs to know what to label the run as,
+otherwise the results/ tree fills up with `unknown/` and becomes useless.
 
 Default results directory:
     results/<emulator>/<os>[-<arch>][-<multiplexer>]/<timestamp>/
@@ -16,7 +20,6 @@ Default results directory:
 For example:
     results/kitty/darwin-x86_64/20260508T114500Z/
     results/wezterm/linux-aarch64-tmux/20260508T114500Z/
-    results/unknown/darwin-x86_64/20260508T114500Z/   (when --emulator is omitted)
 
 A `latest` symlink at results/<emulator>/<os-slug>/latest -> <timestamp>/
 points at the most recent run for each (emulator, os) combination.
@@ -145,11 +148,14 @@ def _validator_python() -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Run all built shims and compare results.")
-    p.add_argument("--emulator")
+    p.add_argument("emulator",
+                   help="Terminal emulator name (e.g. kitty, iTerm2, WezTerm). "
+                        "Slugified into the results/ path; passed verbatim into the envelope.")
     p.add_argument("--emulator-version")
     p.add_argument("--multiplexer", choices=["none", "tmux", "screen", "zellij"])
     p.add_argument("--results-dir",
-                   help="Where to write envelope.json, <lib>.json, and report.md.")
+                   help="Where to write envelope.json, <lib>.json, and report.md. "
+                        "Overrides the auto-layout (results/<emulator>/<os-slug>/<timestamp>/).")
     args = p.parse_args()
 
     if args.results_dir:
@@ -164,8 +170,11 @@ def main() -> int:
 
     envelope = results_dir / "envelope.json"
 
-    runner_cmd: list[str] = [sys.executable, str(HERE / "runner.py"), "--output", str(envelope)]
-    if args.emulator:         runner_cmd += ["--emulator", args.emulator]
+    runner_cmd: list[str] = [
+        sys.executable, str(HERE / "runner.py"),
+        "--output", str(envelope),
+        "--emulator", args.emulator,
+    ]
     if args.emulator_version: runner_cmd += ["--emulator-version", args.emulator_version]
     if args.multiplexer:      runner_cmd += ["--multiplexer", args.multiplexer]
 
