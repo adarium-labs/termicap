@@ -19,11 +19,35 @@ import argparse
 import datetime as dt
 import json
 import os
+import platform as _platform
 import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
+
+
+def _current_platform() -> str:
+    """Return one canonical OS identifier matching manifest.json `platforms`."""
+    p = _platform.system().lower()
+    if p == "darwin":  return "darwin"
+    if p == "linux":   return "linux"
+    if p == "windows": return "windows"
+    if p.startswith("freebsd"): return "freebsd"
+    if p.startswith("openbsd"): return "openbsd"
+    if p.startswith("netbsd"):  return "netbsd"
+    if p.startswith("android"): return "android"
+    return "other"
+
+
+def _platform_allows(shim: dict, current: str) -> tuple[bool, str]:
+    """If shim has a `platforms` allowlist and current OS is not in it, skip."""
+    declared = shim.get("platforms")
+    if declared is None or not isinstance(declared, list) or not declared:
+        return True, ""
+    if current in declared:
+        return True, ""
+    return False, f"not supported on {current} (declared platforms: {', '.join(sorted(declared))})"
 
 
 def _validator_python() -> str:
@@ -78,10 +102,16 @@ def main() -> int:
     valid_results: list[Path] = []
     validator_warned = False
     validator_py = _validator_python()
+    current_os = _current_platform()
 
     for shim in manifest["shims"]:
         binary = HERE / shim["binary"]
         out = results_dir / f"{shim['name']}.json"
+
+        allowed, reason = _platform_allows(shim, current_os)
+        if not allowed:
+            print(f"  SKIP    {shim['name']:<24}  ({reason})")
+            continue
 
         if not binary.exists():
             print(f"  SKIP    {shim['name']:<24}  (not built — to build: {shim['build']})")

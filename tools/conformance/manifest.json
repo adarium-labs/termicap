@@ -1,6 +1,6 @@
 {
   "schema_version": "0.1.0",
-  "description": "List of shims the harness knows about. Each entry says how to build and where the binary lives. The runner skips unbuilt shims with a hint.",
+  "description": "List of shims the harness knows about. Each entry says how to build and where the binary lives. The runner skips unbuilt shims with a hint. Optional `platforms` field is an allowlist of OS names ('darwin', 'linux', 'windows', 'freebsd', 'openbsd', 'netbsd', 'android'); when present, build.py and run.py skip the shim on hosts not in the list. Shims without `platforms` are treated as cross-platform.",
   "shims": [
     {
       "name": "termicap",
@@ -102,7 +102,8 @@
       "name": "xterm-query",
       "language": "rust",
       "binary": "shims/rust/xterm-query/target/release/xterm-query-shim",
-      "build": "cd tools/conformance/shims/rust/xterm-query && cargo build --release"
+      "build": "cd tools/conformance/shims/rust/xterm-query && cargo build --release",
+      "platforms": ["darwin", "linux", "freebsd", "openbsd", "netbsd"]
     },
     {
       "name": "supports-hyperlinks-rs",
@@ -150,7 +151,8 @@
       "name": "console-kit",
       "language": "swift",
       "binary": "shims/swift/console-kit-shim/run.sh",
-      "build": "cd tools/conformance/shims/swift/console-kit-shim && swift build -c release"
+      "build": "cd tools/conformance/shims/swift/console-kit-shim && swift build -c release",
+      "platforms": ["darwin", "linux", "windows", "android"]
     },
     {
       "name": "tty-color",
@@ -168,7 +170,8 @@
       "name": "spectre-console",
       "language": "csharp",
       "binary": "shims/csharp/spectre-console/run.sh",
-      "build": "cd tools/conformance/shims/csharp/spectre-console && dotnet publish -c Release -o publish"
+      "build": "cd tools/conformance/shims/csharp/spectre-console && dotnet publish -c Release -o publish",
+      "platforms": ["darwin", "linux", "windows"]
     },
     {
       "name": "ansi-terminal",

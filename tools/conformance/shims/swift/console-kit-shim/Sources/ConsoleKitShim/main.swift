@@ -22,8 +22,19 @@ import Foundation
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Android)
+import Android
+#elseif canImport(WinSDK)
+import WinSDK
 #endif
 import ConsoleKitTerminal
+
+#if canImport(WinSDK)
+// Windows ucrt exposes _isatty rather than the POSIX isatty.
+private func isatty(_ fd: Int32) -> Int32 { _isatty(fd) }
+#endif
 
 let SCHEMA_VERSION = "0.1.0"
 let LIB_NAME = "console-kit"

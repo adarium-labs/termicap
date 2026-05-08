@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import shutil
 import subprocess
 import sys
@@ -33,12 +34,55 @@ REPO_ROOT = HERE.parent.parent   # tools/conformance/build.py -> tools -> repo r
 
 # Toolchain executable each language needs, plus an install hint shown when missing.
 TOOLCHAIN: dict[str, tuple[str, str]] = {
-    "ada":    ("alr",     "Install Alire: https://alire.ada.dev/"),
-    "rust":   ("cargo",   "Install rustup: https://rustup.rs/"),
-    "go":     ("go",      "Install Go 1.21+: https://go.dev/dl/"),
-    "node":   ("npm",     "Install Node 18+: https://nodejs.org/"),
-    "python": ("python3", "Python 3.10+ is required"),
+    "ada":     ("alr",     "Install Alire: https://alire.ada.dev/"),
+    "rust":    ("cargo",   "Install rustup: https://rustup.rs/"),
+    "go":      ("go",      "Install Go 1.21+: https://go.dev/dl/"),
+    "node":    ("npm",     "Install Node 18+: https://nodejs.org/"),
+    "python":  ("python3", "Python 3.10+ is required"),
+    "java":    ("javac",   "Install a JDK: https://adoptium.net/"),
+    "swift":   ("swift",   "Install Swift toolchain: https://swift.org/install/ (or Xcode CLI tools on macOS)"),
+    "ruby":    ("ruby",    "Install Ruby + bundler"),
+    "csharp":  ("dotnet",  "Install .NET SDK: https://dotnet.microsoft.com/download"),
+    "haskell": ("ghc",     "Install GHCup: https://www.haskell.org/ghcup/"),
+    "c":       ("cc",      "Install a C toolchain (clang/gcc); on macOS: `xcode-select --install`"),
 }
+
+
+# Recognized OS strings for the optional `platforms` field in manifest.json.
+KNOWN_PLATFORMS = frozenset({
+    "darwin", "linux", "windows", "freebsd", "openbsd", "netbsd", "android", "other",
+})
+
+
+def current_platform() -> str:
+    """Return one canonical OS identifier matching KNOWN_PLATFORMS."""
+    p = platform.system().lower()
+    if p == "darwin":  return "darwin"
+    if p == "linux":   return "linux"
+    if p == "windows": return "windows"
+    if p.startswith("freebsd"): return "freebsd"
+    if p.startswith("openbsd"): return "openbsd"
+    if p.startswith("netbsd"):  return "netbsd"
+    if p.startswith("android"): return "android"
+    return "other"
+
+
+def platforms_ok(shim: dict) -> tuple[bool, str]:
+    """Check if the shim's `platforms` field allows the current OS.
+
+    Returns (allowed, message). When `platforms` is missing, the shim is
+    treated as cross-platform and allowed everywhere. The message is empty
+    on success and explanatory on skip.
+    """
+    declared = shim.get("platforms")
+    if declared is None:
+        return True, ""
+    if not isinstance(declared, list) or not declared:
+        return True, ""
+    cur = current_platform()
+    if cur in declared:
+        return True, ""
+    return False, f"not supported on {cur} (declared platforms: {', '.join(sorted(declared))})"
 
 OK    = "OK"
 SKIP  = "SKIP"
@@ -155,6 +199,11 @@ def build_one(shim: dict, *, force: bool) -> bool:
     name = shim["name"]
     language = shim.get("language", "?")
 
+    allowed, reason = platforms_ok(shim)
+    if not allowed:
+        print_row(SKIP, name, reason)
+        return True   # platform-incompatible is a successful skip, not a failure
+
     if not force and is_built(shim):
         print_row(SKIP, name, "already built (use --force to rebuild)")
         return True
@@ -179,16 +228,24 @@ def build_one(shim: dict, *, force: bool) -> bool:
 
 
 def cmd_list(shims: list[dict]) -> int:
-    """Print each shim's name, language, and build state without building."""
-    print(f"{'NAME':<24} {'LANG':<8} {'STATE':<14} {'TOOLCHAIN':<24}")
-    print(f"{'-' * 24} {'-' * 8} {'-' * 14} {'-' * 24}")
+    """Print each shim's name, language, build state, and platform support."""
+    print(f"{'NAME':<26} {'LANG':<8} {'STATE':<14} {'TOOLCHAIN':<14} {'PLATFORMS':<28}")
+    print(f"{'-' * 26} {'-' * 8} {'-' * 14} {'-' * 14} {'-' * 28}")
+    cur = current_platform()
     for shim in shims:
         name = shim["name"]
         lang = shim.get("language", "?")
         state = "built" if is_built(shim) else "not built"
         avail, _ = toolchain_ok(lang)
         tc = "available" if avail else "MISSING"
-        print(f"{name:<24} {lang:<8} {state:<14} {tc:<24}")
+        declared = shim.get("platforms")
+        if declared is None:
+            plat = "(any)"
+        else:
+            mark = "*" if cur in declared else "x"
+            plat = f"{mark} {','.join(sorted(declared))}"
+        print(f"{name:<26} {lang:<8} {state:<14} {tc:<14} {plat:<28}")
+    print(f"\ncurrent platform: {cur}  (rows marked 'x' will be skipped on this host)")
     return 0
 
 

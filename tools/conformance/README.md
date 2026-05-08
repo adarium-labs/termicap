@@ -75,9 +75,33 @@ shims, and reports per-shim status. Filter with positional args:
 ```bash
 python3 build.py rust              # only build rust shims
 python3 build.py termicap rich     # only build named shims
-python3 build.py --list            # show shim states without building
+python3 build.py --list            # show shim states + per-host platform support
 python3 build.py --force           # rebuild everything
 ```
+
+### Platform gating
+
+Each manifest entry may include an optional `platforms` allowlist:
+
+```jsonc
+{
+  "name": "console-kit",
+  "language": "swift",
+  "binary": "...",
+  "build": "...",
+  "platforms": ["darwin", "linux", "windows", "android"]   // no *BSD
+}
+```
+
+Recognized values: `darwin`, `linux`, `windows`, `freebsd`, `openbsd`,
+`netbsd`, `android`. When set, `build.py` and `run.py` skip the shim on
+hosts whose OS is not in the list. When omitted, the shim is treated as
+cross-platform.
+
+This is for shims that genuinely cannot run on a given OS (POSIX-only
+syscalls, missing libc module map, etc.) — not for cases where the
+toolchain might just be uninstalled. The toolchain-missing case is
+already covered by `build.py`'s skip-with-install-hint logic.
 
 ## Concept: one JSON per (lib, run)
 
