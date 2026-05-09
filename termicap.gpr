@@ -89,4 +89,8 @@ project Termicap is
       for Charset ("Ada") use "utf-8";
    end Format;
 
+   package Documentation is
+      for Style use "leading";
+   end Documentation;
+
 end Termicap;
