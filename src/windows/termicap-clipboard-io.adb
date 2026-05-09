@@ -47,15 +47,10 @@ with Termicap.OSC;
 with Termicap.OSC.Parsing;
 with Termicap.TTY;
 with Termicap.Win32_VT;
-with Win32;
-with Win32.Winbase;
-with Win32.Wincon;
-with Win32.Winnt;
 
 package body Termicap.Clipboard.IO is
 
    use type Termicap.OSC.Session_Status;
-   use type Win32.BOOL;
 
    ---------------------------------------------------------------------------
    --  Protected cache (FUNC-C52-017)
@@ -230,35 +225,26 @@ package body Termicap.Clipboard.IO is
    function Run_Cascade return Clipboard_Capabilities is
       Caps : Clipboard_Capabilities := NO_CLIPBOARD_CAPABILITIES;
       Env  : Termicap.Environment.Environment;
-
-      --  Win32 Console gate (FUNC-C52-012, Guard 4)
-      H    : Win32.Winnt.HANDLE;
-      Mode : aliased Win32.DWORD := 0;
-      Res  : Win32.BOOL;
    begin
       --  Step 0: Capture environment once for all subsequent passive checks.
       Termicap.Environment.Capture.Capture_Current (Env);
 
-      --  Guard 4 (Windows): Win32 Console gate (FUNC-C52-012).
-      --  GetConsoleMode succeeding on STD_OUTPUT_HANDLE means stdout is a
-      --  native Windows Console.  No OSC 52 probe is meaningful there; run
-      --  env-var heuristics only with Probed = False.
-      H := Win32.Winbase.GetStdHandle (Win32.Winbase.STD_OUTPUT_HANDLE);
-      if Termicap.Win32_VT.Is_Valid_Handle (H) then
-         Res := Win32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
-         if Res /= Win32.FALSE then
+      --  Guard 4 (Windows): Win32 Console gate (FUNC-C52-012, FUNC-WIN-014).
+      --  Three-way classifier on STD_OUTPUT_HANDLE:
+      --    Legacy_Conhost     => bail; no OSC 52 probe meaningful.
+      --    ConPTY_VT_Enabled  => proceed; ConPTY honours active probes.
+      --    Not_A_Console      => proceed; OSC.Open will try CONIN$/CONOUT$
+      --                          (FUNC-OSC-016) and self-bail with
+      --                          Session_No_Terminal if no console is reachable.
+      case Termicap.Win32_VT.Classify_Console_VT is
+         when Termicap.Win32_VT.Legacy_Conhost =>
             Infer_Clipboard_From_Env (Env, Caps);
             return Caps;
-         end if;
-         --  GetConsoleMode returned FALSE: Cygwin/MSYS PTY, pipe, or file.
-         --  Fall through to the POSIX-like cascade below.
-      end if;
-
-      --  Guard 1: TTY check (FUNC-C52-012).
-      if not Termicap.TTY.Is_TTY (Termicap.TTY.Stdout) then
-         Infer_Clipboard_From_Env (Env, Caps);
-         return Caps;
-      end if;
+         when Termicap.Win32_VT.Not_A_Console =>
+            null;  --  Proceed; OSC.Open will try CONIN$/CONOUT$.
+         when Termicap.Win32_VT.ConPTY_VT_Enabled =>
+            null;  --  Proceed; ConPTY host honours active probes.
+      end case;
 
       --  Phase 1: DA1 passive detection (FUNC-C52-006).
       declare

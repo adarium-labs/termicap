@@ -36,14 +36,9 @@ with Termicap.DECRPM;
 with Termicap.OSC;
 with Termicap.TTY;
 with Termicap.Win32_VT;
-with Win32;
-with Win32.Winbase;
-with Win32.Wincon;
-with Win32.Winnt;
 
 package body Termicap.Mouse.IO is
 
-   use type Win32.BOOL;
    use type Interfaces.C.unsigned_char;
    use type Termicap.DECRPM.Mode_Status;
    use type Termicap.OSC.Session_Status;
@@ -265,25 +260,21 @@ package body Termicap.Mouse.IO is
       Session : Termicap.OSC.Probe_Session;
       Status  : Termicap.OSC.Session_Status;
       Caps    : Mouse_Capabilities;
-
-      --  Win32 gate variables (FUNC-MSE-010)
-      H    : Win32.Winnt.HANDLE;
-      Mode : aliased Win32.DWORD := 0;
-      Res  : Win32.BOOL;
    begin
-      --  Guard 1: Win32 Console gate (FUNC-MSE-010).
-      --  If GetConsoleMode succeeds on STD_INPUT_HANDLE, stdin is a native
-      --  Windows Console; return Win32_Console_Mouse = True immediately.
-      H := Win32.Winbase.GetStdHandle (Win32.Winbase.STD_INPUT_HANDLE);
-      if Termicap.Win32_VT.Is_Valid_Handle (H) then
-         Res := Win32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
-         if Res /= Win32.FALSE then
-            --  Native Windows Console confirmed; DECRPM probe is not applicable.
+      --  Guard 1: Win32 Console gate (FUNC-MSE-010, FUNC-WIN-014).
+      --  Three-way classifier on STD_OUTPUT_HANDLE:
+      --    Legacy_Conhost     => native Win32 Console; DECRPM probe is not
+      --                          applicable, return Win32_Console_Mouse = True.
+      --    Not_A_Console      => Cygwin/MSYS2 PTY, pipe, or file: POSIX cascade.
+      --    ConPTY_VT_Enabled  => fall through to TTY guard and active probes.
+      case Termicap.Win32_VT.Classify_Console_VT is
+         when Termicap.Win32_VT.Legacy_Conhost =>
             return Make_Win32_Result;
-         end if;
-         --  GetConsoleMode returned FALSE: Cygwin/MSYS2 PTY or file.
-         --  Fall through to the POSIX-like cascade.
-      end if;
+         when Termicap.Win32_VT.Not_A_Console =>
+            null;  --  Fall through to MSYS2/Cygwin/POSIX-like path.
+         when Termicap.Win32_VT.ConPTY_VT_Enabled =>
+            null;  --  Fall through to TTY guard and active probes.
+      end case;
 
       --  Guard 3: Non-TTY guard (FUNC-MSE-009 step 3).
       --  (Guard 2 / GPM heuristic is POSIX-only; Windows body skips it.)

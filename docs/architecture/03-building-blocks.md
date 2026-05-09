@@ -54,7 +54,10 @@ On Windows, a set of platform-specific packages is compiled instead of (or along
 ```
 Termicap.Win32_Ntdll    [SPARK_Mode => Off] — dynamic load of ntdll.dll; RtlGetNtVersionNumbers → Windows build number;
                          extended with Query_Object_Name (NtQueryObject wrapper for pipe name retrieval)
-Termicap.Win32_VT       [SPARK_Mode => Off] — Is_Valid_Handle, Open/Close CONIN$/CONOUT$, Enable_VT_Processing
+Termicap.Win32_VT       [SPARK_Mode => Off] — Is_Valid_Handle, Open/Close CONIN$/CONOUT$, Enable_VT_Processing;
+                         ENABLE_VIRTUAL_TERMINAL_INPUT and DISABLE_NEWLINE_AUTO_RETURN constants;
+                         Console_VT_Status enum + Classify_Console_VT + Should_Skip_Active_Probes
+                         (three-way ConPTY classifier — gate for all Tier-3 active probes)
 Termicap.Win32_Color    [SPARK_Mode (body Off)] — Build_To_Color_Level (SPARK Silver), Detect_Windows_Color_Level (impure wrapper)
 Termicap.Win32_Cygwin   [spec: SPARK_Mode => On; body: Off (Is_Cygwin_Pipe_Name body locally On)] —
                          Cygwin/MSYS2 PTY detection via named-pipe name inspection;
@@ -67,7 +70,9 @@ Platform-dispatched bodies (replacing the POSIX equivalents on Windows):
 - `src/windows/termicap-dimensions.adb` — terminal size via `GetConsoleScreenBufferInfo`, reads `srWindow` (not `dwSize`)
 - `src/windows/termicap-capabilities.adb` — integrates `Win32_Color.Detect_Windows_Color_Level`; final color is `Color_Level'Max (Win32_Level, env_cascade_level)`
 - `src/windows/termicap-sigwinch.adb` — no-op stubs (SIGWINCH does not exist on Windows; FUNC-SWC-008)
-- `src/windows/termicap-keyboard-io.adb` — keyboard protocol detection via `GetConsoleMode (STD_INPUT_HANDLE)` fast-path gate; falls through to POSIX-style Kitty/XTerm probe cascade for Cygwin/MSYS2 PTY handles (FUNC-KKB-010)
+- `src/windows/termicap-keyboard-io.adb` — keyboard protocol detection routed through `Win32_VT.Classify_Console_VT`: `Legacy_Conhost` returns `(Win32, Probed => False)`; `ConPTY_VT_Enabled` and `Not_A_Console` (Cygwin/MSYS2 PTY) fall through to the POSIX-style Kitty/XTerm probe cascade (FUNC-KKB-010, FUNC-WIN-014)
+- `src/windows/termicap-osc.adb` — full active-probe body (replaces the earlier stub): two-stage handle acquisition (`GetStdHandle` then `CONIN$`/`CONOUT$` fallback), slot-table state, `GetConsoleMode`/`SetConsoleMode` for save / raw / restore, `WaitForSingleObject`+`ReadFile` for timed reads, `WriteFile` for output. See the `Termicap.OSC (Windows body)` block below for the slot-table layout and the saved-DWORD packing in `Termios_State.Data` (FUNC-OSC-016 through FUNC-OSC-019)
+- `src/windows/termicap-graphics-io.adb`, `termicap-clipboard-io.adb`, `termicap-mouse-io.adb` — Tier-3 probe sites gated by `Win32_VT.Classify_Console_VT`. `Legacy_Conhost` returns passive defaults; `ConPTY_VT_Enabled` runs the full active probe; `Not_A_Console` proceeds to let the OSC layer's `CONIN$`/`CONOUT$` fallback fire under stdout redirection (FUNC-WIN-014)
 
 `Termicap.Color` and `Termicap.TTY` both depend on `Termicap.Override` for the short-circuit override check at the top of their detection functions. `Termicap.Override` itself has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Color`, or any OS interface — it is a leaf dependency in the graph. `Termicap.Dimensions`, `Termicap.Sigwinch`, `Termicap.Unicode`, and `Termicap.Terminal_Id` depend on `Termicap.Environment` but not on `Termicap.Override`. `Termicap.Color` and `Termicap.Dimensions` receive TTY status as a plain `Boolean` parameter — they do **not** depend on `Termicap.TTY` directly. `Termicap.Unicode` and `Termicap.Terminal_Id` require no TTY parameter at all: Unicode capability is a property of the terminal emulator and locale configuration, and terminal identity is determined entirely from environment variable strings. `Termicap.Dimensions` additionally relies on the C wrapper `termicap_ioctl.c` for the ioctl FFI call in its body. `Termicap.Downsampling` is a post-detection conversion package: it depends only on `Termicap.Color` (for the `Color_Level` type) and has no dependency on `Termicap.Environment`, `Termicap.TTY`, `Termicap.Override`, or any OS interface. `Termicap.Capabilities` sits at the top of the dependency graph: it depends on all Tier 1 and Tier 2 packages (`Termicap.Environment.Capture`, `Termicap.TTY`, `Termicap.Color`, `Termicap.Dimensions`, `Termicap.Unicode`, and `Termicap.Terminal_Id`) and orchestrates them into a single `Terminal_Capabilities` record. The root package remains a namespace-only package. `Termicap.OSC` is the FFI boundary for active terminal probing; it depends on `Ada.Finalization` and `Interfaces.C` and calls nine C helper functions via `termicap_osc.c`. Its child package `Termicap.OSC.Parsing` is a pure SPARK Silver leaf that depends only on the `Byte` and `Byte_Array` types from the parent package. `Termicap.Color.BG_Query` is a SPARK Silver child of `Termicap.Color` providing the RGB type, OSC 10/11 query byte constants, and pure parsing functions for X11 `rgb:` responses, hex channel normalisation, OSC header stripping, and COLORFGBG parsing; it has no dependency on `Termicap.OSC` (which is `SPARK_Mode => Off`) — instead it re-declares compatible `Byte`/`Byte_Array` types using the same underlying `Interfaces.C.unsigned_char` base. Its child `Termicap.Color.BG_Query.IO` is the I/O boundary: it calls `Termicap.OSC.Sentinel_Query` via a `Probe_Session` and optionally wraps the query for multiplexer passthrough. `Termicap.Color.Detection` is a sibling child of `Termicap.Color` that orchestrates the two-level cascade (OSC query → COLORFGBG fallback) and exposes `Detect_Background_Color` and `Detect_Foreground_Color` as the top-level API; it depends on `Termicap.Color.BG_Query` and `Termicap.Color.BG_Query.IO`.
 
@@ -1807,7 +1812,7 @@ Returns `0` when `LoadLibraryA` or `GetProcAddress` fails, allowing callers to t
 
 ### `Termicap.Win32_VT`
 
-**Responsibility:** Centralises all Win32 console handle helpers used by the Windows platform bodies. Provides the `ENABLE_VIRTUAL_TERMINAL_PROCESSING` constant (missing from win32ada), handle validation, `CONIN$`/`CONOUT$` open/close operations, and VT processing enablement via a `GetConsoleMode`/`SetConsoleMode` read-modify-write.
+**Responsibility:** Centralises all Win32 console handle helpers used by the Windows platform bodies. Provides Win32 console-mode constants (missing from win32ada), handle validation, `CONIN$`/`CONOUT$` open/close operations, VT processing enablement via a `GetConsoleMode`/`SetConsoleMode` read-modify-write, and the three-way ConPTY classifier used by every Tier-3 active-probe gate (graphics, clipboard, keyboard, mouse).
 
 | Property | Value |
 |----------|-------|
@@ -1819,7 +1824,15 @@ Returns `0` when `LoadLibraryA` or `GetProcAddress` fails, allowing callers to t
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `ENABLE_VIRTUAL_TERMINAL_PROCESSING` | `16#0004#` | Win32 console mode flag for ANSI/VT sequence interpretation (FUNC-WIN-009). |
+| `ENABLE_VIRTUAL_TERMINAL_PROCESSING` | `16#0004#` | Win32 console mode flag for ANSI/VT sequence interpretation on the **output** handle (FUNC-WIN-009). |
+| `ENABLE_VIRTUAL_TERMINAL_INPUT` | `16#0200#` | Win32 console mode flag that makes the **input** handle deliver VT-encoded escape sequences instead of synthesised key events. Set by the OSC layer's raw-mode entry (FUNC-OSC-017, FUNC-WIN-014). |
+| `DISABLE_NEWLINE_AUTO_RETURN` | `16#0008#` | Output-handle flag that disables the legacy CRLF auto-translation. ORed in alongside `ENABLE_VIRTUAL_TERMINAL_PROCESSING` during raw mode so that VT-encoded responses round-trip cleanly (FUNC-OSC-017). |
+
+#### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Console_VT_Status` | Three-value enumeration: `Not_A_Console` (handle is a pipe/file/NUL or `GetConsoleMode` failed), `Legacy_Conhost` (`GetConsoleMode` succeeded but VT processing is not enabled — probing would echo escape bytes to the user's screen), `ConPTY_VT_Enabled` (`GetConsoleMode` succeeded with `ENABLE_VIRTUAL_TERMINAL_PROCESSING` set — Windows Terminal, Warp, VS Code, alacritty, WezTerm Windows, and other ConPTY-fronted hosts). |
 
 #### Public Operations
 
@@ -1830,6 +1843,91 @@ Returns `0` when `LoadLibraryA` or `GetProcAddress` fails, allowing callers to t
 | `Open_Console_Output` | Function | Opens `CONOUT$` via `CreateFileA`; returns `INVALID_HANDLE_VALUE` on failure. | FUNC-WIN-004 |
 | `Close_Handle` | Procedure | Closes a console handle. No-op on invalid handles; never raises. | FUNC-WIN-004 |
 | `Enable_VT_Processing` | Function | Reads current console mode, ORs in `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, writes back. Returns `True` on success. | FUNC-WIN-010, FUNC-WIN-011 |
+| `Classify_Console_VT` | Function | Inspects a handle with `GetConsoleMode` and returns one of the three `Console_VT_Status` values. Never raises. | FUNC-WIN-014 |
+| `Should_Skip_Active_Probes` | Function | Predicate form of the classifier: returns `True` only for `Legacy_Conhost`. `Not_A_Console` is **not** a skip — the OSC layer's `CONIN$`/`CONOUT$` fallback can still acquire a working console pair when stdout is redirected. | FUNC-WIN-014 |
+
+`Classify_Console_VT` and `Should_Skip_Active_Probes` are the gate used by every Tier-3 Windows body. The redundant `Is_TTY (Stdout)` guard previously sitting in front of `src/windows/termicap-graphics-io.adb` and `src/windows/termicap-clipboard-io.adb` was removed so that the OSC layer's `CONIN$`/`CONOUT$` fallback can fire under stdout redirection.
+
+---
+
+### `Termicap.OSC` (Windows body)
+
+**Responsibility:** Windows-specific implementation of the shared `Termicap.OSC` package surface (`Probe_Session`, `Open`/`Close`/`Sentinel_Query`/`Timeout_Query`/`Timed_Read`/`Write_Query`/`Drain_Input`/`Save_Termios`/`Restore_Termios`/`Set_Raw_Mode`/`Open_Terminal`/`Close_Terminal`/`Is_Foreground_Process`). The spec is the same `src/termicap-osc.ads` used on POSIX; only the body changes per platform via GPR `Source_Dirs` (ADR-0018). On Windows the body performs full active probing — earlier revisions shipped this body as a deliberate stub returning `Session_No_Terminal`; that stub has been replaced.
+
+| Property | Value |
+|----------|-------|
+| Files | `src/windows/termicap-osc.adb` (Windows body); `src/termicap-osc.ads` (shared spec) |
+| SPARK_Mode | Off (body) |
+| Dependencies | win32ada (`Win32.Winnt`, `Win32.Winbase`, `Win32.Wincon`), `Termicap.Win32_VT` (mode-bit constants and ConPTY classifier) |
+
+#### Slot-table state model
+
+The Windows body keeps no global Win32 handles directly. Instead, it maintains a body-private slot table:
+
+```
+type Console_Handle_Origin is (From_StdHandle, From_ConFile);
+
+type Console_Slot is record
+   In_Handle, Out_Handle : HANDLE := INVALID_HANDLE_VALUE;
+   Origin                : Console_Handle_Origin;
+   In_Use                : Boolean := False;
+end record;
+
+MAX_SLOTS : constant := 1;
+Slots     : array (1 .. MAX_SLOTS) of Console_Slot;
+```
+
+The synthetic `File_Descriptor` returned to the shared OSC code is just an index into this table (1-based, with `INVALID_FD` reserved for failure). Using a slot table keeps the public `File_Descriptor` type opaque — the shared OSC code does not learn that it is dealing with two handles instead of one — while still giving `Finalize` enough information to close only the handles it owns. `MAX_SLOTS = 1` matches the single-session guard that the shared spec already enforces via `Probe_Session.Is_Raw`.
+
+`Origin` distinguishes handles obtained from `GetStdHandle` (owned by the runtime — must not be `CloseHandle`-d) from handles obtained via `CreateFileW ("CONIN$" / "CONOUT$", …)` (owned by the slot — must be closed at finalize time).
+
+#### Open lifecycle
+
+`Open_Terminal` runs in two stages:
+
+1. **Stage 1 — `GetStdHandle` + validation.** Calls `GetStdHandle (STD_INPUT_HANDLE)` and `GetStdHandle (STD_OUTPUT_HANDLE)`, then validates both with `GetConsoleMode`. If both succeed, the slot is populated with `Origin => From_StdHandle` and Stage 2 is skipped.
+2. **Stage 2 — `CONIN$`/`CONOUT$` fallback.** Triggered when either standard handle is redirected (pipe, file, NUL, closed). Calls `CreateFileW ("CONIN$", GENERIC_READ \| GENERIC_WRITE, FILE_SHARE_READ \| FILE_SHARE_WRITE, …)` and `CreateFileW ("CONOUT$", …)` to attach directly to the controlling console. The slot is populated with `Origin => From_ConFile`.
+
+If both stages fail (no controlling console), `Open_Terminal` returns `INVALID_FD` and `Probe_Session.Open` reports `Session_No_Terminal`.
+
+#### Save / Raw / Restore
+
+The opaque `Termios_State.Data` buffer (declared by the shared spec as a 128-byte array) carries the two saved console-mode DWORDs:
+
+```
+Termios_State.Data ( 1 .. 4 ) := saved input mode  (DWORD, little-endian)
+Termios_State.Data ( 5 .. 8 ) := saved output mode (DWORD, little-endian)
+Termios_State.Size            := 8
+```
+
+There is no `struct termios` on Windows; the buffer is treated as platform-private bytes by the rest of the OSC layer (ADR-0040).
+
+`Set_Raw_Mode` clears `ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT` from the input mode and ORs in `ENABLE_VIRTUAL_TERMINAL_INPUT`; it ORs `ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN` into the output mode. `Restore_Termios` writes the two saved DWORDs back unchanged. `Finalize` calls `Restore_Termios` then `CloseHandle`s only the handles whose `Origin = From_ConFile`.
+
+#### I/O primitives
+
+| Operation | Win32 call sequence |
+|-----------|--------------------|
+| `Timed_Read` | `WaitForSingleObject (In_Handle, Timeout_Ms)` -> `WAIT_OBJECT_0` triggers a single `ReadFile` for the available bytes; `WAIT_TIMEOUT` sets `Timed_Out := True`. ADR-0039: `ReadFile` (not `ReadConsoleInput`) because the input mode has been switched to `ENABLE_VIRTUAL_TERMINAL_INPUT` and we want the cooked VT byte stream, not synthesised `INPUT_RECORD` events. |
+| `Write_Query` | `WriteFile` on the output handle. Partial writes set `Success := False`; no retry. |
+| `Drain_Input` | Non-blocking `WaitForSingleObject (Handle, 0)` + `ReadFile` repeated until no further bytes are available, bounded to `MAX_DRAIN_ITERATIONS`. |
+| `Is_Foreground_Process` | Returns `True` whenever the slot has a usable handle pair. Windows has no `tcgetpgrp` equivalent; console processes are always associated with a single visible window (FUNC-FGP-012, FUNC-FGP-013). |
+
+#### Public Operations
+
+| Subprogram | Body responsibility | Requirements |
+|-----------|---------------------|--------------|
+| `Open_Terminal` | Stage-1 `GetStdHandle` + validation; Stage-2 `CONIN$`/`CONOUT$` fallback; slot allocation | FUNC-OSC-001, FUNC-OSC-016 |
+| `Close_Terminal` | Slot release; `CloseHandle` only `From_ConFile` handles | FUNC-OSC-001, FUNC-OSC-019 |
+| `Save_Termios` | Two `GetConsoleMode` calls packed into `Termios_State.Data` | FUNC-OSC-002, FUNC-OSC-017 |
+| `Restore_Termios` | Two `SetConsoleMode` calls from the saved DWORDs | FUNC-OSC-002, FUNC-OSC-017 |
+| `Set_Raw_Mode` | Clear cooked-input flags; OR `ENABLE_VIRTUAL_TERMINAL_INPUT`; OR `ENABLE_VIRTUAL_TERMINAL_PROCESSING \| DISABLE_NEWLINE_AUTO_RETURN` | FUNC-OSC-003, FUNC-OSC-017 |
+| `Timed_Read` | `WaitForSingleObject` + `ReadFile` | FUNC-OSC-004, FUNC-OSC-018 |
+| `Write_Query` | `WriteFile` | FUNC-OSC-005, FUNC-OSC-019 |
+| `Drain_Input` | Bounded non-blocking read loop | FUNC-OSC-011, FUNC-OSC-019 |
+| `Is_Foreground_Process` | Slot-validity check (Windows has no process-group concept) | FUNC-OSC-007, FUNC-FGP-012, FUNC-FGP-013 |
+
+The shared `Probe_Session`, `Open`, `Is_Open`, `Close`, `Sentinel_Query`, `Timeout_Query`, the `Limited_Controlled` RAII guarantee, and the single-session guard are all platform-agnostic — they live in the shared spec and are reused as-is.
 
 ---
 

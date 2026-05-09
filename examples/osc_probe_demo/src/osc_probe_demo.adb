@@ -141,19 +141,27 @@ begin
 
          when Termicap.OSC.Session_No_Terminal =>
             Ada.Text_IO.Put_Line
-               ("  Session not opened: /dev/tty could not be opened.");
+               ("  Session not opened: no terminal device available");
+            Ada.Text_IO.Put_Line
+               ("  (POSIX: /dev/tty unreachable; Windows: neither stdin/stdout");
+            Ada.Text_IO.Put_Line
+               ("   nor CONIN$/CONOUT$ resolved to a console handle).");
             Ada.Text_IO.Put_Line
                ("  Tip: run this example from an interactive terminal.");
             goto Pattern_B;
 
          when Termicap.OSC.Session_Save_Failed =>
             Ada.Text_IO.Put_Line
-               ("  Session not opened: tcgetattr() failed (termios save).");
+               ("  Session not opened: terminal-attribute save failed");
+            Ada.Text_IO.Put_Line
+               ("  (POSIX tcgetattr / Windows GetConsoleMode).");
             goto Pattern_B;
 
          when Termicap.OSC.Session_Raw_Failed =>
             Ada.Text_IO.Put_Line
-               ("  Session not opened: tcsetattr() failed (raw mode).");
+               ("  Session not opened: raw-mode activation failed");
+            Ada.Text_IO.Put_Line
+               ("  (POSIX tcsetattr / Windows SetConsoleMode).");
             goto Pattern_B;
 
          when Termicap.OSC.Session_Already_Active =>

@@ -54,14 +54,9 @@ with Termicap.TTY;
 with Termicap.Version;
 with Termicap.Win32_VT;
 with Termicap.XTVERSION.IO;
-with Win32;
-with Win32.Winbase;
-with Win32.Wincon;
-with Win32.Winnt;
 
 package body Termicap.Graphics.IO is
 
-   use type Win32.BOOL;
    use type Interfaces.C.unsigned_char;
    use type Termicap.OSC.Session_Status;
    use type Termicap.XTVERSION.XTVERSION_Status;
@@ -217,11 +212,6 @@ package body Termicap.Graphics.IO is
    function Run_Cascade return Graphics_Capabilities is
       Caps : Graphics_Capabilities := NO_GRAPHICS_CAPABILITIES;
       Env  : Termicap.Environment.Environment;
-
-      --  Win32 gate variables (Guard 4, FUNC-SXL-012)
-      H    : Win32.Winnt.HANDLE;
-      Mode : aliased Win32.DWORD := 0;
-      Res  : Win32.BOOL;
    begin
       --  Step 0: Capture environment once for all subsequent passive checks.
       Termicap.Environment.Capture.Capture_Current (Env);
@@ -236,27 +226,26 @@ package body Termicap.Graphics.IO is
          Caps.Sixel_Supported := True;
       end if;
 
-      --  Guard 4 (Windows only): Win32 Console gate (FUNC-SXL-012).
-      --  On Windows, Guard 4 is evaluated FIRST, before the TTY guard.
-      --  If GetConsoleMode succeeds on STD_OUTPUT_HANDLE, stdout is a native
-      --  Windows Console that cannot render Sixel/Kitty graphics escape
-      --  sequences; skip all active probes and return passive results only
-      --  (Probed = False).
-      H := Win32.Winbase.GetStdHandle (Win32.Winbase.STD_OUTPUT_HANDLE);
-      if Termicap.Win32_VT.Is_Valid_Handle (H) then
-         Res := Win32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
-         if Res /= Win32.FALSE then
-            --  Native Windows Console confirmed; no escape probe.
+      --  Guard 4 (Windows only): Win32 Console gate (FUNC-SXL-012, FUNC-WIN-014).
+      --  Three-way classifier on STD_OUTPUT_HANDLE:
+      --    Legacy_Conhost     => bail; cannot render VT escapes.
+      --    ConPTY_VT_Enabled  => proceed; ConPTY host honours active probes.
+      --    Not_A_Console      => proceed; the OSC layer will try CONIN$/CONOUT$
+      --                          (FUNC-OSC-016) and self-bail with
+      --                          Session_No_Terminal if no console is reachable.
+      --
+      --  The redundant Is_TTY(Stdout) guard previously here was wrong for the
+      --  redirected-stdout case (e.g., conformance harness, prog.exe > out.log):
+      --  it bailed before OSC's CONIN$/CONOUT$ fallback could acquire a usable
+      --  console.  Trust the classifier + OSC.Open's own gating instead.
+      case Termicap.Win32_VT.Classify_Console_VT is
+         when Termicap.Win32_VT.Legacy_Conhost =>
             return Caps;  --  Probed = False; passive results preserved.
-         end if;
-         --  GetConsoleMode returned FALSE: Cygwin/MSYS2 PTY or pipe/file.
-         --  Fall through to the POSIX-like TTY guard and active probes.
-      end if;
-
-      --  Guard 1: TTY check (FUNC-SXL-012).
-      if not Termicap.TTY.Is_TTY (Termicap.TTY.Stdout) then
-         return Caps;  --  Probed = False; passive results preserved.
-      end if;
+         when Termicap.Win32_VT.Not_A_Console =>
+            null;  --  Proceed; OSC.Open will try CONIN$/CONOUT$.
+         when Termicap.Win32_VT.ConPTY_VT_Enabled =>
+            null;  --  Proceed; ConPTY host honours active probes.
+      end case;
 
       --  Step 3: DA1 active probe for Sixel Ps=4 (FUNC-SXL-005, FUNC-SXL-006).
       declare

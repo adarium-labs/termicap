@@ -40,3 +40,6 @@ Each ADR has a status:
 | [0009](0009-downsampling-return-type.md) | Downsampling return type | proposed |
 | [0010](0010-override-mode-flat-enum.md) | Five-literal flat enum for Override_Mode | proposed |
 | [0021](0021-defer-keyboard-capability-integration.md) | Defer Keyboard_Capability integration into Terminal_Capabilities | proposed |
+| [0039](0039-windows-osc-uses-readfile-not-readconsoleinput.md) | Windows OSC uses ReadFile + ENABLE_VIRTUAL_TERMINAL_INPUT | proposed |
+| [0040](0040-windows-osc-state-in-termios-state-data.md) | Windows console mode state in Termios_State.Data | proposed |
+| [0041](0041-conpty-vt-gate-helper-in-win32-vt.md) | ConPTY VT gate helper in Termicap.Win32_VT | proposed |

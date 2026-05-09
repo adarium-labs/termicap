@@ -3199,6 +3199,166 @@ pragma Assert (Refined.Terminal_Version_Known = True);
 
 ---
 
+## Scenario 34: Windows Active Probe Lifecycle
+
+End-to-end scenario for `Termicap.OSC.Probe_Session` on Windows. Replaces the POSIX C-helper path of Scenario 18 (`/dev/tty`, `tcgetattr`, `select` + `read`, `write`) with native Win32 primitives (`GetStdHandle` -> `CONIN$`/`CONOUT$` fallback, `GetConsoleMode`/`SetConsoleMode`, `WaitForSingleObject` + `ReadFile`, `WriteFile`). The shared `Probe_Session` type, the `Limited_Controlled` RAII guarantee, the single-session guard, and the sentinel-bounded query pattern are all platform-agnostic and inherited from the shared spec — only the body primitives change. A separate ConPTY-aware gate (`Termicap.Win32_VT.Classify_Console_VT`) decides at each Tier-3 call site whether a probe should run at all.
+
+### Phase A — Tier-3 Probe Gate (every active-probe site)
+
+```
+Caller (e.g. Termicap.Graphics.IO.Detect_Graphics_Support,
+        Termicap.Clipboard.IO.Detect_Clipboard,
+        Termicap.Keyboard.IO.Detect_Keyboard_Protocol,
+        Termicap.Mouse.IO.Detect_Mouse_Protocols)
+  │
+  │  Stdout_Handle := GetStdHandle (STD_OUTPUT_HANDLE)
+  │
+  │  case Classify_Console_VT (Stdout_Handle) is
+  │    [Termicap.Win32_VT — SPARK_Mode => Off]
+  │
+  │    when Legacy_Conhost =>
+  │      → return Passive_Default  (no escape bytes written;
+  │                                  conhost would echo them as text)
+  │
+  │    when Not_A_Console | ConPTY_VT_Enabled =>
+  │      → proceed to Phase B
+  │      (Not_A_Console covers stdout redirection — the OSC layer
+  │       falls back to CONIN$/CONOUT$ so probing still succeeds
+  │       when a console session is attached)
+  │  end case;
+```
+
+### Phase B — `Probe_Session.Open`
+
+```
+Termicap.OSC.Open                [shared spec]
+  │
+  │  Step 1: Single-session guard (Probe_Session.Is_Raw)
+  │    Already taken? → Status := Session_Already_Active; return
+  │
+  │  Step 2: Open_Terminal       [Windows body]
+  │  ────────────────────────────────────────────────────────────────
+  │  Stage 1 — GetStdHandle + validation
+  │    In_H  := GetStdHandle (STD_INPUT_HANDLE)
+  │    Out_H := GetStdHandle (STD_OUTPUT_HANDLE)
+  │    GetConsoleMode (In_H,  In_Mode_Probe)   — must succeed
+  │    GetConsoleMode (Out_H, Out_Mode_Probe)  — must succeed
+  │    Both succeed?
+  │      Yes → Slot.Origin := From_StdHandle; skip Stage 2
+  │      No  → continue to Stage 2
+  │
+  │  Stage 2 — CONIN$/CONOUT$ fallback (stdout/stdin redirection)
+  │    In_H  := CreateFileW ("CONIN$",  GENERIC_READ|GENERIC_WRITE,
+  │                          FILE_SHARE_READ|FILE_SHARE_WRITE, …)
+  │    Out_H := CreateFileW ("CONOUT$", GENERIC_READ|GENERIC_WRITE,
+  │                          FILE_SHARE_READ|FILE_SHARE_WRITE, …)
+  │    Either INVALID_HANDLE_VALUE? → return INVALID_FD
+  │    Both valid → Slot.Origin := From_ConFile
+  │  ────────────────────────────────────────────────────────────────
+  │    Slot.In_Handle  := In_H
+  │    Slot.Out_Handle := Out_H
+  │    Slot.In_Use     := True
+  │    return synthetic File_Descriptor (slot index)
+  │
+  │  INVALID_FD? → Status := Session_No_Terminal; return
+  │
+  │  Step 3: Save_Termios          [Windows body]
+  │    GetConsoleMode (In_H,  Saved_In_Mode)
+  │    GetConsoleMode (Out_H, Saved_Out_Mode)
+  │    Pack two DWORDs (8 bytes) into Termios_State.Data;
+  │    Termios_State.Size := 8
+  │    Either GetConsoleMode failed? →
+  │      → Close_Terminal; Status := Session_Save_Failed; return
+  │
+  │  Step 4: Set_Raw_Mode          [Windows body]
+  │    Raw_In  := (Saved_In_Mode and not (ENABLE_LINE_INPUT
+  │                                     | ENABLE_ECHO_INPUT
+  │                                     | ENABLE_PROCESSED_INPUT))
+  │             or ENABLE_VIRTUAL_TERMINAL_INPUT
+  │    Raw_Out := Saved_Out_Mode or ENABLE_VIRTUAL_TERMINAL_PROCESSING
+  │             or DISABLE_NEWLINE_AUTO_RETURN
+  │    SetConsoleMode (In_H,  Raw_In)
+  │    SetConsoleMode (Out_H, Raw_Out)
+  │    Either SetConsoleMode failed? →
+  │      → Restore_Termios; Close_Terminal;
+  │        Status := Session_Raw_Failed; return
+  │
+  │  Step 5: Drain_Input            [Windows body]
+  │    loop bounded by MAX_DRAIN_ITERATIONS:
+  │      WaitForSingleObject (In_H, 0)
+  │        WAIT_OBJECT_0 → ReadFile (drain N bytes)
+  │        WAIT_TIMEOUT  → exit loop
+  │
+  │  Probe_Session.Is_Raw := True   (single-session guard taken)
+  │  Status := Session_OK
+```
+
+### Phase C — Query/Read/Write (per probe)
+
+```
+Caller writes a query through the shared spec — the body primitives are:
+
+  Write_Query  (Session, Query, Written, Success)
+    → WriteFile (Slot.Out_Handle, Query, ...) → Bytes_Written
+       Success := (Bytes_Written = Query'Length)
+
+  Timed_Read   (FD, Buffer, Bytes_Read, Timeout_Ms, Timed_Out)
+    → WaitForSingleObject (Slot.In_Handle, Timeout_Ms)
+        WAIT_OBJECT_0  → ReadFile (Slot.In_Handle, Buffer'…) →
+                         Bytes_Read; Timed_Out := False
+        WAIT_TIMEOUT   → Bytes_Read := 0; Timed_Out := True
+        WAIT_FAILED    → Bytes_Read := 0; Timed_Out := False
+
+  Sentinel_Query / Timeout_Query
+    → unchanged shared logic: write query (and DA1 sentinel for
+      Sentinel_Query), accumulate bytes via Timed_Read until
+      Contains_DA1_Response succeeds or Timeout_Ms elapses.
+```
+
+### Phase D — `Probe_Session.Finalize` (RAII)
+
+```
+Probe_Session.Finalize             [shared Limited_Controlled]
+  │
+  │  → Close (Session)
+  │      → Restore_Termios          [Windows body]
+  │          Read Saved_In_Mode, Saved_Out_Mode from Termios_State.Data
+  │          SetConsoleMode (Slot.In_Handle,  Saved_In_Mode)
+  │          SetConsoleMode (Slot.Out_Handle, Saved_Out_Mode)
+  │
+  │      → Close_Terminal            [Windows body]
+  │          case Slot.Origin is
+  │            when From_ConFile  =>
+  │              CloseHandle (Slot.In_Handle)   -- we own it
+  │              CloseHandle (Slot.Out_Handle)  -- we own it
+  │            when From_StdHandle =>
+  │              -- runtime owns these handles; do not close
+  │              null;
+  │          end case;
+  │          Slot.In_Use := False
+  │
+  │      → Probe_Session.Is_Raw := False  (single-session guard released)
+  │
+  └──► Session can be re-`Open`-ed; or the Limited_Controlled goes out
+       of scope on a clean teardown.
+```
+
+### Key Properties
+
+- **Public surface unchanged.** Application code that uses `Probe_Session`, `Sentinel_Query`, `Timeout_Query`, etc. is portable as-is. The only Windows-specific surface is the gate predicate `Termicap.Win32_VT.Classify_Console_VT`/`Should_Skip_Active_Probes` — and even that is invoked only inside the Windows platform bodies, never by application code.
+- **No global handle state.** The body keeps a slot table (`MAX_SLOTS = 1`) instead of a module-level `In_H`/`Out_H` pair. The synthetic `File_Descriptor` returned to the shared layer is a slot index; the real handles, their origin (`From_StdHandle` vs `From_ConFile`), and the in-use flag stay private to the body.
+- **Save/Raw/Restore is symmetric with POSIX.** The opaque 128-byte `Termios_State.Data` buffer carries the two saved DWORDs (8 bytes total) on Windows, just as it carries `struct termios` bytes on POSIX. The shared spec does not need to learn that Windows has no `struct termios` (ADR-0040).
+- **`ReadFile` not `ReadConsoleInput`.** Once the input handle is in `ENABLE_VIRTUAL_TERMINAL_INPUT` mode, ConPTY delivers VT-encoded escape sequences as raw bytes. `ReadFile` returns those bytes directly, matching the POSIX `read()` semantics. `ReadConsoleInput` would surface synthesised `INPUT_RECORD` events instead and require parsing on the wrong side of the boundary (ADR-0039).
+- **`From_StdHandle` handles must not be closed.** The Win32 documentation states explicitly that handles returned from `GetStdHandle` are owned by the runtime. Closing them after a probe would break the rest of the program. `Origin` tracks ownership so `Finalize` only closes handles it created.
+- **ConPTY gate at every Tier-3 site.** `Classify_Console_VT` is checked **before** opening a session, not inside `Open`. On `Legacy_Conhost`, the call site bails out without writing any escape bytes. On `Not_A_Console`, the OSC layer's Stage-2 fallback kicks in and `Open` still succeeds when a console session is attached even if stdout is redirected to a pipe or file.
+- **Foreground check degenerates.** Windows console processes have no background-job concept equivalent to POSIX process groups. `Is_Foreground_Process` returns `True` whenever the slot has a usable handle pair (FUNC-FGP-012, FUNC-FGP-013).
+
+**Requirements Coverage:** FUNC-OSC-016, FUNC-OSC-017, FUNC-OSC-018, FUNC-OSC-019, FUNC-OSC-008 (amended), FUNC-WIN-014, FUNC-FGP-012, FUNC-FGP-013
+
+**ADRs:** ADR-0039 (`ReadFile` not `ReadConsoleInput`), ADR-0040 (state in `Termios_State.Data`), ADR-0041 (ConPTY gate helper in `Termicap.Win32_VT`)
+
+---
+
 ## Related Documents
 
 - **Building Blocks** (`docs/architecture/03-building-blocks.md`): Static package structure and SPARK boundary diagram
@@ -3252,4 +3412,8 @@ pragma Assert (Refined.Terminal_Version_Known = True);
 - **ADR-0036** (`docs/adr/0036-termicap-version-shared-utility.md`): Rationale for extracting a shared `Termicap.Version` utility package used by both `Termicap.Hyperlinks` and `Termicap.Graphics`
 - **ADR-0037** (`docs/adr/0037-hyperlinks-result-flat-record.md`): Rationale for a flat (non-discriminated) `Hyperlinks_Result` record
 - **ADR-0038** (`docs/adr/0038-hyperlinks-active-reuses-xtversion.md`): Rationale for reusing the `Detect_Full` XTVERSION result for hyperlink refinement rather than opening a second probe session
+- **Tech Spec WIN-OSC** (`docs/tech-specs/windows-osc-active-probes.md`): Windows OSC active-probe design — two-stage handle acquisition, slot-table state, Win32 raw mode, ConPTY classifier (FUNC-OSC-016 through FUNC-OSC-019, FUNC-WIN-014)
+- **ADR-0039** (`docs/adr/0039-windows-osc-uses-readfile-not-readconsoleinput.md`): Rationale for using `ReadFile` over `ReadConsoleInput` once `ENABLE_VIRTUAL_TERMINAL_INPUT` is set on the input handle
+- **ADR-0040** (`docs/adr/0040-windows-osc-state-in-termios-state-data.md`): Rationale for packing the two saved console-mode DWORDs into the opaque `Termios_State.Data` buffer instead of introducing a Windows-specific state record
+- **ADR-0041** (`docs/adr/0041-conpty-vt-gate-helper-in-win32-vt.md`): Rationale for placing the three-way `Console_VT_Status` classifier in `Termicap.Win32_VT` rather than in each Tier-3 body
 - **Requirements** (`docs/requirements/`): FUNC-ENV-002, FUNC-ENV-004, FUNC-ENV-005, FUNC-ENV-007, FUNC-ENV-008, FUNC-TTY-001 through FUNC-TTY-006, FUNC-CLR-001 through FUNC-CLR-015, FUNC-DIM-001 through FUNC-DIM-008, FUNC-UNI-001 through FUNC-UNI-008, FUNC-TID-001 through FUNC-TID-012, FUNC-DSP-001 through FUNC-DSP-012, FUNC-SWC-001 through FUNC-SWC-011, FUNC-OVR-001 through FUNC-OVR-014, FUNC-CAP-001 through FUNC-CAP-014, FUNC-BGC-001 through FUNC-BGC-019, FUNC-DKL-001 through FUNC-DKL-007, FUNC-CYG-001 through FUNC-CYG-017, FUNC-MSE-001 through FUNC-MSE-018, FUNC-SXL-001 through FUNC-SXL-019

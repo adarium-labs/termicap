@@ -398,4 +398,45 @@ COMMENT: >>>
 Keeping Build_To_Color_Level at SPARK Silver level is valuable because the build-number threshold logic is non-trivial (three branches with numeric comparisons) and the correctness of the color level classification directly affects application behaviour. A SPARK postcondition that enumerates all valid output values (Color_None | Colors_256 | True_Color) acts as an exhaustiveness check: the prover will flag any branch that could return an unexpected value. The pattern of SPARK-provable pure functions sitting above SPARK_Mode => Off FFI packages is the same pattern used throughout Termicap (FUNC-DIM-007, FUNC-OSC-015) and is the intended architecture for the SPARK Silver target. Since win32ada types (HANDLE, DWORD) are not SPARK-compatible, all code that uses them directly must be in SPARK_Mode => Off bodies.
 <<<
 
+[REQUIREMENT]
+UID: FUNC-WIN-014
+STATUS: Approved
+PRIORITY: Must
+TITLE: ConPTY-Aware Active-Probe Gate
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-009
+STATEMENT: >>>
+Components which decide whether to send VT escape probes (graphics, OSC 11 background/theme, OSC 8 hyperlink confirmation, XTVERSION, OSC 52 clipboard, Kitty APC, etc.) to a console-backed output handle on Windows shall consult the output console mode bits before falling through to the POSIX-style cascade. The gate shall be implemented as a single classification step over the standard output handle:
+
+  1. Call Win32.Winbase.GetStdHandle(STD_OUTPUT_HANDLE) to obtain a candidate output handle.
+  2. Call Win32.Wincon.GetConsoleMode on that handle, capturing both the BOOL return and the populated DWORD mode.
+  3. Decide based on the result:
+
+       a. GetConsoleMode succeeded AND (mode AND ENABLE_VIRTUAL_TERMINAL_PROCESSING) = 0
+          => Legacy conhost without VT processing. Skip active probes; return the
+             passive-only result. This is the only case where the gate bails.
+
+       b. GetConsoleMode succeeded AND (mode AND ENABLE_VIRTUAL_TERMINAL_PROCESSING) /= 0
+          => ConPTY-backed host (Windows Terminal, Warp, VS Code, Alacritty-on-Windows,
+             WezTerm-on-Windows, etc.). Active probes shall proceed and shall use the
+             Windows OSC adaptation (FUNC-OSC-016 through FUNC-OSC-019).
+
+       c. GetConsoleMode failed
+          => The handle is a pipe, file, MSYS2/Cygwin PTY, or otherwise non-console.
+             Fall through to the POSIX-style cascade already present in
+             src/windows/termicap-graphics-io.adb (and analogous probe paths), which
+             handles redirected-stdout-with-CONOUT$-fallback via FUNC-OSC-016 and
+             validates whether a probe is feasible after the fact.
+
+The gate shall use the bit mask defined in FUNC-WIN-009 (ENABLE_VIRTUAL_TERMINAL_PROCESSING := 16#0004#). The gate shall not call SetConsoleMode and shall not modify any state; it is a read-only classifier.
+
+Existing call sites that currently bail iff GetConsoleMode succeeds (without inspecting the VT bit) shall be revised to use this gate. In particular, src/windows/termicap-graphics-io.adb lines 246-254 shall apply rule (a) only — it shall not bail in case (b).
+<<<
+COMMENT: >>>
+The original Windows graphics gate was written under the assumption that "GetConsoleMode succeeds => legacy conhost => no escape sequences". That heuristic is correct on a fresh Windows 10 1607 box where conhost is the only console host, but it is wrong on every modern Windows configuration: ConPTY (introduced in Windows 10 1809) hosts the console for Windows Terminal, Warp, VS Code, and most other modern emulators, and ConPTY succeeds on GetConsoleMode AND advertises ENABLE_VIRTUAL_TERMINAL_PROCESSING. With the old gate, termicap silently skipped all active probes on those terminals even though they reply correctly to DA1, XTVERSION, OSC 11, and Kitty APC — verified by the conformance harness where blessed obtained DA1 = [4, 6, 7, 14, 21, 22, 23, 24, 28, 32, 42, 52] and XTVERSION = {"name":"Warp","version":"v0.2026.04.29.08.57.stable_02"} on Warp/Windows-amd64.
+
+The three-way classification is necessary because the three cases need different handling: (a) really must bail (sending VT to plain conhost shows literal `^[[31m` to the user); (b) must proceed (every modern Windows terminal lives here); (c) must fall through to the existing POSIX-style logic (Cygwin's PTY shows up here, and so does redirected-stdout, where the CONOUT$ fallback in FUNC-OSC-016 may still recover an active path). Tying the bit name to FUNC-WIN-009 keeps the constant definition centralised and avoids duplicating 16#0004# at every probe-site.
+<<<
+
 [/SECTION]

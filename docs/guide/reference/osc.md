@@ -396,6 +396,22 @@ No caller action is required for cleanup beyond declaring the session in an appr
 
 ---
 
+## Windows behaviour
+
+`Termicap.OSC` exposes the same package surface on Windows as on POSIX. Application code that uses `Probe_Session`, `Sentinel_Query`, `Timeout_Query`, `Write_Query`, `Timed_Read`, and `Is_Foreground_Process` is portable as-is — only the underlying primitives differ.
+
+- **Session lifecycle is identical.** `Open` -> `Save_Termios` -> `Set_Raw_Mode` -> `Drain_Input` runs in the same order as on POSIX, and `Finalize` unconditionally restores the saved console mode and closes any handles the session owns. The `Limited_Controlled` RAII guarantee, the single-session guard, and the foreground check are platform-agnostic — they live in the public spec, not in the platform body.
+- **Handle acquisition.** `Open_Terminal` first calls `GetStdHandle (STD_INPUT_HANDLE)` and `GetStdHandle (STD_OUTPUT_HANDLE)` and validates each with `GetConsoleMode`. If either standard handle is redirected (pipe, file, NUL, or closed), the body falls back to `CreateFileW ("CONIN$", …)` / `CreateFileW ("CONOUT$", …)` to obtain a directly attached console pair. The synthetic `File_Descriptor` returned to Ada code is an index into a body-private slot table; the underlying input handle, output handle, and ownership flag (`From_StdHandle` vs `From_ConFile`) are kept on the Ada side.
+- **Raw-mode configuration.** `Set_Raw_Mode` is implemented with `SetConsoleMode`, not `tcsetattr`. The body clears `ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT` and ORs in `ENABLE_VIRTUAL_TERMINAL_INPUT` on the input handle, and ORs `ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN` into the output handle. The two saved DWORDs are packed into the opaque `Termios_State.Data` buffer (no `struct termios` exists on Windows).
+- **Timed reads.** `Timed_Read` calls `WaitForSingleObject (Input_Handle, Timeout_Ms)` followed by `ReadFile`, instead of `select() + read()`. A `WAIT_TIMEOUT` return sets `Timed_Out := True`; a `WAIT_OBJECT_0` return triggers a single `ReadFile` for the available bytes.
+- **Writes.** `Write_Query` calls `WriteFile` on the output handle. Partial writes are reported via `Success := False`; no retry is performed.
+- **Foreground check.** Windows has no `tcgetpgrp` equivalent. `Is_Foreground_Process` returns `True` whenever a usable console-handle pair was obtained; `Open` returns `Session_Not_Foreground` only when no input/output handle could be acquired (FUNC-FGP-012, FUNC-FGP-013).
+- **Probe gate.** `Termicap.Win32_VT.Classify_Console_VT` and `Should_Skip_Active_Probes` decide whether a Tier-3 active probe should run at all. On legacy `conhost.exe` (no `ENABLE_VIRTUAL_TERMINAL_PROCESSING`), the call site bails out before opening a `Probe_Session` so that no escape sequences are written to a host that would echo them as literal text. On Windows Terminal, Warp, VS Code, and other ConPTY hosts, the gate lets the probe through and the OSC layer behaves identically to POSIX.
+
+The [`windows-console.md`](windows-console.md) reference document covers the ConPTY classifier and the legacy/ConPTY/non-console distinction in more depth.
+
+---
+
 ## Package `Termicap.OSC.Parsing`
 
 ### Types
@@ -604,6 +620,10 @@ The session goes out of scope at the end of `Probe_Background_Color` and `Finali
 | FUNC-OSC-013 | `Sentinel_Query (Retry => True)` — doubles timeout on retry |
 | FUNC-OSC-014 | `Wrap_For_Passthrough`, `Passthrough_Mode` |
 | FUNC-OSC-015 | `pragma SPARK_Mode (Off)` on `Termicap.OSC`; `pragma SPARK_Mode (On)` on `Termicap.OSC.Parsing` |
+| FUNC-OSC-016 | Windows `Open_Terminal` — `GetStdHandle` primary path + `CONIN$`/`CONOUT$` fallback (slot-table indexing) |
+| FUNC-OSC-017 | Windows `Save_Termios`/`Set_Raw_Mode` — `GetConsoleMode`/`SetConsoleMode`, two DWORDs packed into `Termios_State.Data` |
+| FUNC-OSC-018 | Windows `Timed_Read` — `WaitForSingleObject` + `ReadFile` |
+| FUNC-OSC-019 | Windows `Write_Query` / `Drain_Input` / `Finalize` — `WriteFile`, `ENABLE_VIRTUAL_TERMINAL_INPUT` raw mode, owned-handle close |
 
 ---
 
@@ -612,4 +632,6 @@ The session goes out of scope at the end of `Probe_Background_Color` and `Finali
 - **Architecture: Building Blocks** (`docs/architecture/03-building-blocks.md`) — package hierarchy, SPARK boundary diagram, `Termicap.OSC` and `Termicap.OSC.Parsing` descriptions
 - **Architecture: Runtime View** (`docs/architecture/04-runtime-view.md`) — Scenario 18: full probe session lifecycle, sentinel query accumulation, and RAII restore flow
 - **Tech Spec OSC** (`docs/tech-specs/osc-query-infra.md`) — design rationale, framework survey, C helper design, and ADR-0014
+- **Tech Spec Windows OSC** (`docs/tech-specs/windows-osc-active-probes.md`) — Windows handle acquisition, ConPTY classifier, slot-table state, FUNC-OSC-016..019
+- **[Windows Console](windows-console.md)** — Console_VT_Status three-way classifier, ConPTY/legacy distinction, OSC active probe coverage on Windows
 - **[Termicap.Terminal_Id](terminal-id.md)** — source of `Multiplexer_Kind`; used to derive the `Passthrough_Mode` for `Wrap_For_Passthrough`

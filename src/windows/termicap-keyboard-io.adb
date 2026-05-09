@@ -41,19 +41,8 @@ pragma SPARK_Mode (Off);
 with Termicap.OSC;
 with Termicap.TTY;
 with Termicap.Win32_VT;
-with Win32;
-with Win32.Winbase;
-with Win32.Wincon;
-with Win32.Winnt;
 
 package body Termicap.Keyboard.IO is
-
-   --  The Win32 package name is shadowed inside this body by the Win32
-   --  enum literal in Termicap.Keyboard.Keyboard_Protocol.  Rename through
-   --  Standard to disambiguate; child packages remain accessible via W32.
-   package W32 renames Standard.Win32;
-
-   use type W32.BOOL;
 
    ---------------------------------------------------------------------------
    --  Process-lifetime cache (FUNC-KKB-017)
@@ -99,27 +88,24 @@ package body Termicap.Keyboard.IO is
       Raw_Len     : Natural;
       Timed_Out   : Boolean;
       Kitty_Parse : Parse_Result;
-
-      --  Win32 gate (FUNC-KKB-010)
-      H    : W32.Winnt.HANDLE;
-      Mode : aliased W32.DWORD := 0;
-      Res  : W32.BOOL;
    begin
-      --  Step 1: Win32 Console gate (FUNC-KKB-010).
-      --  GetStdHandle may return INVALID_HANDLE_VALUE or null on failure.
-      H := W32.Winbase.GetStdHandle (W32.Winbase.STD_INPUT_HANDLE);
-      if Termicap.Win32_VT.Is_Valid_Handle (H) then
-         Res := W32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
-         if Res /= W32.FALSE then
-            --  Native Windows Console confirmed; no escape probe needed.
+      --  Step 1: Win32 Console gate (FUNC-KKB-010, FUNC-WIN-014).
+      --  Three-way classifier on STD_OUTPUT_HANDLE:
+      --    Legacy_Conhost     => native Win32 Console; cannot answer Kitty
+      --                          probe, return Win32 protocol with Probed=False.
+      --    Not_A_Console      => Cygwin/MSYS PTY, pipe, or file: POSIX cascade.
+      --    ConPTY_VT_Enabled  => fall through to TTY guard and active probes.
+      case Termicap.Win32_VT.Classify_Console_VT is
+         when Termicap.Win32_VT.Legacy_Conhost =>
             return
               (Protocol => Win32,
                Flags    => NO_KITTY_FLAGS,
                Probed   => False);
-         end if;
-         --  GetConsoleMode returned FALSE: Cygwin/MSYS PTY, pipe, or file.
-         --  Fall through to the POSIX-like cascade below.
-      end if;
+         when Termicap.Win32_VT.Not_A_Console =>
+            null;  --  Fall through to MSYS2/Cygwin/POSIX-like path.
+         when Termicap.Win32_VT.ConPTY_VT_Enabled =>
+            null;  --  Fall through to TTY guard and active probes.
+      end case;
 
       --  Step 2: TTY guard (FUNC-KKB-011).
       if not Termicap.TTY.Is_TTY (Termicap.TTY.Stdin) then

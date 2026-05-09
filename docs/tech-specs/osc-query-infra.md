@@ -566,3 +566,24 @@ Two ADRs are filed alongside this tech spec:
 2. **ADR-0015**: Probe session using `Limited_Controlled` for RAII instead of explicit open/close
    - Location: `docs/adr/0015-probe-session-limited-controlled.md`
    - Decides to use `Ada.Finalization.Limited_Controlled` for the probe session type, accepting `SPARK_Mode => Off` as the cost of guaranteed cleanup
+
+---
+
+## 11. Windows adaptation (FUNC-OSC-016 to FUNC-OSC-019)
+
+The infrastructure described above (sections 1-10) is the POSIX reference design.
+The Windows port reuses the same `Termicap.OSC` package surface (`Probe_Session`,
+`Open`/`Close`/`Sentinel_Query`/`Timeout_Query`, `Termios_State`, `Session_Status`)
+verbatim, but replaces the C helper with native Win32 primitives: `GetStdHandle`
+(with `CONIN$`/`CONOUT$` fallback), `GetConsoleMode`/`SetConsoleMode`,
+`WaitForSingleObject`+`ReadFile`, and `WriteFile`. The opaque `Termios_State.Data`
+buffer carries the saved input and output console-mode DWORDs instead of a
+`struct termios`. A ConPTY-aware gate (`Termicap.Win32_VT.Should_Skip_Active_Probes`)
+suppresses probing on legacy `conhost.exe` sessions where VT input is unavailable.
+
+For the full Windows-specific design — handle acquisition lifecycle, slot-table
+state, ConPTY classification, and the four new requirements (FUNC-OSC-016 through
+FUNC-OSC-019) — see [`docs/tech-specs/windows-osc-active-probes.md`](windows-osc-active-probes.md).
+ADRs 0039 (`ReadFile` not `ReadConsoleInput`), 0040 (state packed into
+`Termios_State.Data`), and 0041 (ConPTY classifier in `Termicap.Win32_VT`)
+record the Windows-specific design decisions.

@@ -18,7 +18,6 @@
 with System;
 with Win32.Winbase;
 with Win32.Wincon;
-with Win32.Winnt;
 
 package body Termicap.Win32_VT
    with SPARK_Mode => Off
@@ -111,5 +110,49 @@ is
 
       return Result /= Win32.FALSE;
    end Enable_VT_Processing;
+
+   ---------------------------------------------------------------------------
+   --  Classify_Console_VT (FUNC-WIN-014)
+   ---------------------------------------------------------------------------
+
+   function Classify_Console_VT return Console_VT_Status is
+      H        : Win32.Winnt.HANDLE;
+      Mode     : aliased Win32.DWORD := 0;
+      Set_Mode : Win32.DWORD := 0;
+      OK       : Win32.BOOL;
+   begin
+      H := Win32.Winbase.GetStdHandle (Win32.Winbase.STD_OUTPUT_HANDLE);
+      if not Is_Valid_Handle (H) then
+         return Not_A_Console;
+      end if;
+
+      OK := Win32.Wincon.GetConsoleMode (H, Mode'Unchecked_Access);
+      if OK = Win32.FALSE then
+         return Not_A_Console;
+      end if;
+
+      if (Mode and ENABLE_VIRTUAL_TERMINAL_PROCESSING) /= 0 then
+         return ConPTY_VT_Enabled;
+      end if;
+
+      --  Probe: try to set the bit.  ConPTY hosts and modern conhost accept it;
+      --  legacy conhost rejects with ERROR_INVALID_PARAMETER.
+      Set_Mode := Mode or ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+      OK := Win32.Wincon.SetConsoleMode (H, Set_Mode);
+      if OK /= Win32.FALSE then
+         return ConPTY_VT_Enabled;  --  bit left enabled (matches Enable_VT_Processing)
+      end if;
+
+      return Legacy_Conhost;
+   end Classify_Console_VT;
+
+   ---------------------------------------------------------------------------
+   --  Should_Skip_Active_Probes (FUNC-WIN-014)
+   ---------------------------------------------------------------------------
+
+   function Should_Skip_Active_Probes return Boolean is
+   begin
+      return Classify_Console_VT = Legacy_Conhost;
+   end Should_Skip_Active_Probes;
 
 end Termicap.Win32_VT;

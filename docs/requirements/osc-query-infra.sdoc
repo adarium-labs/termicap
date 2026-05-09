@@ -248,9 +248,13 @@ The library shall provide a high-level probe session abstraction that encapsulat
 The session type shall be a limited Ada type so that it cannot be copied or assigned, enforcing single-owner semantics. An exception propagating out of the query phase shall not prevent steps 7 and 8 from executing.
 
 The session abstraction shall be implemented such that steps 7 and 8 are performed in the Finalize procedure of a controlled type or an equivalent Ada mechanism that guarantees execution on scope exit or exception propagation.
+
+On Windows the same lifecycle applies but is realised via the Windows console adaptation requirements: the open sequence calls FUNC-OSC-019 (foreground check), then FUNC-OSC-016 (terminal device acquisition via GetStdHandle / CONIN$ / CONOUT$ fallback), then FUNC-OSC-017 (save + raw mode on the input + output console mode DWORDs), then drain (FUNC-OSC-011 implemented per FUNC-OSC-018). The close sequence calls FUNC-OSC-017 restore followed by close of any handles obtained via CreateFileW (handles obtained via GetStdHandle are not closed). Steps 7 and 8 (restore + close) shall execute regardless of whether the query phase raised an exception, identically to the POSIX path.
 <<<
 COMMENT: >>>
 The probe session is the user-facing entry point for Tier 3 active probing. Callers should not need to manage the open/save/raw/restore/close sequence manually; doing so correctly in the presence of exceptions requires careful use of exception handlers at every step, which is error-prone. Wrapping the lifecycle in a controlled type (Ada.Finalization.Limited_Controlled) provides an RAII guarantee: Finalize is called by the Ada runtime when the object goes out of scope or when an exception propagates past its declarative region, ensuring that the terminal is always restored even if a query raises Program_Error or Storage_Error. The limited type restriction prevents accidental copies of the session (which would lead to double-close of the FD). The foreground check as the first step of Open avoids opening /dev/tty at all when probing is not appropriate, minimising side effects for background processes.
+
+The Windows mapping is described separately (FUNC-OSC-016 through FUNC-OSC-019) because the underlying primitives differ from POSIX: there is no /dev/tty, no termios, no select(), and no controlling-terminal/process-group concept. The lifecycle abstraction is identical (open → save+raw → drain → query → restore → close), only the primitives differ. This was added as a follow-up to a conformance-suite finding that the original Windows OSC body was a stub and never performed any active probing, causing termicap to silently return passive-only results on PowerShell, Warp, and Windows Terminal even though those terminals reply correctly to DA1, XTVERSION, OSC 11 and OSC 8 queries (verified via the blessed shim in the same harness).
 <<<
 
 [/SECTION]
@@ -427,6 +431,176 @@ The probe session type (FUNC-OSC-008) shall be marked SPARK_Mode => Off because 
 <<<
 COMMENT: >>>
 The SPARK boundary placement follows the established Termicap convention: OS calls are isolated in FFI packages (SPARK_Mode => Off), and all pure logic above those packages is kept SPARK-provable at Silver level. The most important pure operations to keep in SPARK are Parse_DA1_Response and the DA1 detection predicate, because their correctness can be specified with precise contracts (the parser postcondition in FUNC-OSC-010; a terminator detection postcondition that the byte sequence ends with the DA1 pattern) and discharged by the SPARK prover without manual lemmas. The probe session type uses Ada.Finalization.Limited_Controlled for RAII, which requires the full Ada tasking and OOP model; GNATprove does not support controlled types at any SPARK level, so SPARK_Mode => Off at the session package level is unavoidable. This mirrors the pattern used by the SIGWINCH feature (FUNC-SWC-011).
+<<<
+
+[/SECTION]
+
+[SECTION]
+TITLE: Windows Console Active-Probe Adaptation
+
+[REQUIREMENT]
+UID: FUNC-OSC-016
+STATUS: Approved
+PRIORITY: Must
+TITLE: Windows Terminal Device Acquisition
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-001
+STATEMENT: >>>
+On Windows the library shall obtain a console input handle and a console output handle for active probing, mirroring the role that /dev/tty plays on POSIX (FUNC-OSC-001). Acquisition shall proceed in two stages:
+
+  Stage 1 — standard handles:
+    1. Call Win32.Winbase.GetStdHandle(STD_INPUT_HANDLE) to obtain a candidate input handle.
+    2. Call Win32.Winbase.GetStdHandle(STD_OUTPUT_HANDLE) to obtain a candidate output handle.
+    3. For each candidate, validate by calling Win32.Wincon.GetConsoleMode on the handle. A successful GetConsoleMode (return value Win32.TRUE) confirms the handle is attached to a console; a failed GetConsoleMode (Win32.FALSE) means the handle is redirected to a file, pipe, or other non-console device and shall be discarded for the purposes of active probing.
+
+  Stage 2 — CONIN$/CONOUT$ fallback (only for handles discarded in stage 1):
+    4. If the input candidate was discarded, call Win32.Winbase.CreateFileW with:
+         lpFileName            = "CONIN$"
+         dwDesiredAccess       = GENERIC_READ or GENERIC_WRITE
+         dwShareMode           = FILE_SHARE_READ or FILE_SHARE_WRITE
+         lpSecurityAttributes  = null
+         dwCreationDisposition = OPEN_EXISTING
+         dwFlagsAndAttributes  = 0
+         hTemplateFile         = NULL
+       to obtain a fresh console input handle.
+    5. If the output candidate was discarded, call Win32.Winbase.CreateFileW with:
+         lpFileName            = "CONOUT$"
+         dwDesiredAccess       = GENERIC_READ or GENERIC_WRITE
+         dwShareMode           = FILE_SHARE_READ or FILE_SHARE_WRITE
+         lpSecurityAttributes  = null
+         dwCreationDisposition = OPEN_EXISTING
+         dwFlagsAndAttributes  = 0
+         hTemplateFile         = NULL
+       to obtain a fresh console output handle.
+    6. If a CreateFileW call returns INVALID_HANDLE_VALUE, the corresponding side shall be considered unacquired.
+
+If both input and output handles cannot be acquired (i.e., neither stage 1 nor stage 2 yields a valid console handle for that side), the open operation shall return Session_No_Terminal — the same error used on POSIX when /dev/tty cannot be opened (FUNC-OSC-008, step 2).
+
+The session shall record, per handle, whether the handle was obtained via GetStdHandle ("borrowed") or via CreateFileW ("owned"). On session close:
+  - Borrowed handles shall NOT be passed to CloseHandle; they are owned by the console subsystem and closing them would invalidate the standard handles for the rest of the process.
+  - Owned handles shall be passed to Win32.Winbase.CloseHandle. CloseHandle failure shall not raise an exception; the close path shall proceed regardless.
+
+A representative session-record shape:
+
+  type Console_Handle_Origin is (Borrowed_From_Std, Owned_From_CreateFile, Not_Acquired);
+
+  type Console_Endpoint is record
+     Handle : Win32.Winnt.HANDLE;
+     Origin : Console_Handle_Origin;
+  end record;
+<<<
+COMMENT: >>>
+Windows has no /dev/tty: the canonical equivalents are GetStdHandle for the inherited standard handles and the reserved CONIN$/CONOUT$ device names for the controlling console. Programs whose stdout has been redirected (e.g., termicap.exe > out.txt) keep their attached console reachable via CONIN$/CONOUT$, so the fallback is the only way to keep active probing working under output redirection. The validation step uses GetConsoleMode rather than GetFileType because GetFileType returns FILE_TYPE_CHAR for any character device (including serial ports), which would produce false positives. Distinguishing borrowed from owned handles matters because Win32 explicitly documents that closing a standard handle obtained from GetStdHandle invalidates it for the rest of the process — leaking the GetStdHandle handles into CloseHandle would silently break the parent's stdio across the lifetime of the program. This pattern is identical to the existing FUNC-WIN-004 split for the TTY layer; the OSC layer needs its own statement because it operates on input + output handles together (FUNC-WIN-004 only addresses the redirected-stdout case for the passive layer). The bug fixed by this requirement was that the original Windows OSC body declared Open as Session_No_Terminal unconditionally, so XTVERSION, DA1 sixel, OSC 11, OSC 8 verification, OSC 52, and Kitty APC all silently failed even on Windows Terminal and Warp where blessed proves the replies are present.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-017
+STATUS: Approved
+PRIORITY: Must
+TITLE: Windows Console Mode Save / Restore / Raw
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-002
+- TYPE: Parent
+  VALUE: FUNC-OSC-003
+STATEMENT: >>>
+On Windows the library shall save, modify, and restore the console mode DWORDs of the input and output handles acquired in FUNC-OSC-016, mirroring the role that termios save/restore (FUNC-OSC-002) and raw-mode activation (FUNC-OSC-003) play on POSIX.
+
+Saved-state representation:
+
+  type Saved_Console_Mode is record
+     Input_Mode    : Win32.DWORD;
+     Input_Saved   : Boolean;
+     Output_Mode   : Win32.DWORD;
+     Output_Saved  : Boolean;
+  end record;
+
+Save sequence (called during session open, after FUNC-OSC-016):
+  1. If the input endpoint was acquired, call Win32.Wincon.GetConsoleMode on the input handle and store the resulting DWORD in Input_Mode; set Input_Saved := True. On GetConsoleMode failure, leave Input_Mode at 0 and Input_Saved := False.
+  2. If the output endpoint was acquired, call Win32.Wincon.GetConsoleMode on the output handle and store the resulting DWORD in Output_Mode; set Output_Saved := True. On GetConsoleMode failure, leave Output_Mode at 0 and Output_Saved := False.
+  3. A partial save (only one of the two handles successfully saved) is permitted. If neither save succeeded but a handle was acquired in FUNC-OSC-016, the open operation shall return Session_Save_Failed (consistent with FUNC-OSC-008 step 3).
+
+Raw-mode activation (called during session open, after a successful save):
+  4. On the input handle, compute New_Input := (Input_Mode and not (ENABLE_LINE_INPUT or ENABLE_ECHO_INPUT or ENABLE_PROCESSED_INPUT)) or ENABLE_VIRTUAL_TERMINAL_INPUT, then call Win32.Wincon.SetConsoleMode(input_handle, New_Input). Apply only if Input_Saved is True.
+  5. On the output handle, compute New_Output := Output_Mode or ENABLE_VIRTUAL_TERMINAL_PROCESSING or DISABLE_NEWLINE_AUTO_RETURN, then call Win32.Wincon.SetConsoleMode(output_handle, New_Output). Apply only if Output_Saved is True. Note that the output mode is amended (bits added) rather than replaced, because the existing ENABLE_PROCESSED_OUTPUT and ENABLE_WRAP_AT_EOL_OUTPUT bits must be preserved for normal output to work after restore.
+  6. If either SetConsoleMode call fails, the open operation shall: invoke restore (step 7-8 below) on whichever bits were saved, close any owned handles (FUNC-OSC-016), and return Session_Raw_Failed (consistent with FUNC-OSC-008 step 4).
+
+Restore sequence (called during session close, and from the Finalize path on exception propagation):
+  7. If Input_Saved, call Win32.Wincon.SetConsoleMode(input_handle, Input_Mode). Failure shall not raise an exception; the close path shall continue.
+  8. If Output_Saved, call Win32.Wincon.SetConsoleMode(output_handle, Output_Mode). Failure shall not raise an exception; the close path shall continue.
+
+The required Win32 mode bit constants are:
+
+  ENABLE_PROCESSED_INPUT             : constant Win32.DWORD := 16#0001#;
+  ENABLE_LINE_INPUT                  : constant Win32.DWORD := 16#0002#;
+  ENABLE_ECHO_INPUT                  : constant Win32.DWORD := 16#0004#;
+  ENABLE_VIRTUAL_TERMINAL_INPUT      : constant Win32.DWORD := 16#0200#;
+  ENABLE_VIRTUAL_TERMINAL_PROCESSING : constant Win32.DWORD := 16#0004#;  -- per FUNC-WIN-009
+  DISABLE_NEWLINE_AUTO_RETURN        : constant Win32.DWORD := 16#0008#;
+
+Constants not already provided by win32ada (notably ENABLE_VIRTUAL_TERMINAL_INPUT and DISABLE_NEWLINE_AUTO_RETURN) shall be declared in the Termicap Windows integration package, alongside ENABLE_VIRTUAL_TERMINAL_PROCESSING (FUNC-WIN-009).
+<<<
+COMMENT: >>>
+Windows splits its terminal mode into two separate DWORDs (input and output) instead of POSIX's single struct termios, so the saved-state record must carry both. Tracking Input_Saved and Output_Saved separately is necessary because legitimate redirection scenarios (e.g., termicap.exe < input.txt with output to a real console) produce a partial-save state in which only one side is a real console; restoring with a stale 0 DWORD on the redirected side would either fail noisily or silently disable line input on whatever process inherits that handle next.
+
+The raw-mode bit choices are deliberate. ENABLE_VIRTUAL_TERMINAL_INPUT delivers VT-encoded key reports (CSI/SS3 sequences, modifier-encoded characters) directly into ReadFile so that escape-sequence responses round-trip without console-host translation. Clearing ENABLE_LINE_INPUT/ENABLE_ECHO_INPUT/ENABLE_PROCESSED_INPUT is the analogue of clearing ICANON/ECHO/ISIG in POSIX raw mode (FUNC-OSC-003): without these, the host buffers input until Enter, echoes the escape bytes, and intercepts Ctrl-C as a signal. The output side must keep ENABLE_PROCESSED_OUTPUT (already in Output_Mode) so that normal text is still rendered after restore, which is why the operation OR-ORs the new bits onto the saved value rather than replacing it. DISABLE_NEWLINE_AUTO_RETURN prevents the host from inserting CR before LF in CSI cursor-position responses, which would corrupt parsing of replies that legitimately contain bare LFs (rare but specified by some emulators). This bit set is the same one used by Windows Terminal's own VT translator and by the Rust crossterm enable_raw_mode helper.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-018
+STATUS: Approved
+PRIORITY: Must
+TITLE: Windows Timed Read on Console Input Handle
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-004
+STATEMENT: >>>
+On Windows the timed-read primitive used by Sentinel_Query (FUNC-OSC-006) and Drain_Input (FUNC-OSC-011) shall be implemented using Win32.Winbase.WaitForSingleObject on the console input handle followed by a single Win32.Winbase.ReadFile, mirroring the role that select() + read() plays on POSIX (FUNC-OSC-004).
+
+The Windows-side signature shall match the POSIX one:
+
+  procedure Timed_Read
+     (H          :     Win32.Winnt.HANDLE;
+      Buffer     : out Byte_Array;
+      Bytes_Read : out Natural;
+      Timeout_Ms :     Natural;
+      Timed_Out  : out Boolean);
+
+The operation shall:
+  1. Call Win32.Winbase.WaitForSingleObject(H, DWORD(Timeout_Ms)).
+  2. If the return value is WAIT_TIMEOUT (16#0000_0102#), set Timed_Out := True, Bytes_Read := 0, and return without calling ReadFile.
+  3. If the return value is WAIT_OBJECT_0 (16#0000_0000#), call Win32.Winbase.ReadFile(H, Buffer'Address, Buffer'Length, Got'Access, NULL) exactly once. Set Bytes_Read := Natural(Got) and Timed_Out := False. A partial read (Got < Buffer'Length) is normal and shall not be retried; the caller's accumulation loop (FUNC-OSC-006) handles re-reads.
+  4. Any other return value (WAIT_FAILED, WAIT_ABANDONED, etc.) or a ReadFile failure shall yield Bytes_Read := 0, Timed_Out := False; the caller shall interpret Bytes_Read = 0 with Timed_Out = False as an I/O error, exactly as on POSIX.
+
+Drain_Input (FUNC-OSC-011) on Windows shall use this same primitive with Timeout_Ms => 0, repeating up to MAX_DRAIN_ITERATIONS times until either Timed_Out is True or Bytes_Read is 0.
+
+The recommended Timeout_Ms values from FUNC-OSC-004 (1000 ms typical, up to 5000 ms for slow links) apply unchanged on Windows.
+<<<
+COMMENT: >>>
+WaitForSingleObject is the Windows analogue of select() for a single waitable object: it blocks for up to Timeout_Ms milliseconds, returning WAIT_OBJECT_0 as soon as the object is signalled or WAIT_TIMEOUT on expiry. Console input handles are waitable, so this gives millisecond-precision timed reads without polling, matching the precision and semantics of POSIX select() in FUNC-OSC-004. The single ReadFile after a successful wait is non-blocking in practice because ENABLE_LINE_INPUT was cleared by FUNC-OSC-017: bytes are delivered as soon as the console host has them, without waiting for Enter. PeekConsoleInputW was considered but rejected because it returns INPUT_RECORD structures (with key-event metadata) instead of raw bytes, requiring an additional translation layer that ENABLE_VIRTUAL_TERMINAL_INPUT already provides natively via ReadFile. The 0 ms drain works because WaitForSingleObject(0) returns WAIT_TIMEOUT immediately if the handle is not signalled, giving the same non-blocking-poll semantics as select() with timeval={0,0} in FUNC-OSC-011 step 1.
+<<<
+
+[REQUIREMENT]
+UID: FUNC-OSC-019
+STATUS: Approved
+PRIORITY: Must
+TITLE: Foreground Check on Windows
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-007
+STATEMENT: >>>
+On Windows the Is_Foreground_Process check (FUNC-OSC-007) shall return True whenever a valid console handle pair has been acquired (FUNC-OSC-016), and False otherwise. The Windows console subsystem has no controlling-terminal / process-group concept and exposes no equivalent of TIOCGPGRP or getpgrp(): every process attached to a console may write to it directly, and there is no kernel-enforced foreground job. Consequently the foreground guard reduces to "do we have a usable console at all?".
+
+The Windows implementation shall therefore:
+  1. Run after FUNC-OSC-016 (or as a thin wrapper that calls FUNC-OSC-016 and immediately closes any handles it acquired purely for the check).
+  2. Return True if at least one of the input or output handles was acquired (borrowed or owned).
+  3. Return False if neither handle could be acquired.
+
+This documents the existing behaviour of the Windows OSC layer explicitly — the original POSIX-shaped requirement (FUNC-OSC-007) had no Windows equivalent, leaving the foreground gate undefined on Windows.
+<<<
+COMMENT: >>>
+Job control on Windows is implemented at the Job Object level (CreateJobObject / AssignProcessToJobObject) and is unrelated to console ownership: a Job Object can be in any state and still hold a console, and there is no API call that returns "the foreground process for this console" in the POSIX sense. The closest analogue, GetConsoleWindow + GetWindowThreadProcessId, returns the process that owns the console window, which on conhost.exe is conhost itself, not the user's foreground program. Treating "have a console handle" as the gate matches the policy already in use by termenv on Windows and by the Windows port of crossterm. Because all attached processes can interleave writes anyway, sending probe bytes from a backgrounded job (in the loose Win32 sense — e.g., a process whose window is not focused) does not produce the kind of foreground/background contamination that POSIX TIOCGPGRP guards against; the user sees normal mixed output, which is the same situation as any other Win32 console program writing concurrently.
 <<<
 
 [/SECTION]
