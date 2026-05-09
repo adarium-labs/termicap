@@ -243,6 +243,14 @@ termicap/
 
 ---
 
+## AI use in this project
+
+In the interest of transparency: substantial portions of this codebase — Ada source, tests, examples, ADRs, requirements, and most of this README — were drafted with the help of generative-AI tools, primarily **Claude Opus**. The detection algorithms themselves are not invented by the model out of thin air — they are derived from a survey of established terminal-capability libraries across other ecosystems (notably `supports-color` and `terminal-size` in Rust/Node.js, `termenv` in Go, `rich` and `blessed` in Python, `chafa` in C, `JLine` in Java, plus a handful of others) cross-checked against published terminal specifications and consolidated into the StrictDoc requirements set under [`docs/requirements/`](docs/requirements/). AI assistance was used to translate that prior art into idiomatic Ada/SPARK and to scaffold tests and docs around it.
+
+Every committed change is reviewed, tested, and owned by the human maintainer. AI is treated as a power tool, not as an author — the same standard expected of outside contributions (see below).
+
+---
+
 ## Contributing
 
 Contributions are welcome — bug reports, fixes, new features, documentation, additional conformance shims. For anything non-trivial please open an issue first so we can align on direction before code is written. Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat | fix | docs | test | refactor | perf | chore`); the build, format, test, and SPARK commands are listed under [Building, testing, formatting](#building-testing-formatting).
