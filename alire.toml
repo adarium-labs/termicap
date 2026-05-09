@@ -1,6 +1,71 @@
 name = "termicap"
-description = ""
-version = "0.1.0-dev"
+description = "Lightweight, cross-platform terminal capability detection for Ada/SPARK"
+version = "1.0.0"
+
+long-description = '''
+Termicap is a lightweight, cross-platform terminal capability detection library for Ada/SPARK. It answers the questions a CLI or TUI application has to ask before emitting a single byte of output — *is stdout a TTY?*, *how many colors does this terminal support?*, *how wide is the window?*, *is this iTerm or kitty or tmux?*, *did the user say `NO_COLOR`?* — and returns the answers as plain Ada records and enumerations.
+
+It is a **detection-only** library: it never emits escape sequences, never renders styled text, and is not a TUI framework. Use it to drive whatever output layer you already have.
+
+## What it detects
+
+- **TTY status** per stream (stdin / stdout / stderr).
+- **Color level** — `None / Basic_16 / Extended_256 / True_Color` — via an 11-step priority cascade synthesised from `supports-color`, `termenv`, and `rich`. Honours `NO_COLOR` (no-color.org), `FORCE_COLOR` (force-color.org), BSD `CLICOLOR` / `CLICOLOR_FORCE`, `COLORTERM`, `TERM`, `TERM_PROGRAM`, and CI environment variables.
+- **Terminal dimensions** via `ioctl(TIOCGWINSZ)` on POSIX and `GetConsoleScreenBufferInfo` on Windows, plus `SIGWINCH` resize notification through a self-pipe + protected object on POSIX.
+- **Unicode level** — `None / Basic / Extended` — from locale, CI, and terminal heuristics (`LC_ALL`, `LC_CTYPE`, `LANG`, `WT_SESSION`, `TERM_PROGRAM`, `TERMINAL_EMULATOR`, `TERM=linux` exclusion).
+- **Terminal identity** — iTerm, kitty, WezTerm, Windows Terminal, ConPTY, Cygwin / MSYS2 PTY, tmux, screen, and more — with a multiplexer flag and program name.
+- **Background and foreground color** via OSC 10 / 11 query with `COLORFGBG` fallback, plus a SPARK Gold dark/light theme classifier.
+- **DA1 device attributes** (VT level, capability flags) and **DECRPM** mode reports via a batched single-sentinel probe.
+- **XTVERSION** active terminal name + version identification.
+- **Hyperlinks (OSC 8)** with passive classification refined by XTVERSION.
+- **Keyboard protocol** — Kitty / XTerm CSI / Legacy / Win32 — and **mouse encoding** — `SGR_Pixels / SGR / URXVT / X10`.
+- **Graphics** — Sixel and Kitty graphics flags, seeded by DA1 (Ps=4) and XTVERSION name tokens.
+- **OSC 52 clipboard** access level.
+- **`wcwidth` / cell width** with Unicode 3 / 13 / 16 tables and binary search (SPARK Gold, no FFI in the table layer).
+- **Color downsampling** — companion `Termicap.Downsampling` package that maps any color you want to emit down to the level the terminal supports: TrueColor → 256-color → ANSI 16 → strip to none. One overloaded `Downsample` dispatch on `RGB` / `Color_Index_256`, plus the primitive conversions (`Downsample_True_To_256`, `Downsample_True_To_16`, `Downsample_256_To_16`); pure SPARK Gold with idempotency and monotonicity postconditions.
+- **Terminfo** parsing (header + boolean / numeric / string entries).
+- **Application-level override** — `Auto / Force_None / Force_Basic / Force_256 / Force_True_Color` plus a `Scoped_Override` controlled type for wiring `--color=auto | never | always | 256 | truecolor` straight into the detection engine.
+
+## Architecture
+
+- **SPARK-provable detection.** Pure detection logic is *written* to target SPARK Silver, with SPARK Gold for downsampling and cell width. FFI and tasking boundaries are isolated behind clearly marked `SPARK_Mode => Off` packages and C wrappers. **Caveat:** the codebase is not yet verified end-to-end with `gnatprove` — running the prover and discharging any remaining VCs is planned future work.
+- **Cross-platform.** Linux, macOS, BSD, and Windows. Platform-specific bodies are dispatched via GPR `Source_Dirs`. The Windows layer classifies the console (`Legacy_Conhost / ConPTY_VT_Enabled / Not_A_Console`) and gates active probes accordingly; Cygwin / MSYS2 PTY handles are detected by inspecting the underlying named-pipe name via `NtQueryObject`.
+- **Two performance tiers.** A fast base snapshot (`Get` / `Detect`, sub-50 ms worst case) and a full snapshot with all active probes (`Get_Full` / `Detect_Full`, ~6 s worst case, sub-50 ms typical on a local PTY).
+- **Cached and fresh APIs.** `Get` is thread-safe and lazily cached per stream; `Detect` always re-runs every sub-detector — useful after `SIGWINCH`, after an override change, or in long-running processes.
+- **No exceptions in library code.** Errors are represented as `Result` variants or safe defaults.
+- **Minimal dependencies.** `sparklib` for SPARK formal containers, plus `win32ada` on Windows only.
+
+## Quick start
+
+```ada
+with Ada.Text_IO;
+with Termicap.Capabilities;
+with Termicap.Color;
+
+procedure Hello is
+   Caps : constant Termicap.Capabilities.Terminal_Capabilities :=
+     Termicap.Capabilities.Get;
+begin
+   if Caps.TTY_Stdout
+     and then Caps.Color >= Termicap.Color.Extended_256
+   then
+      Ada.Text_IO.Put_Line
+        (ASCII.ESC & "[38;5;208mHello, 256-color world"
+         & ASCII.ESC & "[0m");
+   else
+      Ada.Text_IO.Put_Line ("Hello, monochrome world");
+   end if;
+end Hello;
+```
+
+The repository ships with around two dozen runnable demos in `examples/`, an arc42-lite architecture document in `docs/architecture/`, a Diátaxis-structured user guide in `docs/guide/`, MADR-format ADRs in `docs/adr/`, StrictDoc-format requirements in `docs/requirements/`, and a cross-language conformance harness in `tools/conformance/` that compares Termicap's results against shims in C, Go, Rust, Python, Node.js, Java, Haskell, Ruby, C#, and Swift.
+
+## Status
+
+Pre-release (`1.0.0`). The API may still shift before `1.0`.
+
+Licensed under Apache-2.0 WITH LLVM-exception — permissive license that allows static linking into closed-source binaries without license propagation.
+'''
 
 authors = ["Heziode"]
 maintainers = ["Heziode <heziode@protonmail.com>"]
@@ -25,3 +90,6 @@ win32ada = "^26.0.0"
 
 [environment.'case(os)'.'...']
 GPR_PROJECT_PATH.prepend = "${CRATE_ROOT}/gpr"
+
+[[pins]]
+sparklib = { path = "C:/Users/PC-AMD/dev/vendor/sparklib" }
