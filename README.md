@@ -243,6 +243,23 @@ termicap/
 
 ---
 
+## Contributing
+
+Contributions are welcome — bug reports, fixes, new features, documentation, additional conformance shims. For anything non-trivial please open an issue first so we can align on direction before code is written. Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat | fix | docs | test | refactor | perf | chore`); the build, format, test, and SPARK commands are listed under [Building, testing, formatting](#building-testing-formatting).
+
+### AI-assisted contributions
+
+Generative-AI tools (Claude Code, Copilot, Codex, Cursor, …) are allowed when writing code, tests, docs, or commit messages. The rules are simple:
+
+- **You — the human opening the PR — own the code.** You are responsible for understanding every line you submit, for testing it, for making sure it builds and passes the test suite, and for matching the project's coding standard ([`.claude/ada-style-guide.md`](docs/ada-style-guide.md)). *"The model wrote it"* is never an acceptable answer to a review comment.
+- **Pull requests opened directly by an AI agent or autonomous bot are not accepted** and will be closed without review. The only exception is automation run on the explicit initiative of a maintainer of this repository.
+- **Disclose substantial AI involvement** in the PR description — a one-liner is enough, e.g. *"drafted with Claude Opus, reviewed and adjusted by hand"*. Trivial autocomplete or rename suggestions don't need disclosure; whole functions, architectures, large refactors, or generated tests do.
+- **Respect licenses.** Make sure the AI tool's terms and any training-data attribution constraints are compatible with this project's Apache-2.0 WITH LLVM-exception license. If you're unsure, don't submit it.
+
+If a PR cannot survive these rules, please do not open it — it saves everyone time.
+
+---
+
 ## License
 
 Apache-2.0 WITH LLVM-exception. See [`LICENSE`](LICENSE) for the full text.
