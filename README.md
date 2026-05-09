@@ -1,29 +1,20 @@
 # Termicap
 
-Lightweight, cross-platform terminal capability detection for Ada/SPARK.
+Terminal capability detection for Ada/SPARK. Cross-platform, dependency-light, no rendering layer attached.
 
-Termicap answers the questions a CLI or TUI application has to ask before it emits a single byte of output:
+Before printing a single byte, most CLI and TUI programs have to ask the same handful of questions: is this stream a TTY, how many colors does the terminal handle, how wide is the window right now, can the locale render Unicode, *which* terminal is this anyway (iTerm, kitty, WezTerm, Windows Terminal, ConPTY, tmux, screen…), does it understand OSC 8 hyperlinks or Sixel graphics or the Kitty keyboard protocol, and the one question that trumps all the others: did the user already pass `NO_COLOR`, `FORCE_COLOR`, or `--color=never`?
 
-- Is stdin / stdout / stderr a TTY?
-- How many colors does the terminal support — none, 16, 256, or 24-bit?
-- How wide and how tall is the window, right now?
-- Does the locale and terminal emulator render Unicode?
-- Is this iTerm, kitty, WezTerm, Windows Terminal, ConPTY, tmux, screen, …?
-- Does it support hyperlinks (OSC 8), Sixel / Kitty graphics, OSC 52 clipboard, the Kitty / XTerm keyboard protocol, SGR-pixel mouse?
-- And — most importantly — has the user said `NO_COLOR`, `FORCE_COLOR`, `--color=never`, or `--color=always`?
+Termicap answers those questions and hands the answers back as plain Ada records and enums. It does not emit escape sequences, draw widgets, or pretend to be a TUI framework. Pair it with whatever output layer you already have.
 
-Termicap returns plain Ada records and enumerations. It does **not** emit escape sequences, render styled text, or provide a TUI framework. Pair it with whatever output layer you like.
+> **A note about SPARK.** The code is *written* against SPARK Silver (with a few Gold spots), and the FFI and tasking surfaces are isolated behind clearly-marked `SPARK_Mode => Off` boundaries. It has not yet been verified end-to-end with `gnatprove` though. Running the prover and discharging whatever VCs remain is on the to-do list, not a finished claim.
 
 ## Highlights
 
-- **SPARK-provable detection.** Pure detection logic is *written* to target SPARK Silver (some Gold); FFI and tasking are isolated behind clearly marked `SPARK_Mode => Off` boundaries. See `docs/architecture/`. **Caveat:** the codebase is not yet verified end-to-end with `gnatprove` — running the prover and discharging any remaining VCs is planned future work.
-- **Cross-platform.** Linux, macOS, BSD, and Windows (Win32 console + ConPTY + Cygwin / MSYS2 PTY detection via named-pipe inspection).
-- **Standards-aware.** Implements the [no-color.org] convention, the [force-color.org] convention, BSD `CLICOLOR` / `CLICOLOR_FORCE`, an 11-step color cascade synthesised from `supports-color`, `termenv`, and `rich`.
-- **Two performance tiers.** A fast base snapshot (`Get` / `Detect`, sub-50 ms worst case) and a full snapshot with active probes (`Get_Full` / `Detect_Full`, ~6 s worst case, sub-50 ms typical on a local PTY).
-- **Cached and fresh APIs.** `Get` is thread-safe, lazily cached per stream; `Detect` always re-runs every sub-detector — useful after `SIGWINCH`, after an override change, or in long-running processes.
-- **Application-level override.** A process-wide `Override_Mode` plus a scoped `Scoped_Override` controlled type lets you wire `--color=auto | never | always | 256 | truecolor` straight into the detection engine.
-- **No exceptions in library code.** Errors are represented as `Result` variants or safe defaults.
-- **Minimal dependencies.** [`sparklib`](https://github.com/AdaCore/sparklib) for SPARK formal containers; [`win32ada`](https://github.com/AdaCore/win32ada) on Windows only.
+Detection covers the four canonical color levels (`None`, `Basic_16`, `Extended_256`, `True_Color`) through an 11-step cascade modelled on `supports-color`, `termenv`, and `rich`, and it respects the no-color.org and force-color.org conventions plus the BSD `CLICOLOR` / `CLICOLOR_FORCE` knobs. Linux, macOS, BSD, and Windows are all supported; on Windows that includes the modern Win32 console, ConPTY, and Cygwin/MSYS2 PTY detection by inspecting the underlying named-pipe name through `NtQueryObject`.
+
+There are two API tiers. `Get` and `Detect` give you a fast snapshot (sub-50 ms in the worst case). `Get_Full` and `Detect_Full` add active probes (XTVERSION, keyboard, mouse, graphics, OSC 52 clipboard) at the cost of up to roughly 6 s if every probe times out. A local PTY normally answers in well under 50 ms. `Get` is cached per stream and thread-safe; `Detect` always re-runs everything, which is what you want after `SIGWINCH`, after the override changes, or in a long-running process that can't trust a stale snapshot.
+
+An `Override_Mode` lets you wire `--color=auto | never | always | 256 | truecolor` straight into the detection engine, with a `Scoped_Override` controlled type for RAII-style scopes. Errors come back as `Result` variants or safe defaults; no exceptions are raised by library code. Dependencies stay minimal: [`sparklib`](https://github.com/AdaCore/sparklib) for the SPARK formal containers, plus [`win32ada`](https://github.com/AdaCore/win32ada) on Windows only.
 
 [no-color.org]: https://no-color.org
 [force-color.org]: https://force-color.org
@@ -55,7 +46,7 @@ Termicap returns plain Ada records and enumerations. It does **not** emit escape
 | Terminfo               | header + boolean / numeric / string lookup    | bounded, pure parser                                        |
 | Override               | `Auto / Force_None / Force_Basic / Force_256 / Force_True_Color` | `Scoped_Override` controlled type      |
 
-See [`docs/architecture/03-building-blocks.md`](docs/architecture/03-building-blocks.md) for the full package map and SPARK boundary diagram, and the per-feature reference docs in [`docs/guide/reference/`](docs/guide/reference/).
+The full package map and SPARK boundary diagram is in [`docs/architecture/03-building-blocks.md`](docs/architecture/03-building-blocks.md), and the per-feature reference docs live under [`docs/guide/reference/`](docs/guide/reference/).
 
 ---
 
@@ -78,13 +69,13 @@ cd termicap
 alr build
 ```
 
-The library is built with `alr build`. Do not invoke `gprbuild` directly — each sub-crate (root, `tests/`, `examples/`) has its own `alire.toml`.
+Always go through `alr build`; `gprbuild` is not the right entry point here, and each sub-crate (root, `tests/`, `examples/`) carries its own `alire.toml`.
 
 ---
 
 ## Quick start
 
-The most common pattern: ask for a cached snapshot for stdout.
+The common case: ask for the cached snapshot for stdout and branch on what comes back.
 
 ```ada
 with Ada.Text_IO;
@@ -121,7 +112,7 @@ end case;
 --  All subsequent Detect / Get calls honour the override.
 ```
 
-Or use the scoped form for a single block of work:
+If you only want the override active for a single block of work, the controlled-type form takes care of restoring the previous mode for you:
 
 ```ada
 declare
@@ -155,11 +146,11 @@ begin
 end;
 ```
 
-`Get_Full` adds XTVERSION, keyboard, mouse, graphics, and OSC 52 clipboard detection at the cost of a higher first-call latency (~6 s worst case, well under 500 ms on a local PTY). Subsequent calls are cache hits.
+`Get_Full` adds XTVERSION, keyboard, mouse, graphics, and OSC 52 clipboard detection. The first call is the slow one (up to ~6 s if every active probe times out, well under 50 ms on a local PTY); subsequent calls are cache hits.
 
 ### Pair detection with `Termicap.Downsampling`
 
-Detection alone tells you what the terminal supports; `Termicap.Downsampling` is the companion package that maps any color you want to emit down to that level — TrueColor → 256-color → ANSI 16 → strip to none — with SPARK Gold idempotency and monotonicity contracts. One pair of overloads dispatches on the source type (`RGB` or `Color_Index_256`) and the result is a discriminated `Downsampled_Color` you can `case`-match to pick the right escape sequence (or skip it entirely).
+Detection only tells you what the terminal can show. Picking a color the terminal can actually display is a separate problem, and that's what `Termicap.Downsampling` is for: it maps any color you want to emit down to the level the terminal supports (TrueColor → 256-color → ANSI 16, or strip to none) with SPARK Gold idempotency and monotonicity contracts. One overloaded `Downsample` dispatch handles `RGB` or `Color_Index_256` sources; the result is a discriminated `Downsampled_Color` you `case`-match on to pick the right escape sequence, or to skip emitting one altogether.
 
 ```ada
 with Termicap.Capabilities;
@@ -185,9 +176,9 @@ begin
 end;
 ```
 
-The package also exposes the primitive conversions (`Downsample_True_To_256`, `Downsample_True_To_16`, `Downsample_256_To_16`) when you already know the target level and don't need the dispatch wrapper.
+The primitive conversions (`Downsample_True_To_256`, `Downsample_True_To_16`, `Downsample_256_To_16`) are also exposed when you already know the target level and don't need the dispatcher.
 
-More examples — including background-color querying, dark/light theme detection, dimensions, SIGWINCH handling, mouse, hyperlinks, Sixel — live in [`examples/`](examples/) and can be built with `cd examples && alr build`.
+More demos sit in [`examples/`](examples/) (background-color querying, dark/light theme, dimensions, SIGWINCH, mouse, hyperlinks, Sixel, and so on) and build with `cd examples && alr build`.
 
 ---
 
@@ -210,17 +201,16 @@ cd examples && alr build
 alr exec -- gnatprove -P termicap.gpr
 ```
 
-A cross-language conformance harness lives in [`tools/conformance/`](tools/conformance/) and compares Termicap's results against reference shims in C, Go, Rust, Python, Node.js, Java, Haskell, Ruby, C#, and Swift — see its README for usage.
+There's also a cross-language conformance harness under [`tools/conformance/`](tools/conformance/) that compares Termicap's results to reference shims in C, Go, Rust, Python, Node.js, Java, Haskell, Ruby, C#, and Swift. Its own README has the details.
 
 ---
 
 ## Documentation
 
-- **Architecture** — [`docs/architecture/`](docs/architecture/): arc42 lite (context, constraints, building blocks, runtime view).
-- **User guide** — [`docs/guide/`](docs/guide/): tutorials, how-to, reference, explanation ([Diátaxis](https://diataxis.fr/)).
-- **ADRs** — [`docs/adr/`](docs/adr/): MADR-format decision records.
-- **Requirements** — [`docs/requirements/`](docs/requirements/): StrictDoc-format functional and non-functional requirements, traced to code and tests.
-- **Reference research** — [`reference-frameworks/analysis/`](reference-frameworks/analysis/): cross-language synthesis of 24+ libraries informing the design.
+* Architecture lives in [`docs/architecture/`](docs/architecture/) and follows arc42 lite (context, constraints, building blocks, runtime view).
+* The user guide in [`docs/guide/`](docs/guide/) is split tutorials / how-to / reference / explanation, [Diátaxis](https://diataxis.fr/)-style.
+* Design decisions are in [`docs/adr/`](docs/adr/), MADR format.
+* Functional and non-functional requirements are tracked under [`docs/requirements/`](docs/requirements/) in StrictDoc, traced to code and tests.
 
 ---
 
@@ -237,39 +227,38 @@ termicap/
 ├── tools/
 │   ├── conformance/       cross-language conformance harness
 │   └── format_code.sh     gnatformat wrapper
-├── docs/                  architecture, ADRs, user guide, requirements
-└── reference-frameworks/  vendored reference libraries (read-only, for study)
+└── docs/                  architecture, ADRs, user guide, requirements
 ```
 
 ---
 
 ## AI use in this project
 
-In the interest of transparency: substantial portions of this codebase — Ada source, tests, examples, ADRs, requirements, and most of this README — were drafted with the help of generative-AI tools, primarily **Claude Opus**. The detection algorithms themselves are not invented by the model out of thin air — they are derived from a survey of established terminal-capability libraries across other ecosystems (notably `supports-color` and `terminal-size` in Rust/Node.js, `termenv` in Go, `rich` and `blessed` in Python, `chafa` in C, `JLine` in Java, plus a handful of others) cross-checked against published terminal specifications and consolidated into the StrictDoc requirements set under [`docs/requirements/`](docs/requirements/). AI assistance was used to translate that prior art into idiomatic Ada/SPARK and to scaffold tests and docs around it.
+For transparency: a substantial part of this codebase, including Ada source, tests, examples, ADRs, requirements, and most of this README, was drafted with the help of generative-AI tools, primarily Claude Opus. The detection algorithms themselves aren't model inventions; they come from a survey of established terminal-capability libraries in other ecosystems (`supports-color` and `terminal-size` in Rust/Node.js, `termenv` in Go, `rich` and `blessed` in Python, `chafa` in C, `JLine` in Java, plus a few more), cross-checked against published terminal specifications and consolidated into the StrictDoc requirements set under [`docs/requirements/`](docs/requirements/). What the AI was used for is the translation of that prior art into idiomatic Ada/SPARK and the scaffolding of tests and docs around it.
 
-Every committed change is reviewed, tested, and owned by the human maintainer. AI is treated as a power tool, not as an author — the same standard expected of outside contributions (see below).
+Every committed change is reviewed, tested, and owned by a human. The AI is treated as a power tool, not as an author. The same standard is expected from outside contributions; see below.
 
 ---
 
 ## Contributing
 
-Contributions are welcome — bug reports, fixes, new features, documentation, additional conformance shims. For anything non-trivial please open an issue first so we can align on direction before code is written. Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat | fix | docs | test | refactor | perf | chore`); the build, format, test, and SPARK commands are listed under [Building, testing, formatting](#building-testing-formatting).
+Contributions are welcome: bug reports, fixes, new features, documentation, more conformance shims. For anything non-trivial please open an issue first so we can agree on the direction before code is written. Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat | fix | docs | test | refactor | perf | chore`); the build, format, test, and SPARK commands are listed in [Building, testing, formatting](#building-testing-formatting) above.
 
 ### AI-assisted contributions
 
-Generative-AI tools (Claude Code, Copilot, Codex, Cursor, …) are allowed when writing code, tests, docs, or commit messages. The rules are simple:
+You may use generative-AI tools (Claude Code, Copilot, Codex, Cursor, anything else) when writing code, tests, docs, or commit messages. The rules are short:
 
-- **You — the human opening the PR — own the code.** You are responsible for understanding every line you submit, for testing it, for making sure it builds and passes the test suite, and for matching the project's coding standard ([`.claude/ada-style-guide.md`](docs/ada-style-guide.md)). *"The model wrote it"* is never an acceptable answer to a review comment.
-- **Pull requests opened directly by an AI agent or autonomous bot are not accepted** and will be closed without review. The only exception is automation run on the explicit initiative of a maintainer of this repository.
-- **Disclose substantial AI involvement** in the PR description — a one-liner is enough, e.g. *"drafted with Claude Opus, reviewed and adjusted by hand"*. Trivial autocomplete or rename suggestions don't need disclosure; whole functions, architectures, large refactors, or generated tests do.
-- **Respect licenses.** Make sure the AI tool's terms and any training-data attribution constraints are compatible with this project's Apache-2.0 WITH LLVM-exception license. If you're unsure, don't submit it.
+1. **You own the code you submit.** If you opened the PR, you're on the hook for understanding every line of it, for testing it, for getting it past the test suite and the project's coding standard ([`.docs/ada-style-guide.md`](docs/ada-style-guide.md)). *"The model wrote it"* is not an answer to a review comment.
+2. **PRs opened directly by an AI agent or autonomous bot will be closed without review.** The only exception is automation a maintainer of this repository runs on their own initiative.
+3. **Disclose substantial AI involvement** in the PR description. A one-line note is enough, e.g. *"drafted with Claude Opus, reviewed and adjusted by hand"*. Trivial autocomplete or rename suggestions don't need disclosure; whole functions, generated tests, large refactors, or new architecture do.
+4. **Watch the licensing.** Make sure the AI tool's terms and any training-data attribution constraints are compatible with the project's Apache-2.0 WITH LLVM-exception license. If you're unsure, don't submit it.
 
-If a PR cannot survive these rules, please do not open it — it saves everyone time.
+If a PR can't survive these rules, please don't open it. It saves everyone time.
 
 ---
 
 ## License
 
-Apache-2.0 WITH LLVM-exception. See [`LICENSE`](LICENSE) for the full text.
+Apache-2.0 WITH LLVM-exception. The full text is in [`LICENSE`](LICENSE).
 
-The LLVM exception permits static linking into closed-source binaries without triggering license propagation — important for a library that is, by design, linked into every binary it informs.
+The LLVM exception makes the license safe for static linking into closed-source binaries without forcing license propagation, which matters for a library that, by design, is linked into pretty much every binary it informs.
