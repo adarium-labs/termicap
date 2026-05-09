@@ -1,5 +1,5 @@
 name = "termicap"
-description = "Lightweight, cross-platform terminal capability detection for Ada/SPARK"
+description = "Cross-platform terminal capability detection (color, TTY, ...)"
 version = "1.0.0"
 
 long-description = '''
@@ -17,7 +17,7 @@ A couple of standalone helpers come in the box: `wcwidth` / cell width with Unic
 
 ## Color downsampling
 
-Detection only tells you what the terminal can show. Picking a color the terminal can actually display is a separate problem, and that's what the companion `Termicap.Downsampling` package handles: it maps any color you want to emit down to the level the terminal supports (TrueColor → 256-color → ANSI 16, or strip to none). One overloaded `Downsample` dispatches on `RGB` or `Color_Index_256`; the primitive conversions (`Downsample_True_To_256`, `Downsample_True_To_16`, `Downsample_256_To_16`) are also exposed for the cases where the dispatch wrapper is overkill. The whole package is pure SPARK Gold with idempotency and monotonicity postconditions, no FFI, no allocation.
+Detection only tells you what the terminal can show. Picking a color the terminal can actually display is a separate problem, and that's what the companion `Termicap.Downsampling` package handles: it maps any color you want to emit down to the level the terminal supports (TrueColor -> 256-color -> ANSI 16, or strip to none). One overloaded `Downsample` dispatches on `RGB` or `Color_Index_256`; the primitive conversions (`Downsample_True_To_256`, `Downsample_True_To_16`, `Downsample_256_To_16`) are also exposed for the cases where the dispatch wrapper is overkill. The whole package is pure SPARK Gold with idempotency and monotonicity postconditions, no FFI, no allocation.
 
 ## Architecture notes
 
