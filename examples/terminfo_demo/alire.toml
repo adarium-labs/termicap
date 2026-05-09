@@ -3,7 +3,7 @@ description = "Usage example for Termicap.Terminfo.IO; terminfo database parsing
 version = "1.0.0"
 
 authors = ["Heziode"]
-maintainers = ["Heziode <heziode@protonmail.com>"]
+maintainers = ["Quentin DAUPRAT (Heziode) <contact@adarium.dev>"]
 maintainers-logins = ["heziode"]
 licenses = "Apache-2.0 WITH LLVM-exception"
 website = ""
