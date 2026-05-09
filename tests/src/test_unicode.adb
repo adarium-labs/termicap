@@ -71,28 +71,32 @@ package body Test_Unicode is
          "FUNC-UNI-004: TERM='xterm-256color', no locale, no other signals -> None");
 
       --  FUNC-UNI-005
-      --  Note: OS_TYPE='Windows_NT' + WT_SESSION -> Extended is covered by
+      --  Note: OS='Windows_NT' + WT_SESSION -> Extended is covered by
       --  Test_B1_Windows_WT_Session_No_Locale_Extended.
       Register_Routine
         (T,
          Test_Windows_Term_Program_Vscode_Extended'Access,
-         "FUNC-UNI-005: OS_TYPE='Windows_NT', TERM_PROGRAM='vscode' -> Extended");
+         "FUNC-UNI-005: OS='Windows_NT', TERM_PROGRAM='vscode' -> Extended");
       Register_Routine
         (T,
          Test_Windows_Term_Xterm_256color_Basic'Access,
-         "FUNC-UNI-005: OS_TYPE='Windows_NT', TERM='xterm-256color' -> Basic");
+         "FUNC-UNI-005: OS='Windows_NT', TERM='xterm-256color' -> Basic");
       Register_Routine
-        (T, Test_Windows_Term_Alacritty_Basic'Access, "FUNC-UNI-005: OS_TYPE='Windows_NT', TERM='alacritty' -> Basic");
+        (T, Test_Windows_Term_Alacritty_Basic'Access, "FUNC-UNI-005: OS='Windows_NT', TERM='alacritty' -> Basic");
       Register_Routine
         (T,
          Test_Windows_JetBrains_Extended'Access,
-         "FUNC-UNI-005: OS_TYPE='Windows_NT', TERMINAL_EMULATOR='JetBrains-JediTerm' -> Extended");
+         "FUNC-UNI-005: OS='Windows_NT', TERMINAL_EMULATOR='JetBrains-JediTerm' -> Extended");
       Register_Routine
-        (T, Test_Windows_No_Match_None'Access, "FUNC-UNI-005: OS_TYPE='Windows_NT', no matching heuristic -> None");
+        (T, Test_Windows_No_Match_None'Access, "FUNC-UNI-005: OS='Windows_NT', no matching heuristic -> None");
       Register_Routine
         (T,
          Test_Non_Windows_WT_Session_None'Access,
-         "FUNC-UNI-005: OS_TYPE absent (not Windows), WT_SESSION present -> None");
+         "FUNC-UNI-005: OS absent (not Windows), WT_SESSION present -> None");
+      Register_Routine
+        (T,
+         Test_OS_TYPE_Typo_Regression'Access,
+         "FUNC-UNI-005: OS_TYPE typo (old key) does not trigger Windows heuristic branch -> None");
 
       --  FUNC-UNI-006
       Register_Routine (T, Test_CI_Github_Actions_Basic'Access, "FUNC-UNI-006: GITHUB_ACTIONS='true' -> Basic");
@@ -148,7 +152,7 @@ package body Test_Unicode is
       Register_Routine
         (T,
          Test_B1_Windows_WT_Session_No_Locale_Extended'Access,
-         "B1 (FUNC-UNI-008): OS_TYPE=Windows_NT + WT_SESSION + no LANG -> Extended");
+         "B1 (FUNC-UNI-008): OS=Windows_NT + WT_SESSION + no LANG -> Extended");
    end Register_Tests;
 
    ---------------------------------------------------------------------------
@@ -329,41 +333,41 @@ package body Test_Unicode is
       pragma Unreferenced (T);
       Env : Environment := EMPTY_ENVIRONMENT;
    begin
-      Insert (Env, "OS_TYPE", "Windows_NT");
+      Insert (Env, "OS", "Windows_NT");
       Insert (Env, "TERM_PROGRAM", "vscode");
       Assert
         (Detect_Unicode_Level (Env) = Extended,
-         "OS_TYPE='Windows_NT' with TERM_PROGRAM='vscode' should return Extended");
+         "OS='Windows_NT' with TERM_PROGRAM='vscode' should return Extended");
    end Test_Windows_Term_Program_Vscode_Extended;
 
    procedure Test_Windows_Term_Xterm_256color_Basic (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Env : Environment := EMPTY_ENVIRONMENT;
    begin
-      Insert (Env, "OS_TYPE", "Windows_NT");
+      Insert (Env, "OS", "Windows_NT");
       Insert (Env, "TERM", "xterm-256color");
       Assert
-        (Detect_Unicode_Level (Env) = Basic, "OS_TYPE='Windows_NT' with TERM='xterm-256color' should return Basic");
+        (Detect_Unicode_Level (Env) = Basic, "OS='Windows_NT' with TERM='xterm-256color' should return Basic");
    end Test_Windows_Term_Xterm_256color_Basic;
 
    procedure Test_Windows_Term_Alacritty_Basic (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Env : Environment := EMPTY_ENVIRONMENT;
    begin
-      Insert (Env, "OS_TYPE", "Windows_NT");
+      Insert (Env, "OS", "Windows_NT");
       Insert (Env, "TERM", "alacritty");
-      Assert (Detect_Unicode_Level (Env) = Basic, "OS_TYPE='Windows_NT' with TERM='alacritty' should return Basic");
+      Assert (Detect_Unicode_Level (Env) = Basic, "OS='Windows_NT' with TERM='alacritty' should return Basic");
    end Test_Windows_Term_Alacritty_Basic;
 
    procedure Test_Windows_JetBrains_Extended (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Env : Environment := EMPTY_ENVIRONMENT;
    begin
-      Insert (Env, "OS_TYPE", "Windows_NT");
+      Insert (Env, "OS", "Windows_NT");
       Insert (Env, "TERMINAL_EMULATOR", "JetBrains-JediTerm");
       Assert
         (Detect_Unicode_Level (Env) = Extended,
-         "OS_TYPE='Windows_NT' with TERMINAL_EMULATOR='JetBrains-JediTerm' should return Extended");
+         "OS='Windows_NT' with TERMINAL_EMULATOR='JetBrains-JediTerm' should return Extended");
    end Test_Windows_JetBrains_Extended;
 
    procedure Test_Windows_No_Match_None (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -371,22 +375,39 @@ package body Test_Unicode is
       Env : Environment := EMPTY_ENVIRONMENT;
    begin
       --  Windows platform identified but none of the Unicode-capable heuristics match
-      Insert (Env, "OS_TYPE", "Windows_NT");
+      Insert (Env, "OS", "Windows_NT");
       Insert (Env, "TERM", "cmd");
       Assert
         (Detect_Unicode_Level (Env) = None,
-         "OS_TYPE='Windows_NT' with no matching Unicode heuristic should return None");
+         "OS='Windows_NT' with no matching Unicode heuristic should return None");
    end Test_Windows_No_Match_None;
 
    procedure Test_Non_Windows_WT_Session_None (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Env : Environment := EMPTY_ENVIRONMENT;
    begin
-      --  WT_SESSION present but OS_TYPE is not Windows_NT; Windows heuristics not applied
+      --  WT_SESSION present but OS is not Windows_NT; Windows heuristics not applied
       Insert (Env, "WT_SESSION", "some-guid-1234");
       Assert
-        (Detect_Unicode_Level (Env) = None, "WT_SESSION present but OS_TYPE absent (not Windows) should return None");
+        (Detect_Unicode_Level (Env) = None, "WT_SESSION present but OS absent (not Windows) should return None");
    end Test_Non_Windows_WT_Session_None;
+
+   procedure Test_OS_TYPE_Typo_Regression (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Env : Environment := EMPTY_ENVIRONMENT;
+   begin
+      --  Regression for FUNC-UNI-005: the original requirement text used OS_TYPE
+      --  which was a typo (the Windows shell exports OS=Windows_NT, not
+      --  OS_TYPE).  After the fix, the implementation must consult "OS"; the
+      --  old "OS_TYPE" key must NOT trigger the Windows heuristic branch.
+      --  All three Windows heuristics are inert when only OS_TYPE is set, so
+      --  the result is the default None.
+      Insert (Env, "OS_TYPE", "Windows_NT");
+      Insert (Env, "WT_SESSION", "abc-123");
+      Assert
+        (Detect_Unicode_Level (Env) = None,
+         "OS_TYPE typo must not trigger the Windows heuristic branch (FUNC-UNI-005 regression)");
+   end Test_OS_TYPE_Typo_Regression;
 
    ---------------------------------------------------------------------------
    --  FUNC-UNI-006: CI Environment Unicode Awareness
@@ -500,7 +521,7 @@ package body Test_Unicode is
       Insert (Env, "LANG", "en_US.UTF-8");
       Insert (Env, "GITHUB_ACTIONS", "true");
       Insert (Env, "TERM", "linux");
-      Insert (Env, "OS_TYPE", "Windows_NT");
+      Insert (Env, "OS", "Windows_NT");
       Insert (Env, "WT_SESSION", "some-guid");
       Assert
         (Detect_Unicode_Level (Env) = None,
@@ -605,16 +626,16 @@ package body Test_Unicode is
       pragma Unreferenced (T);
       Env : Environment := EMPTY_ENVIRONMENT;
    begin
-      --  Per Option A in the report: OS_TYPE=Windows_NT + WT_SESSION (Windows
+      --  Per Option A in the report: OS=Windows_NT + WT_SESSION (Windows
       --  Terminal) supports full Unicode; no LANG present.
       --  TODO B1: this assertion depends on the implementation extending the
       --  Windows heuristic to return Extended; if the chosen fix follows
       --  Option B instead, this test will need to be adjusted to assert Basic.
-      Insert (Env, "OS_TYPE", "Windows_NT");
+      Insert (Env, "OS", "Windows_NT");
       Insert (Env, "WT_SESSION", "some-guid-1234");
       Assert
         (Detect_Unicode_Level (Env) = Extended,
-         "B1: OS_TYPE='Windows_NT' + WT_SESSION + no LANG should return Extended (Option A)");
+         "B1: OS='Windows_NT' + WT_SESSION + no LANG should return Extended (Option A)");
    end Test_B1_Windows_WT_Session_No_Locale_Extended;
 
 end Test_Unicode;

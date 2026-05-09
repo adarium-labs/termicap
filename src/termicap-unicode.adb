@@ -209,7 +209,7 @@ is
       --  Step 4: Windows heuristics (FUNC-UNI-005).  Windows Terminal,
       --  VS Code, and JetBrains JediTerm all promote to Extended; the TERM
       --  allowlist on legacy Windows code pages stays at Basic.
-      if Equal_Insensitive (Value (Env, "OS_TYPE"), "Windows_NT") then
+      if Equal_Insensitive (Value (Env, "OS"), "Windows_NT") then
          Floor := Unicode_Level'Max (Floor, Detect_Windows_Unicode (Env));
       end if;
 

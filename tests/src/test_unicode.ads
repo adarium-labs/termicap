@@ -101,26 +101,32 @@ package Test_Unicode is
    --  FUNC-UNI-005: Windows Terminal Heuristics
    ---------------------------------------------------------------------------
 
-   --  FUNC-UNI-005: OS_TYPE="Windows_NT", WT_SESSION="some-guid" -> Extended
+   --  FUNC-UNI-005: OS="Windows_NT", WT_SESSION="some-guid" -> Extended
    --  Note: covered by Test_B1_Windows_WT_Session_No_Locale_Extended.
 
-   --  FUNC-UNI-005: OS_TYPE="Windows_NT", TERM_PROGRAM="vscode" -> Extended
+   --  FUNC-UNI-005: OS="Windows_NT", TERM_PROGRAM="vscode" -> Extended
    procedure Test_Windows_Term_Program_Vscode_Extended (T : in out AUnit.Test_Cases.Test_Case'Class);
 
-   --  FUNC-UNI-005: OS_TYPE="Windows_NT", TERM="xterm-256color" -> Basic
+   --  FUNC-UNI-005: OS="Windows_NT", TERM="xterm-256color" -> Basic
    procedure Test_Windows_Term_Xterm_256color_Basic (T : in out AUnit.Test_Cases.Test_Case'Class);
 
-   --  FUNC-UNI-005: OS_TYPE="Windows_NT", TERM="alacritty" -> Basic
+   --  FUNC-UNI-005: OS="Windows_NT", TERM="alacritty" -> Basic
    procedure Test_Windows_Term_Alacritty_Basic (T : in out AUnit.Test_Cases.Test_Case'Class);
 
-   --  FUNC-UNI-005: OS_TYPE="Windows_NT", TERMINAL_EMULATOR="JetBrains-JediTerm" -> Extended
+   --  FUNC-UNI-005: OS="Windows_NT", TERMINAL_EMULATOR="JetBrains-JediTerm" -> Extended
    procedure Test_Windows_JetBrains_Extended (T : in out AUnit.Test_Cases.Test_Case'Class);
 
-   --  FUNC-UNI-005: OS_TYPE="Windows_NT", no matching heuristic -> None
+   --  FUNC-UNI-005: OS="Windows_NT", no matching heuristic -> None
    procedure Test_Windows_No_Match_None (T : in out AUnit.Test_Cases.Test_Case'Class);
 
-   --  FUNC-UNI-005: OS_TYPE absent (not Windows), WT_SESSION present -> None
+   --  FUNC-UNI-005: OS absent (not Windows), WT_SESSION present -> None
    procedure Test_Non_Windows_WT_Session_None (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   --  FUNC-UNI-005 regression: OS_TYPE (old wrong key) + WT_SESSION -> None
+   --  Guards against the typo that used "OS_TYPE" instead of "OS".  After the
+   --  Phase 6 fix the Windows heuristic branch is gated on the "OS" key; this
+   --  test ensures the old "OS_TYPE" key does NOT re-introduce the bug.
+   procedure Test_OS_TYPE_Typo_Regression (T : in out AUnit.Test_Cases.Test_Case'Class);
 
    ---------------------------------------------------------------------------
    --  FUNC-UNI-006: CI Environment Unicode Awareness
@@ -204,7 +210,7 @@ package Test_Unicode is
    --  B1: LANG="fr_FR.UTF-8" + LC_ALL="C" -> None (LC_ALL precedence)
    procedure Test_B1_LC_All_C_Overrides_Lang_UTF8 (T : in out AUnit.Test_Cases.Test_Case'Class);
 
-   --  B1: OS_TYPE="Windows_NT" + WT_SESSION="..." (no LANG) -> Extended
+   --  B1: OS="Windows_NT" + WT_SESSION="..." (no LANG) -> Extended
    --  per Option A in the report.
    procedure Test_B1_Windows_WT_Session_No_Locale_Extended (T : in out AUnit.Test_Cases.Test_Case'Class);
 

@@ -105,7 +105,7 @@ STATUS: Approved
 PRIORITY: Should
 TITLE: Windows Terminal Heuristics
 STATEMENT: >>>
-When the platform is identified as Windows (i.e., when the OS_TYPE environment variable in the snapshot equals "Windows_NT", case-insensitive), the detection function shall apply the following heuristics in order, returning Basic on the first match:
+When the platform is identified as Windows (i.e., when the OS environment variable in the snapshot equals "Windows_NT", case-insensitive), the detection function shall apply the following heuristics in order, returning Basic on the first match:
 
   1. WT_SESSION is present (any value)       -- Windows Terminal (conhost replacement)
   2. TERM_PROGRAM equals "vscode"            -- VS Code integrated terminal
@@ -118,7 +118,9 @@ When the platform is identified as Windows (i.e., when the OS_TYPE environment v
 If none of the above conditions matches on a Windows platform, and locale inspection did not establish a positive level, the function shall return None.
 <<<
 COMMENT: >>>
-On Windows, the legacy conhost.exe console host does not support full Unicode rendering via standard ANSI escape sequences. The heuristics listed above identify terminal emulators known to support Unicode on Windows. WT_SESSION is set by Windows Terminal (the modern replacement for conhost). TERM_PROGRAM=vscode is set by the VS Code terminal. JetBrains-JediTerm is the terminal emulator embedded in all JetBrains IDEs. These heuristics follow the is-unicode-supported library's documented Windows detection algorithm. Platform detection itself uses OS_TYPE rather than a compile-time switch, keeping the detection function a pure function of its environment snapshot.
+On Windows, the legacy conhost.exe console host does not support full Unicode rendering via standard ANSI escape sequences. The heuristics listed above identify terminal emulators known to support Unicode on Windows. WT_SESSION is set by Windows Terminal (the modern replacement for conhost). TERM_PROGRAM=vscode is set by the VS Code terminal. JetBrains-JediTerm is the terminal emulator embedded in all JetBrains IDEs. These heuristics follow the is-unicode-supported library's documented Windows detection algorithm. Platform detection itself uses the OS environment variable rather than a compile-time switch, keeping the detection function a pure function of its environment snapshot.
+
+(Revision 2026-05-08: corrected the env-var name from `OS_TYPE` to `OS`. `OS_TYPE` is not a standard Windows env var; the canonical Windows shell exports `OS=Windows_NT`. The original spec text was wrong and the implementation matched it, so the Windows branch was never entered — termicap returned `unicode=none` even on Windows Terminal. Bug surfaced via the cross-language conformance harness on PowerShell/Warp/cmd, where rich, prompt_toolkit, and is-unicode-supported all reported `extended`.)
 <<<
 
 [REQUIREMENT]
