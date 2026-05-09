@@ -1,6 +1,6 @@
 name = "hyperlink_demo"
 description = "OSC 8 Hyperlink Support Detection Demo"
-version = "0.1.0-dev"
+version = "1.0.0"
 
 authors = ["Heziode"]
 maintainers = ["Heziode <heziode@protonmail.com>"]

@@ -1,6 +1,6 @@
 name = "cell_width_demo"
 description = "Usage example for Termicap.Cell_Width (cell width measurement tables)"
-version = "0.1.0-dev"
+version = "1.0.0"
 
 authors = ["Heziode"]
 maintainers = ["Heziode <heziode@protonmail.com>"]

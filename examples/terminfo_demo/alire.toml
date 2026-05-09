@@ -1,6 +1,6 @@
 name = "terminfo_demo"
 description = "Usage example for Termicap.Terminfo.IO; terminfo database parsing"
-version = "0.1.0-dev"
+version = "1.0.0"
 
 authors = ["Heziode"]
 maintainers = ["Heziode <heziode@protonmail.com>"]

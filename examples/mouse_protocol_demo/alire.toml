@@ -1,6 +1,6 @@
 name = "mouse_protocol_demo"
 description = "Usage example for Termicap.Mouse.IO; mouse protocol detection"
-version = "0.1.0-dev"
+version = "1.0.0"
 
 authors = ["Heziode"]
 maintainers = ["Heziode <heziode@protonmail.com>"]
