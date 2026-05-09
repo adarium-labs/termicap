@@ -70,16 +70,7 @@ sparklib = "^15.1.0"
 [depends-on.'case(os)'.windows]
 win32ada = "^26.0.0"
 
-[build-switches]
-
-# On non-Windows, point gprbuild at the local stub
-[build-switches.'case(os)'.windows]
-
-
 [environment.'case(os)'.windows]
 
 [environment.'case(os)'.'...']
 GPR_PROJECT_PATH.prepend = "${CRATE_ROOT}/gpr"
-
-[[pins]]
-sparklib = { path = "C:/Users/PC-AMD/dev/vendor/sparklib" }
