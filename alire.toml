@@ -61,7 +61,7 @@ authors = ["Heziode"]
 maintainers = ["Quentin DAUPRAT (Heziode) <contact@adarium.dev>"]
 maintainers-logins = ["heziode"]
 licenses = "Apache-2.0 WITH LLVM-exception"
-website = ""
+website = "https://github.com/adarium-labs/termicap"
 tags = ["terminal", "capability", "detection", "color", "tty", "is-tty", "spark", "cross-platform", "windows", "linux", "macos", "bsd"]
 
 [[depends-on]]
