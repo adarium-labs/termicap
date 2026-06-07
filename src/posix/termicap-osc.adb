@@ -29,6 +29,7 @@
 --    - @relation(FUNC-OSC-012): Active_Session_Guard single-session guard
 --    - @relation(FUNC-OSC-013): Optional retry in Sentinel_Query
 --    - @relation(FUNC-OSC-015): SPARK_Mode Off; FFI boundary
+--    - @relation(FUNC-OSC-020): Trailing input drain on Close
 
 pragma SPARK_Mode (Off);
 
@@ -94,6 +95,15 @@ package body Termicap.OSC is
 
    --  Maximum non-blocking drain iterations (FUNC-OSC-011).
    MAX_DRAIN_ITERATIONS : constant := 16;
+
+   --  Grace window used by Close to catch terminal responses that were
+   --  still in flight when the query loop exited (typically a DA1 reply
+   --  arriving slightly after a Timeout_Query timeout, or a trailing OSC
+   --  reply produced by a multiplexer passthrough). 50 ms is below human
+   --  perception and well above the round-trip of any reasonable terminal
+   --  (~5 ms on local PTY, ~30 ms over loaded SSH). Bounded by
+   --  MAX_DRAIN_ITERATIONS like Drain_Input. (FUNC-OSC-020: trailing drain)
+   CLOSE_DRAIN_GRACE_MS : constant := 50;
 
    --  DA1 sentinel bytes: ESC [ c  (3 bytes: 0x1B 0x5B 0x63) (FUNC-OSC-006).
    DA1_SENTINEL : constant Byte_Array (1 .. 3) := [16#1B#, 16#5B#, 16#63#];
@@ -257,6 +267,31 @@ package body Termicap.OSC is
          exit when Bytes_Read = 0;
       end loop;
    end Drain_Input;
+
+   --  @summary Drain pending bytes with a brief blocking window on the first
+   --           iteration, then non-blocking iterations to flush the rest.
+   --  @description Used by Close to absorb terminal responses that may still
+   --  be in transit when the query loop exited. The first Timed_Read waits
+   --  up to Grace_Ms to catch an in-flight reply; once any data is observed,
+   --  subsequent iterations use a 0 ms timeout to drain the kernel queue
+   --  promptly. Bounded to MAX_DRAIN_ITERATIONS to guarantee termination
+   --  against a continuously-streaming terminal.
+   --  @param FD       Terminal file descriptor (must still be in raw mode,
+   --                  so that ECHO is off and consumed bytes are not redrawn).
+   --  @param Grace_Ms Maximum blocking window for the first iteration.
+   --  @relation(FUNC-OSC-020): trailing drain on Close to prevent response leak
+   procedure Drain_Input_With_Grace (FD : File_Descriptor; Grace_Ms : Natural) is
+      Drain_Buf  : Byte_Array (1 .. 256);
+      Bytes_Read : Natural;
+      Timed_Out  : Boolean;
+      Wait_Ms    : Natural := Grace_Ms;
+   begin
+      for Iter in 1 .. MAX_DRAIN_ITERATIONS loop
+         Timed_Read (FD, Drain_Buf, Bytes_Read, Wait_Ms, Timed_Out);
+         exit when Bytes_Read = 0;
+         Wait_Ms := 0;
+      end loop;
+   end Drain_Input_With_Grace;
 
    ---------------------------------------------------------------------------
    --  Query Operations (FUNC-OSC-005, FUNC-OSC-006, FUNC-OSC-013)
@@ -537,6 +572,18 @@ package body Termicap.OSC is
    begin
       if not Is_Open (Session) and then Session.FD = INVALID_FD then
          return;
+      end if;
+
+      --  Drain any unread terminal response bytes BEFORE restoring termios.
+      --  A query may have timed out while the response was still in flight,
+      --  or the terminal may have sent additional bytes after our last read.
+      --  If we restored cooked mode first, those bytes would be echoed by the
+      --  line discipline and would also leak into the shell's input buffer
+      --  after the program exits (visible to users as e.g. "^[[?1;2c" left in
+      --  the terminal). Drain in raw mode so ECHO is off.
+      --  (FUNC-OSC-020: trailing drain on Close)
+      if Session.FD /= INVALID_FD and then Session.Is_Raw then
+         Drain_Input_With_Grace (Session.FD, CLOSE_DRAIN_GRACE_MS);
       end if;
 
       --  Restore termios; ignore failure (FUNC-OSC-008).

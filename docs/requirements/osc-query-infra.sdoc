@@ -357,6 +357,42 @@ COMMENT: >>>
 Two concurrent probe sessions on the same terminal would produce interleaved byte sequences on the write side and a race condition on the read side: bytes from one session's response could be consumed by the other session's Sentinel_Query accumulation loop. The consequences include silent capability misdetection, which is worse than a clean error. Enforcing single-session concurrency is conservative and correct: capability detection is a startup-time operation in Termicap, and there is no valid use case for concurrent probing sessions within a single process. Using a protected variable for the guard ensures that the check-and-set is atomic across tasks, preventing a race where two tasks both pass the guard before either has incremented the active count.
 <<<
 
+[REQUIREMENT]
+UID: FUNC-OSC-020
+STATUS: Approved
+PRIORITY: Must
+TITLE: Trailing Input Drain on Session Close
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-OSC-008
+- TYPE: Parent
+  VALUE: FUNC-OSC-011
+STATEMENT: >>>
+The probe session shall drain any unread bytes from its terminal file descriptor (or, on Windows, any pending events from the console input handle) BEFORE restoring the saved termios / console-mode state, so that terminal responses still in flight when the query loop exited do not leak into the controlling shell after the session is closed.
+
+The drain shall be performed by a body-local helper that mirrors Drain_Input (FUNC-OSC-011) with the following differences:
+  1. The first read iteration shall block for up to a configurable grace window CLOSE_DRAIN_GRACE_MS milliseconds, rather than being purely non-blocking. The grace window shall default to 50 ms and shall be small enough to be imperceptible to a human and large enough to absorb a single network round-trip on a moderately loaded SSH link.
+  2. Once any bytes have been observed, subsequent iterations shall fall back to a 0 ms (non-blocking) timeout so that the kernel input queue is drained promptly without further blocking.
+  3. The loop shall be bounded to at most MAX_DRAIN_ITERATIONS iterations (FUNC-OSC-011), guaranteeing termination against a continuously-streaming terminal.
+
+The drain shall be invoked from Close (FUNC-OSC-008 step 7) only when the file descriptor is valid AND the terminal is still in raw mode (Session.Is_Raw). The ordering requirement is strict: drain BEFORE Restore_Termios / SetConsoleMode, because restoring cooked mode while bytes are still queued would re-enable line-discipline ECHO and emit those bytes back to the display, in addition to leaving them in the shell's input buffer for the next prompt.
+
+The drain shall not be invoked from the open-side Drain_Input (FUNC-OSC-011), which remains a pure non-blocking flush of stale pre-session bytes.
+
+The helper shall not be part of the public API of Termicap.OSC; it is a body-local procedure that exists solely to implement the Close sequence described above.
+
+The bytes consumed by the trailing drain shall be discarded; the session has no caller to deliver them to at Close time.
+<<<
+COMMENT: >>>
+Without this drain, a terminal that replied to a probe query (or to the DA1 sentinel appended by Sentinel_Query / Timeout_Query) just after the query loop timed out leaves its reply bytes in the kernel TTY input queue, since the probe session opened /dev/tty for the same underlying device the user's shell is reading from. When Close subsequently restores cooked mode (re-enabling ECHO), the line discipline echoes the queued bytes back to the display and keeps them in the read queue for whoever reads next, which is typically the shell after the program exits. Users observe stray sequences such as "^[[?1;2c" on their prompt and, more disruptively, the shell consumes the bytes as if the user had typed them.
+
+The same symptom appears on Windows whenever a VT response (delivered as a stream of KEY_EVENT records under ENABLE_VIRTUAL_TERMINAL_INPUT) arrives after the query loop's WaitForSingleObject expired: the events remain in the console input buffer and are read by the next process that calls ReadConsoleInputW / ReadFile on the console.
+
+The 50 ms grace window is chosen so that the worst-case added latency on a session that has no trailing reply (the common case) is a single Timed_Read that returns 0 bytes after a brief select() / WaitForSingleObject wait, which is well below human perception. On a local PTY the first Timed_Read returns immediately because the kernel queue is already empty; on a slow link the 50 ms window is enough to catch a reply that was a single round-trip away when the original timeout expired. The MAX_DRAIN_ITERATIONS bound (16) ensures Close cannot be made to block indefinitely by a misbehaving terminal that streams continuously.
+
+Draining while the terminal is still in raw mode is essential: ECHO is off in raw mode (FUNC-OSC-003), so the read() / ReadConsoleInputW call consumes the bytes without re-painting them on the display. Performing the drain after Restore_Termios would defeat the purpose, since cooked mode re-enables ECHO and the bytes would already have been echoed by the time the drain ran.
+<<<
+
 [/SECTION]
 
 [SECTION]

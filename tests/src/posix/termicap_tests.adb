@@ -21,6 +21,7 @@ with Test_Dimensions;
 with Test_Downsampling;
 with Test_Environment;
 with Test_Environment_Capture;
+with Test_OSC_Close_Drain;
 with Test_OSC_Parsing;
 with Test_Override;
 with Test_Sigwinch;
@@ -57,6 +58,7 @@ procedure Termicap_Tests is
       AUnit.Test_Suites.Add_Test (Result, new Test_Sigwinch.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Override.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_OSC_Parsing.Test_Case);
+      AUnit.Test_Suites.Add_Test (Result, new Test_OSC_Close_Drain.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_BG_Query.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_Clipboard.Test_Case);
       AUnit.Test_Suites.Add_Test (Result, new Test_DA1.Test_Case);

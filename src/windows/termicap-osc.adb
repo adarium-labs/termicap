@@ -42,6 +42,7 @@
 --    - @relation(FUNC-OSC-013): Optional retry in Sentinel_Query
 --    - @relation(FUNC-OSC-015): SPARK_Mode Off; FFI boundary
 --    - @relation(FUNC-OSC-017): ENABLE_VIRTUAL_TERMINAL_INPUT / DISABLE_NEWLINE_AUTO_RETURN
+--    - @relation(FUNC-OSC-020): Trailing input drain on Close
 
 pragma SPARK_Mode (Off);
 
@@ -66,6 +67,13 @@ package body Termicap.OSC is
 
    --  Maximum non-blocking drain iterations (FUNC-OSC-011).
    MAX_DRAIN_ITERATIONS : constant := 16;
+
+   --  Grace window used by Close to catch console events that may still be
+   --  queued when the query loop exited (typically a DA1 KEY_EVENT stream
+   --  arriving slightly after a Timeout_Query timeout). 50 ms mirrors the
+   --  POSIX body's CLOSE_DRAIN_GRACE_MS and is bounded by
+   --  MAX_DRAIN_ITERATIONS like Drain_Input. (FUNC-OSC-020: trailing drain)
+   CLOSE_DRAIN_GRACE_MS : constant := 50;
 
    --  DA1 sentinel bytes: ESC [ c  (3 bytes: 0x1B 0x5B 0x63) (FUNC-OSC-006).
    DA1_SENTINEL : constant Byte_Array (1 .. 3) := [16#1B#, 16#5B#, 16#63#];
@@ -604,6 +612,31 @@ package body Termicap.OSC is
       end loop;
    end Drain_Input;
 
+   --  @summary Drain pending bytes with a brief blocking window on the first
+   --           iteration, then non-blocking iterations to flush the rest.
+   --  @description Used by Close to absorb console events (KEY_EVENT records
+   --  carrying VT response bytes) that may still be queued when the query
+   --  loop exited. The first Timed_Read waits up to Grace_Ms to catch an
+   --  in-flight reply; once any data is observed, subsequent iterations use
+   --  a 0 ms timeout to drain the queue promptly. Bounded to
+   --  MAX_DRAIN_ITERATIONS to guarantee termination.
+   --  @param FD       Console session FD (must still be in raw mode, so
+   --                  cooked-input bits remain off while draining).
+   --  @param Grace_Ms Maximum blocking window for the first iteration.
+   --  @relation(FUNC-OSC-020): trailing drain on Close to prevent response leak
+   procedure Drain_Input_With_Grace (FD : File_Descriptor; Grace_Ms : Natural) is
+      Drain_Buf  : Byte_Array (1 .. 256);
+      Bytes_Read : Natural;
+      Timed_Out  : Boolean;
+      Wait_Ms    : Natural := Grace_Ms;
+   begin
+      for Iter in 1 .. MAX_DRAIN_ITERATIONS loop
+         Timed_Read (FD, Drain_Buf, Bytes_Read, Wait_Ms, Timed_Out);
+         exit when Bytes_Read = 0;
+         Wait_Ms := 0;
+      end loop;
+   end Drain_Input_With_Grace;
+
    ---------------------------------------------------------------------------
    --  Query Operations (FUNC-OSC-005, FUNC-OSC-006, FUNC-OSC-013)
    ---------------------------------------------------------------------------
@@ -903,6 +936,17 @@ package body Termicap.OSC is
    begin
       if not Is_Open (Session) and then Session.FD = INVALID_FD then
          return;
+      end if;
+
+      --  Drain any pending console events BEFORE restoring the cooked input
+      --  mode. A query may have timed out while the VT response was still
+      --  being delivered as a stream of KEY_EVENT records, or the terminal
+      --  may have queued additional events after the last read. Draining
+      --  while the input handle is still in raw + VT mode prevents the
+      --  console host from re-presenting those events to the parent shell
+      --  after the session closes. (FUNC-OSC-020: trailing drain on Close)
+      if Session.FD /= INVALID_FD and then Session.Is_Raw then
+         Drain_Input_With_Grace (Session.FD, CLOSE_DRAIN_GRACE_MS);
       end if;
 
       --  Restore console mode; ignore failure (FUNC-OSC-008).

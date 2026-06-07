@@ -13,9 +13,9 @@ project Termicap_Tests is
 
    case Host_OS is
       when "windows" =>
-         for Source_Dirs use ("src/", "src/windows/", "config/");
+         for Source_Dirs use ("src/", "src/windows/", "config/", "aunit_compat/");
       when others =>
-         for Source_Dirs use ("src/", "src/posix/", "config/");
+         for Source_Dirs use ("src/", "src/posix/", "config/", "aunit_compat/");
    end case;
    for Create_Missing_Dirs use "True";
    for Exec_Dir use "bin";
