@@ -8,7 +8,7 @@
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
 
 with AUnit.Assertions;              use AUnit.Assertions;
-with AUnit.Test_Cases.Registration; use AUnit.Test_Cases.Registration;
+with AUnit.Test_Cases; use AUnit.Test_Cases.Registration;
 
 with Interfaces.C;
 
