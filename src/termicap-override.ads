@@ -72,15 +72,20 @@ is
    --  @return The Override_Mode most recently supplied to Set_Override, or
    --          Auto if Set_Override has never been called.
    --  @relation(FUNC-OVR-003): Thread-safe getter; never raises an exception
+   --  Volatile_Function: Override_State is an external state (any task may
+   --  change it), so two calls may return different values.
    function Get_Override return Override_Mode
-   with Global => (Input => Override_State);
+   with Volatile_Function, Global => (Input => Override_State);
 
    --  @summary Remove any previously installed override, restoring Auto.
    --  @description Semantically equivalent to Set_Override (Auto); provided
    --  as a self-documenting convenience for the common "clear override" case.
    --  @relation(FUNC-OVR-011): Convenience wrapper; equivalent to Set_Override (Auto)
+   --  No "Post => Get_Override = Auto": a call to the volatile function
+   --  Get_Override is not allowed in a postcondition (interfering context),
+   --  and Override_State is external (another task may change it at once).
    procedure Reset_Override
-   with Global => (In_Out => Override_State), Post => Get_Override = Auto;
+   with Global => (In_Out => Override_State);
 
    ---------------------------------------------------------------------------
    --  CLI Flag Parsing (FUNC-OVR-013)
@@ -117,10 +122,15 @@ is
    --  double-restore when both finalize (FUNC-OVR-008).
    --
    --  @relation(FUNC-OVR-007): Initialize saves current mode, installs Mode discriminant
+   --  The partial view is limited private (not tagged) so that the visible
+   --  part stays in SPARK; the controlled completion lives in the private
+   --  part, which is SPARK_Mode Off.
+   --
    --  @relation(FUNC-OVR-008): Finalize suppresses exceptions; non-copyable
-   type Scoped_Override (Mode : Override_Mode) is new Ada.Finalization.Limited_Controlled with private;
+   type Scoped_Override (Mode : Override_Mode) is limited private;
 
 private
+   pragma SPARK_Mode (Off);
 
    ---------------------------------------------------------------------------
    --  Private: Scoped_Override completion

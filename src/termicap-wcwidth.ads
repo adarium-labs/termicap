@@ -177,7 +177,9 @@ is
    --  @relation(FUNC-WCW-007): Graceful handling of wcwidth() returning -1
    --  @relation(FUNC-WCW-011): Fallback when probe fails or is inconclusive
    --  @relation(FUNC-WCW-012): Public API specification
-   function Probe_Wcwidth_Level return Wcwidth_Level;
+   --  Side_Effects: the POSIX body memoizes the probe in a protected object.
+   function Probe_Wcwidth_Level return Wcwidth_Level
+   with Side_Effects;
 
    ---------------------------------------------------------------------------
    --  Integration Function (FUNC-WCW-005)

@@ -403,9 +403,13 @@ is
       Force_Set : Boolean := False;
       CI_Level  : Color_Level;
       Heuristic : Color_Level := None;
+      --  Get_Override is a volatile function: its call must stand in a
+      --  non-interfering context (an object initialization), not in a case
+      --  selector.
+      Mode      : constant Termicap.Override.Override_Mode := Termicap.Override.Get_Override;
    begin
       --  @relation(FUNC-OVR-004)
-      case Termicap.Override.Get_Override is
+      case Mode is
          when Termicap.Override.Force_None =>
             return None;
 

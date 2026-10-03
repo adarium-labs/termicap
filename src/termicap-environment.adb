@@ -20,6 +20,13 @@ is
    function To_Lower_Char (C : Character) return Character
    is (if C in 'A' .. 'Z' then Character'Val (Character'Pos (C) + 32) else C);
 
+   --  Explicit contract: without it GNATprove analyses To_Lower_String in the
+   --  context of each call (local subprogram without contract), and
+   --  GNATprove 15.1 crashed there ("GNAT BUG DETECTED", Constraint_Error
+   --  erroneous memory access at the call in Contains).
+   function To_Lower_String (S : String) return String
+   with Global => null, Post => To_Lower_String'Result'First = S'First and then To_Lower_String'Result'Last = S'Last;
+
    function To_Lower_String (S : String) return String is
       Result : String := S;
    begin

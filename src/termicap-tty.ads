@@ -60,7 +60,7 @@ is
    --  @relation(FUNC-TTY-003): Uses POSIX isatty() internally
    --  @relation(FUNC-TTY-004): Returns False on error, never raises
    function Is_TTY (Stream : Stream_Kind) return Boolean
-   with Global => (Input => Termicap.Override.Override_State);
+   with Volatile_Function, Global => (Input => Termicap.Override.Override_State);
 
    ---------------------------------------------------------------------------
    --  Bulk Query (FUNC-TTY-006)
@@ -69,6 +69,7 @@ is
    --  @summary Query TTY status for all three streams at once.
    --  @return A record containing the TTY status of Stdin, Stdout, and Stderr.
    --  @relation(FUNC-TTY-006): Convenience function reducing FFI calls
-   function Query_All return TTY_Status;
+   function Query_All return TTY_Status
+   with Volatile_Function, Global => (Input => Termicap.Override.Override_State);
 
 end Termicap.TTY;

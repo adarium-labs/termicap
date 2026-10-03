@@ -65,6 +65,6 @@ is
    --  @relation(FUNC-CLR-014): SPARK Silver provability
    --  @relation(FUNC-CLR-015): Detection priority order
    function Detect_Color_Level (Env : Termicap.Environment.Environment; Is_TTY : Boolean) return Color_Level
-   with Global => (Input => Termicap.Override.Override_State);
+   with Volatile_Function, Global => (Input => Termicap.Override.Override_State);
 
 end Termicap.Color;

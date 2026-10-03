@@ -24,10 +24,13 @@
 --
 --  The pure assembly function Assemble is SPARK Silver-provable (Global => null)
 --  and carries a postcondition that proves Downsampling_Available is consistent
---  with the Color field.  Detect and Get delegate to OS-calling sub-detectors
---  and are therefore not given SPARK Global contracts.  Assemble_Full, Detect_Full,
---  and Get_Full are declared with SPARK_Mode Off because Full_Terminal_Capabilities
---  contains Ada.Strings.Unbounded.Unbounded_String (via XTVERSION_Result).
+--  with the Color field.  Detect, Get, Detect_Full and Get_Full are functions
+--  with side effects (aspect Side_Effects): they probe the terminal (DA1 and
+--  the other active probes take the single OSC session guard), and Get /
+--  Get_Full also fill a per-stream cache held in a protected object of the
+--  body.  SPARK callers therefore call them only as the right-hand side of an
+--  assignment (Caps := Get;).  Their globals are generated from the bodies
+--  (SPARK_Mode Off).  Assemble_Full is pure like Assemble.
 --
 --  Requirements Coverage:
 --    - @relation(FUNC-HYP-014): Hyperlinks field in Terminal_Capabilities; Assemble parameter
@@ -152,7 +155,10 @@ is
    --  @relation(FUNC-CAP-010): Sub-detector invocation order enforced in body
    --  @relation(FUNC-CAP-011): Single Capture_Current call per Detect invocation
    --  @relation(FUNC-CAP-014): Every Detect call performs a full detection run
-   function Detect (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities;
+   --  Side_Effects: the DA1 probe writes a query to the terminal and takes
+   --  the process-wide OSC session guard.
+   function Detect (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities
+   with Side_Effects;
 
    --  @summary Return a cached Terminal_Capabilities value for the given stream.
    --  @description On the first call for a given Stream, invokes Detect and
@@ -166,16 +172,21 @@ is
    --  @relation(FUNC-CAP-005): Default Stream => Stdout for the common case
    --  @relation(FUNC-CAP-008): Thread safety via protected object in body
    --  @relation(FUNC-CAP-009): Returned record is a copy; cache is not aliased
-   function Get (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities;
+   --  Side_Effects: fills the cache on the first call per stream (and runs
+   --  Detect then).  SPARK callers write Caps := Get; (no call inside an
+   --  expression, a declaration or a default parameter).
+   function Get (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Terminal_Capabilities
+   with Side_Effects;
 
    ---------------------------------------------------------------------------
-   --  Full Detection (SPARK_Mode Off)
+   --  Full Detection
    --
    --  The following declarations extend Terminal_Capabilities with all Tier 4
    --  deferred probes (XTVERSION, Keyboard, Mouse, Graphics, Clipboard).
-   --  SPARK_Mode is switched Off here because Termicap.XTVERSION.XTVERSION_Result
-   --  contains Ada.Strings.Unbounded.Unbounded_String, which is outside the SPARK
-   --  2014 subset.  The base record and Assemble function above remain SPARK Silver.
+   --  They used to sit behind a "pragma SPARK_Mode (Off)" placed after Get;
+   --  such a pragma applies to the declaration it follows, so it hid Get from
+   --  SPARK instead of this section.  Termicap.XTVERSION.XTVERSION_Result
+   --  (Unbounded_String) is accepted by GNATprove, so the section is analyzed.
    --
    --  Requirements lifted from deferral:
    --    - @relation(FUNC-KKB-019): Keyboard field in Full_Terminal_Capabilities (ADR-0021)
@@ -183,8 +194,6 @@ is
    --    - @relation(FUNC-SXL-019): Graphics field in Full_Terminal_Capabilities (ADR-0028)
    --    - @relation(FUNC-C52-019): Clipboard field in Full_Terminal_Capabilities (ADR-0031)
    ---------------------------------------------------------------------------
-
-   pragma SPARK_Mode (Off);
 
    ---------------------------------------------------------------------------
    --  Full Record Type
@@ -256,7 +265,8 @@ is
       Graphics   : Termicap.Graphics.Graphics_Capabilities;
       Clipboard  : Termicap.Clipboard.Clipboard_Capabilities;
       Hyperlinks : Termicap.Hyperlinks.Hyperlinks_Result := Termicap.Hyperlinks.DEFAULT_HYPERLINKS_RESULT)
-      return Full_Terminal_Capabilities;
+      return Full_Terminal_Capabilities
+   with Global => null;
 
    ---------------------------------------------------------------------------
    --  Full Detection Functions
@@ -289,7 +299,8 @@ is
    --                Size is always derived from stdout (same as Detect).
    --  @return A Full_Terminal_Capabilities record reflecting terminal state at
    --          the moment of the call.
-   function Detect_Full (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities;
+   function Detect_Full (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities
+   with Side_Effects;
 
    --  @summary Return a cached Full_Terminal_Capabilities value for the given stream.
    --  @description On the first call for a given Stream, invokes Detect_Full and
@@ -299,6 +310,7 @@ is
    --  populate the Get_Full cache and vice versa.
    --  @param Stream The stream for which full capabilities are requested.
    --  @return A Full_Terminal_Capabilities record; a copy of the cached value.
-   function Get_Full (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities;
+   function Get_Full (Stream : Termicap.TTY.Stream_Kind := Termicap.TTY.Stdout) return Full_Terminal_Capabilities
+   with Side_Effects;
 
 end Termicap.Capabilities;
