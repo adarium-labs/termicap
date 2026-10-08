@@ -155,4 +155,22 @@ is
       return Classify_Console_VT = Legacy_Conhost;
    end Should_Skip_Active_Probes;
 
+   ---------------------------------------------------------------------------
+   --  Console_Output_UTF8 (FUNC-WIN-015)
+   ---------------------------------------------------------------------------
+
+   function Console_Output_UTF8 return Boolean is
+      use type Win32.UINT;
+   begin
+      --  GetConsoleOutputCP returns 0 when the process has no console
+      --  attached; the caller gates this on the stream being a TTY first,
+      --  so the no-console case only occurs on a console-less (CI) run,
+      --  where the answer must not degrade the locale-based detection
+      if Win32.Wincon.GetConsoleOutputCP = 0 then
+         return True;
+      end if;
+
+      return Win32.Wincon.GetConsoleOutputCP = 16#FDE9#;
+   end Console_Output_UTF8;
+
 end Termicap.Win32_VT;
