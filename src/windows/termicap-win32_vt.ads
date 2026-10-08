@@ -135,4 +135,16 @@ is
    --  @relation(FUNC-WIN-014): probe-or-bail decision
    function Should_Skip_Active_Probes return Boolean;
 
+   --  @summary Check whether the console output code page is UTF-8 (65001).
+   --  @return  True when GetConsoleOutputCP returns 65001, or when the
+   --           process has no console attached to its standard output.
+   --  @note    The console decodes the bytes written by an application with
+   --           its output code page, whatever the terminal hosting the
+   --           console is: with a legacy code page such as CP850 or CP1252,
+   --           UTF-8 output is displayed as mojibake, even in Windows
+   --           Terminal. The Unicode detection must therefore not rely on
+   --           WT_SESSION & co alone.
+   --  @relation(FUNC-WIN-015): console output code page gate
+   function Console_Output_UTF8 return Boolean;
+
 end Termicap.Win32_VT;

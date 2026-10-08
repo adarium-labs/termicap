@@ -439,4 +439,25 @@ The original Windows graphics gate was written under the assumption that "GetCon
 The three-way classification is necessary because the three cases need different handling: (a) really must bail (sending VT to plain conhost shows literal `^[[31m` to the user); (b) must proceed (every modern Windows terminal lives here); (c) must fall through to the existing POSIX-style logic (Cygwin's PTY shows up here, and so does redirected-stdout, where the CONOUT$ fallback in FUNC-OSC-016 may still recover an active path). Tying the bit name to FUNC-WIN-009 keeps the constant definition centralised and avoids duplicating 16#0004# at every probe-site.
 <<<
 
+[REQUIREMENT]
+UID: FUNC-WIN-015
+STATUS: Approved
+PRIORITY: Must
+TITLE: Console Output Code Page Gate for Unicode Detection
+RELATIONS:
+- TYPE: Parent
+  VALUE: FUNC-WIN-009
+STATEMENT: >>>
+The library shall provide a pure predicate:
+
+  function Console_Output_UTF8 return Boolean;
+
+which returns True when the console attached to the standard output decodes the bytes written by the application with the UTF-8 code page (GetConsoleOutputCP = 65001), and False when it uses a legacy code page such as CP850 or CP1252. When the process has no console attached to its standard output (GetConsoleOutputCP returns 0), the predicate shall return True, so that console-less (CI) runs keep the locale-based detection.
+
+The Windows Unicode detection (FUNC-UNI-005) shall apply this gate: when the stream is a TTY and Console_Output_UTF8 returns False, the detected Unicode level shall be capped at None, whatever the terminal identity heuristics (WT_SESSION, TERM_PROGRAM, TERMINAL_EMULATOR) say: the console decodes the output bytes with its code page before the terminal renders them, so non ASCII output is mojibake even in Windows Terminal. A redirected stream (pipe, file) shall keep the locale-based detection unchanged.
+<<<
+COMMENT: >>>
+The Windows heuristics of FUNC-UNI-005 promote WT_SESSION / TERM_PROGRAM=vscode / JetBrains to Extended on the grounds that "the terminal renders the full Unicode plane". That is true of the terminal, but not of the console API path: an application writes bytes, and the console host decodes them with the console output code page before the terminal displays the result. With the default OEM code page of a Windows PowerShell 5.1 session hosted in Windows Terminal (CP850 on a fr-FR system), a UTF-8 check mark (E2 9C 93) is displayed as "Ô£ô". The code page is the authoritative signal, and it is cheap to query; the terminal identity only tells what the renderer could do, not what the console will decode.
+<<<
+
 [/SECTION]

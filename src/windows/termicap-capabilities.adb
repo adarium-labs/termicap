@@ -20,6 +20,7 @@ with Termicap.Keyboard.IO;
 with Termicap.Mouse.IO;
 with Termicap.Override;
 with Termicap.Win32_Color;
+with Termicap.Win32_VT;
 with Termicap.XTVERSION.IO;
 
 package body Termicap.Capabilities
@@ -140,6 +141,15 @@ is
       end;
       Size     := Termicap.Dimensions.Get_Size (Env, TTY_All.Stdout);
       Uni      := Termicap.Unicode.Detect_Unicode_Level (Env);
+
+      --  The console output code page has the last word on Windows
+      --  (FUNC-WIN-015): the console decodes the output bytes with its
+      --  code page, so non ASCII glyphs are mojibake when it is not UTF-8,
+      --  whatever the terminal hosting the console is (Windows Terminal
+      --  included). A redirected stream keeps the locale-based detection.
+      if Is_TTY_For_Stream and then not Termicap.Win32_VT.Console_Output_UTF8 then
+         Uni := Termicap.Unicode.None;
+      end if;
       DA1_Caps := Termicap.DA1.IO.Detect_DA1 (Timeout_Ms => 100);
 
       --  Step 7.5: Passive OSC 8 hyperlink classification (FUNC-HYP-014).
